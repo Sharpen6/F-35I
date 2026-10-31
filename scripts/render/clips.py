@@ -10,7 +10,8 @@ Local GPU (recommended), from a Windows / Linux shell or from Blender itself:
 Headless bpy module:
     python3 scripts/render/clips.py [clip ...] --engine EEVEE --res 640x360 --samples 12
 
-Clips: afterburner, gear_retract, canopy_open, pilot_look, controls, weapon_bays, turntable
+Clips: afterburner, walkaround, startup, destruction, gear_retract, canopy_open, pilot_look,
+       controls, weapon_bays, turntable
 """
 import argparse
 import math
@@ -251,8 +252,58 @@ def clip_afterburner(fps):
     return n, "afterburner"
 
 
+def clip_walkaround(fps):
+    """A slow walk round the parked jet at eye height: nose, left side, tail, right side (40 s)."""
+    set_visibility()
+    n = int(40 * fps)
+    cy, a, b, z = 0.8, 8.5, 13.0, -0.12
+    cam = camera((0.0, cy - b, z), (0.0, -5.0, -0.4), 30)
+    for f in range(1, n + 1):
+        th = math.radians(25.0 + 360.0 * (f - 1) / n)
+        x, y = a * math.sin(th), cy - b * math.cos(th)
+        cam.location = (x, y, z)
+        look_at(cam, (0.35 * x, cy + 0.55 * (y - cy), -0.45))
+        cam.keyframe_insert("location", frame=f)
+        cam.keyframe_insert("rotation_euler", frame=f)
+    from f35.anim import fcurves
+    for fc in fcurves(cam.animation_data.action):
+        for kp in fc.keyframe_points:
+            kp.interpolation = 'LINEAR'
+    return n, "walk-around"
+
+
+def clip_startup(fps):
+    """Cockpit power-up over the pilot's shoulder: the pilot looks at each console and flips battery,
+    power, display, fuel, engine start, lights and sensors (LEDs and display light up, the
+    anti-collision and position lights come on), then closes the canopy."""
+    from f35 import anim
+    set_visibility()
+    key("canopy", 1.0, 1)
+    camera((-0.62, -3.45, 1.80), (0.06, -5.20, 0.66), 24)
+    end = anim.start_up(frame=int(0.8 * fps))
+    return end + int(2.5 * fps), "cockpit start-up"
+
+
+def clip_destruction(fps):
+    """Damage on the apron: a hit on the left wing scorches it and tears the outer panel off,
+    smoke pours from the stub; a second hit folds the left main gear and the jet settles."""
+    from f35 import destruct
+    set_visibility()
+    camera((12.5, -9.0, 1.4), (1.8, 1.0, -0.6), 32)
+    def T(t):
+        return 1 + int(round(t * fps))
+    destruct.impact((7.0, 1.6, 0.6), (-1.0, 0.05, -0.12), hp=150, frame=T(1.0))
+    destruct.break_off("wing_outer_L", T(1.2))
+    destruct.impact((4.5, 3.6, -1.2), (-1.0, 0.0, 0.0), hp=150, frame=T(4.6))
+    destruct.collapse_gear("main_gear_L", T(4.8), duration=int(0.5 * fps))
+    return T(10.0), "destruction"
+
+
 CLIPS = {
     "afterburner": clip_afterburner,
+    "walkaround": clip_walkaround,
+    "startup": clip_startup,
+    "destruction": clip_destruction,
     "gear_retract": clip_gear_retract,
     "canopy_open": clip_canopy_open,
     "pilot_look": clip_pilot_look,
