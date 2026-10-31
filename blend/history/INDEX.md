@@ -17,3 +17,4 @@ Counts leave out the hidden hitbox helpers.
 | 9 | `09_2026-10-31_2028_b0923b8_aft-end-nozzle.blend` | 2026-10-31 20:28 | b0923b8 | Aft end: free-standing F135 nozzle behind a sawtooth shroud | 5.4 | 472 | 142142 | 137897 | 54 |
 | 10 | `10_2026-10-31_2115_0d8356b_dsi-inlets.blend` | 2026-10-31 21:15 | 0d8356b | Inlets: DSI compression bump and drawn aperture with swept cowl lips | 5.7 | 472 | 144212 | 139929 | 54 |
 | 11 | `11_2026-10-31_2151_231dc42_nose-doors-eots.blend` | 2026-10-31 21:51 | 231dc42 | Nose: long nose-gear doors, faceted EOTS housing, DAS windows, air-data probes | 5.8 | 478 | 145489 | 141185 | 54 |
+| 12 | `12_2026-10-31_2222_ef50029_paint-sky.blend` | 2026-10-31 22:22 | ef50029 | Paint and sky: HDRI lighting with a matched sun, satin coat paint tuned to photos | 5.8 | 478 | 145489 | 141185 | 54 |
