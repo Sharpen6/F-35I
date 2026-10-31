@@ -46,6 +46,80 @@ def principled(name, color, rough=0.5, metal=0.0, coat=0.0, emission=None,
     return mat
 
 
+def _panel_detail(nodes, links):
+    """Projected panel-line maps (see panels.py) -> (line, tape, light) sockets.
+
+    The lookup uses the rest-pose position / normal stored on each mesh, so
+    the detail stays glued to moving and broken-off parts."""
+    from . import panels as PN
+    imgs = PN.images()
+
+    def m(op, a, b=None, c=None):
+        n = nodes.new("ShaderNodeMath")
+        n.operation = op
+        for i, v in enumerate((a, b, c)):
+            if v is None:
+                continue
+            if isinstance(v, (int, float)):
+                n.inputs[i].default_value = float(v)
+            else:
+                links.new(v, n.inputs[i])
+        return n.outputs[0]
+
+    ap = nodes.new("ShaderNodeAttribute")
+    ap.attribute_type = 'GEOMETRY'
+    ap.attribute_name = "rest_p"
+    an = nodes.new("ShaderNodeAttribute")
+    an.attribute_type = 'GEOMETRY'
+    an.attribute_name = "rest_n"
+    sp = nodes.new("ShaderNodeSeparateXYZ")
+    links.new(ap.outputs["Vector"], sp.inputs[0])
+    sn = nodes.new("ShaderNodeSeparateXYZ")
+    links.new(an.outputs["Vector"], sn.inputs[0])
+    X, Y, Z = sp.outputs[0], sp.outputs[1], sp.outputs[2]
+    LS = PN.S1 - PN.S0
+    u = m('MULTIPLY_ADD', Y, 1.0 / LS, (PN.Y0 - PN.S0) / LS)
+    v_tb = m('MULTIPLY_ADD', X, 1.0 / (PN.XMAX - PN.XMIN), -PN.XMIN / (PN.XMAX - PN.XMIN))
+    tz = m('MULTIPLY_ADD', Z, 1.0 / (PN.Z1 - PN.Z0), -PN.Z0 / (PN.Z1 - PN.Z0))
+    tz = m('MINIMUM', m('MAXIMUM', tz, 0.0), 1.0)
+    half = m('MULTIPLY', m('GREATER_THAN', X, 0.0), 0.5)
+    v_sd = m('MULTIPLY_ADD', tz, 0.5, half)
+    cols = {}
+    for name, vv in (("top", v_tb), ("bottom", v_tb), ("side", v_sd)):
+        cx = nodes.new("ShaderNodeCombineXYZ")
+        links.new(u, cx.inputs[0])
+        links.new(vv, cx.inputs[1])
+        tex = nodes.new("ShaderNodeTexImage")
+        tex.image = imgs[name]
+        tex.interpolation = 'Linear'
+        tex.extension = 'CLIP'
+        links.new(cx.outputs[0], tex.inputs["Vector"])
+        cols[name] = tex.outputs["Color"]
+    nx, nz = sn.outputs[0], sn.outputs[2]
+    wt = m('POWER', m('MAXIMUM', nz, 0.0), PN.K)
+    wb = m('POWER', m('MAXIMUM', m('MULTIPLY', nz, -1.0), 0.0), PN.K)
+    ws = m('POWER', m('ABSOLUTE', nx), PN.K)
+    tot = m('ADD', m('ADD', wt, wb), m('ADD', ws, 1e-4))
+    acc = None
+    for name, w in (("top", wt), ("bottom", wb), ("side", ws)):
+        sc = nodes.new("ShaderNodeVectorMath")
+        sc.operation = 'SCALE'
+        links.new(cols[name], sc.inputs[0])
+        links.new(m('DIVIDE', w, tot), sc.inputs["Scale"])
+        if acc is None:
+            acc = sc.outputs[0]
+        else:
+            ad = nodes.new("ShaderNodeVectorMath")
+            ad.operation = 'ADD'
+            links.new(acc, ad.inputs[0])
+            links.new(sc.outputs[0], ad.inputs[1])
+            acc = ad.outputs[0]
+    sep = nodes.new("ShaderNodeSeparateXYZ")
+    sep.name = "PanelDetail"
+    links.new(acc, sep.inputs[0])
+    return sep.outputs[0], sep.outputs[1], sep.outputs[2]
+
+
 def skin_material():
     """Radar-absorbent 'Have Glass' grey with subtle panel mottling."""
     mat = _new("F35_Skin_RAM")
@@ -61,14 +135,35 @@ def skin_material():
     links.new(tc.outputs["Object"], noise.inputs["Vector"])
     ramp = nodes.new("ShaderNodeValToRGB")
     ramp.color_ramp.elements[0].position = 0.35
-    ramp.color_ramp.elements[0].color = (base[0] * 0.86, base[1] * 0.86, base[2] * 0.88, 1)
+    ramp.color_ramp.elements[0].color = (base[0] * 0.965, base[1] * 0.965, base[2] * 0.97, 1)
     ramp.color_ramp.elements[1].position = 0.70
-    ramp.color_ramp.elements[1].color = (base[0] * 1.10, base[1] * 1.10, base[2] * 1.10, 1)
+    ramp.color_ramp.elements[1].color = (base[0] * 1.03, base[1] * 1.03, base[2] * 1.03, 1)
     links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
+    # panel lines, sealant tape and lighter coatings (projected maps)
+    line, tape, light = _panel_detail(nodes, links)
+
+    def _m(op, a, b):
+        n = nodes.new("ShaderNodeMath")
+        n.operation = op
+        for i, v in enumerate((a, b)):
+            if isinstance(v, (int, float)):
+                n.inputs[i].default_value = float(v)
+            else:
+                links.new(v, n.inputs[i])
+        return n.outputs[0]
+    dark = _m('MULTIPLY', _m('SUBTRACT', 1.0, _m('MULTIPLY', line, 0.45)),
+              _m('SUBTRACT', 1.0, _m('MULTIPLY', tape, 0.22)))
+    fac = _m('MULTIPLY', dark, _m('ADD', 1.0, _m('MULTIPLY', light, 0.30)))
+    pmul = nodes.new("ShaderNodeMix")
+    pmul.data_type = 'RGBA'
+    pmul.blend_type = 'MULTIPLY'
+    pmul.inputs["Factor"].default_value = 1.0
+    links.new(ramp.outputs["Color"], pmul.inputs["A"])
+    links.new(fac, pmul.inputs["B"])
     # roughness variation (Have Glass coatings have a soft metallic sheen)
     rr = nodes.new("ShaderNodeMapRange")
-    rr.inputs["To Min"].default_value = 0.42
-    rr.inputs["To Max"].default_value = 0.60
+    rr.inputs["To Min"].default_value = 0.38
+    rr.inputs["To Max"].default_value = 0.46
     links.new(noise.outputs["Fac"], rr.inputs["Value"])
     # battle damage (0..1) spreads soot / burns.  Sources (the largest wins):
     #   object property 'damage'                      - whole object
@@ -110,13 +205,14 @@ def skin_material():
     soot.data_type = 'RGBA'
     soot.inputs["B"].default_value = (0.012, 0.011, 0.010, 1.0)
     links.new(msk.outputs["Result"], soot.inputs["Factor"])
-    links.new(ramp.outputs["Color"], soot.inputs["A"])
+    links.new(pmul.outputs["Result"], soot.inputs["A"])
     links.new(soot.outputs["Result"], b.inputs["Base Color"])
     rmix = nodes.new("ShaderNodeMix")
     rmix.data_type = 'FLOAT'
     rmix.inputs["B"].default_value = 0.95
     links.new(msk.outputs["Result"], rmix.inputs["Factor"])
-    links.new(rr.outputs["Result"], rmix.inputs["A"])
+    rpan = _m('ADD', rr.outputs["Result"], _m('SUBTRACT', _m('MULTIPLY', line, 0.12), _m('MULTIPLY', light, 0.06)))
+    links.new(rpan, rmix.inputs["A"])
     links.new(rmix.outputs["Result"], b.inputs["Roughness"])
     b.inputs["Metallic"].default_value = 0.22
     b.inputs["Specular IOR Level"].default_value = 0.45
@@ -127,7 +223,13 @@ def skin_material():
     bump = nodes.new("ShaderNodeBump")
     bump.inputs["Strength"].default_value = 0.04
     links.new(n2.outputs["Fac"], bump.inputs["Height"])
-    links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    gbump = nodes.new("ShaderNodeBump")          # panel lines read as fine grooves
+    gbump.invert = True
+    gbump.inputs["Strength"].default_value = 0.35
+    gbump.inputs["Distance"].default_value = 0.0008
+    links.new(line, gbump.inputs["Height"])
+    links.new(bump.outputs["Normal"], gbump.inputs["Normal"])
+    links.new(gbump.outputs["Normal"], b.inputs["Normal"])
     mat.diffuse_color = (*base, 1)
     return mat
 

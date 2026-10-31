@@ -17,7 +17,7 @@ if HERE not in sys.path:
 import bpy  # noqa: E402
 
 ALL_PARTS = ["fuselage", "wings", "tails", "nozzle", "canopy", "cockpit",
-             "gear", "bays", "details", "pilot", "markings", "rig",
+             "gear", "bays", "details", "pilot", "markings", "panels", "rig",
              "damage", "scene"]
 
 

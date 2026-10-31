@@ -76,7 +76,10 @@ def concrete_material():
     return mat
 
 
-def build_world(sun_elev=32.0, sun_rot=215.0, strength=0.05):
+SUN_ELEV, SUN_ROT = 48.0, 200.0       # mid-morning desert sun (deg)
+
+
+def build_world(sun_elev=SUN_ELEV, sun_rot=SUN_ROT, strength=0.05):
     sc = bpy.context.scene
     world = bpy.data.worlds.get("F35_World") or bpy.data.worlds.new("F35_World")
     sc.world = world
@@ -107,11 +110,11 @@ def build(ctx):
     build_world()
     # sun matching the sky
     sd = bpy.data.lights.new("Sun", 'SUN')
-    sd.energy = 2.5
+    sd.energy = 4.0
     sd.angle = math.radians(0.6)
     sun = bpy.data.objects.new("Sun", sd)
     coll.objects.link(sun)
-    sun.rotation_euler = (math.radians(90 - 32.0), 0.0, math.radians(215.0 - 90.0))
+    sun.rotation_euler = (math.radians(90 - SUN_ELEV), 0.0, math.radians(SUN_ROT - 90.0))
     # apron
     R = 220.0
     z = GROUND_Z

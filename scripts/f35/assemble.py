@@ -47,6 +47,9 @@ def build_all(parts):
     if "markings" in parts:
         from . import markings
         markings.build(ctx)
+    if "panels" in parts:            # rest-pose attributes + panel maps (before parts move or break)
+        from . import panels
+        info["panels"] = panels.build(ctx)
     if "damage" in parts:            # fracture breakable parts before the rig parents them
         from . import destruct
         destruct.prepare(ctx)

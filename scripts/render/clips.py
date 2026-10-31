@@ -1,11 +1,14 @@
 """Animated clips of the rig (gear, canopy, pilot, controls, bays, turntable).
 
-Each clip keys the F35I_Rig controls, renders a PNG sequence with EEVEE and
-writes an animated GIF (renders/gifs) plus an MP4 (renders/animation) for the
-making-of video.
+Each clip keys the F35I_Rig controls, renders a PNG sequence (kept in
+renders/frames/<clip> for editing) and writes an MP4 (renders/animation) for
+the making-of video, plus a GIF preview (renders/gifs) when Pillow is present.
 
-    python3 scripts/render/clips.py [clip ...] [--res 640x360] [--samples 12]
-            [--blend blend/F-35I_Adir.blend] [--fps 12]
+Local GPU (recommended), from a Windows / Linux shell or from Blender itself:
+    blender -b --factory-startup --python scripts/render/clips.py -- turntable
+            --engine CYCLES --res 1280x720 --samples 48 --fps 24
+Headless bpy module:
+    python3 scripts/render/clips.py [clip ...] --engine EEVEE --res 640x360 --samples 12
 
 Clips: gear_retract, canopy_open, pilot_look, controls, weapon_bays, turntable
 """
@@ -15,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -105,13 +109,41 @@ def set_visibility(hide_ground=False):
             ob.hide_render = hide_ground
 
 
-def setup_render(res, samples, fps):
-    sc = bpy.context.scene
-    sc.render.engine = 'BLENDER_EEVEE'
+def enable_gpu():
+    """Use every OptiX / CUDA / HIP / Metal / oneAPI device Cycles can find."""
     try:
-        sc.eevee.taa_render_samples = samples
+        prefs = bpy.context.preferences.addons["cycles"].preferences
     except Exception:
-        pass
+        return None
+    for kind in ("OPTIX", "CUDA", "HIP", "METAL", "ONEAPI"):
+        try:
+            prefs.compute_device_type = kind
+            prefs.get_devices()
+        except Exception:
+            continue
+        devs = [d for d in prefs.devices if d.type == kind]
+        if devs:
+            for d in prefs.devices:
+                d.use = d.type == kind
+            return kind
+    return None
+
+
+def setup_render(res, samples, fps, engine="EEVEE"):
+    sc = bpy.context.scene
+    if engine.upper() == "CYCLES":
+        sc.render.engine = 'CYCLES'
+        kind = enable_gpu()
+        sc.cycles.device = 'GPU' if kind else 'CPU'
+        sc.cycles.samples = samples
+        sc.cycles.use_denoising = True
+        print("CYCLES device", kind or "CPU", flush=True)
+    else:
+        sc.render.engine = 'BLENDER_EEVEE'
+        try:
+            sc.eevee.taa_render_samples = samples
+        except Exception:
+            pass
     sc.render.resolution_x, sc.render.resolution_y = res
     sc.render.resolution_percentage = 100
     sc.render.fps = fps
@@ -207,7 +239,10 @@ CLIPS = {
 
 # --------------------------------------------------------------------------
 def write_gif(frames_dir, n, gif_path, fps, width=None):
-    from PIL import Image
+    try:
+        from PIL import Image
+    except ImportError:                   # Blender's own Python has no Pillow
+        return None
     imgs = []
     for f in range(1, n + 1):
         p = os.path.join(frames_dir, f"{f:04d}.png")
@@ -224,10 +259,40 @@ def write_gif(frames_dir, n, gif_path, fps, width=None):
     return gif_path
 
 
-def write_mp4(frames_dir, mp4_path, fps):
+def encode_mp4_blender(frames_dir, n, mp4_path, fps):
+    """Encode the PNG sequence with Blender's own FFmpeg (sequencer)."""
+    first = os.path.join(frames_dir, "0001.png")
+    img = bpy.data.images.load(first)
+    w, h = img.size
+    bpy.data.images.remove(img)
+    sc = bpy.data.scenes.new("Encode")
+    sc.render.resolution_x, sc.render.resolution_y = w + (w % 2), h + (h % 2)
+    sc.render.resolution_percentage = 100
+    sc.render.fps = fps
+    sc.frame_start, sc.frame_end = 1, n
+    sc.view_settings.view_transform = 'Standard'
+    se = sc.sequence_editor_create()
+    strips = getattr(se, "strips", None) or se.sequences
+    st = strips.new_image("frames", first, 1, 1)
+    for f in range(2, n + 1):
+        st.elements.append(f"{f:04d}.png")
+    r = sc.render
+    r.use_sequencer = True
+    r.image_settings.file_format = 'FFMPEG'
+    r.ffmpeg.format = 'MPEG4'
+    r.ffmpeg.codec = 'H264'
+    r.ffmpeg.constant_rate_factor = 'HIGH'
+    r.ffmpeg.ffmpeg_preset = 'GOOD'
+    r.filepath = mp4_path
+    bpy.ops.render.render(animation=True, scene=sc.name)
+    bpy.data.scenes.remove(sc)
+    return mp4_path
+
+
+def write_mp4(frames_dir, mp4_path, fps, n=None):
     ff = shutil.which("ffmpeg")
     if not ff:
-        return None
+        return encode_mp4_blender(frames_dir, n, mp4_path, fps)
     cmd = [ff, "-y", "-loglevel", "error", "-framerate", str(fps), "-i",
            os.path.join(frames_dir, "%04d.png"), "-c:v", "libx264", "-pix_fmt", "yuv420p",
            "-crf", "20", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", mp4_path]
@@ -238,11 +303,11 @@ def write_mp4(frames_dir, mp4_path, fps):
 def render_clip(name, args):
     bpy.ops.wm.open_mainfile(filepath=args.blend)
     clear_rig_animation()
-    setup_render(args.res, args.samples, args.fps)
+    setup_render(args.res, args.samples, args.fps, args.engine)
     n, desc = CLIPS[name](args.fps)
     sc = bpy.context.scene
     sc.frame_start, sc.frame_end = 1, n
-    frames_dir = os.path.join(args.work, name)
+    frames_dir = os.path.join(args.work, name + args.suffix)
     os.makedirs(frames_dir, exist_ok=True)
     todo = range(1, n + 1)
     if args.test:
@@ -253,13 +318,16 @@ def render_clip(name, args):
             continue
         sc.frame_set(f)
         sc.render.filepath = out
+        t = time.time()
         bpy.ops.render.render(write_still=True)
+        print(f"FRAME {name} {f}/{n} {time.time() - t:.1f}s", flush=True)
     if args.test:
         print("TEST", name, n, "frames, rendered", list(todo), "->", frames_dir, flush=True)
         return
-    gif = write_gif(frames_dir, n, os.path.join(ROOT, "renders", "gifs", f"{name}.gif"), args.fps,
+    gif = write_gif(frames_dir, n, os.path.join(ROOT, "renders", "gifs", f"{name}{args.suffix}.gif"), args.fps,
                     width=args.gif_width)
-    mp4 = write_mp4(frames_dir, os.path.join(ROOT, "renders", "animation", f"{name}.mp4"), args.fps)
+    mp4 = write_mp4(frames_dir, os.path.join(ROOT, "renders", "animation", f"{name}{args.suffix}.mp4"),
+                    args.fps, n)
     print("CLIP", name, desc, n, "frames ->", gif, mp4, flush=True)
 
 
@@ -267,12 +335,14 @@ def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
     ap = argparse.ArgumentParser()
     ap.add_argument("clips", nargs="*")
-    ap.add_argument("--res", default="640x360")
-    ap.add_argument("--samples", type=int, default=12)
-    ap.add_argument("--fps", type=int, default=12)
-    ap.add_argument("--gif-width", type=int, default=0)
+    ap.add_argument("--engine", default="CYCLES", choices=["CYCLES", "EEVEE"])
+    ap.add_argument("--res", default="1280x720")
+    ap.add_argument("--samples", type=int, default=48)
+    ap.add_argument("--fps", type=int, default=24)
+    ap.add_argument("--gif-width", type=int, default=480)
+    ap.add_argument("--suffix", default="", help="appended to the output names, e.g. _v2")
     ap.add_argument("--blend", default=os.path.join(ROOT, "blend", "F-35I_Adir.blend"))
-    ap.add_argument("--work", default="/tmp/clips")
+    ap.add_argument("--work", default=os.path.join(ROOT, "renders", "frames"))
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--test", action="store_true", help="render 5 sample frames only")
     args = ap.parse_args(argv)
