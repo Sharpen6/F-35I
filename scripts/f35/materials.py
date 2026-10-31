@@ -185,7 +185,7 @@ def _make(name):
         "canopy":    dict(color=(0.55, 0.42, 0.18), rough=0.03, metal=0.0,
                           transmission=1.0, ior=1.5, alpha=1.0),
         "canopy_frame": dict(color=(0.17, 0.18, 0.19), rough=0.45, metal=0.3),
-        "intake":    dict(color=(0.85, 0.85, 0.83), rough=0.6),
+        "intake":    dict(color=(0.15, 0.155, 0.16), rough=0.6),      # RAM-coated duct, grey
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),
         "nozzle":    dict(color=(0.22, 0.20, 0.18), rough=0.55, metal=0.6),
         "nozzle_in": dict(color=(0.30, 0.22, 0.16), rough=0.4, metal=0.8),

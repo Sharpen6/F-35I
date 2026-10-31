@@ -4,26 +4,21 @@ import bmesh
 from mathutils import Vector
 
 from .geom import P, Pchip, get_collection, mesh_object, loft_rings, add_solidify, Y0
-from .fuselage import FORE, fore_x_at
+from .fuselage import fore_upper_z
 from .surfaces import set_hinge
 from . import materials as M
 
+# crest line from the side view; ~3 cm lower than the 3-view drawing in the
+# middle because three camera-matched photos put the canopy top that much lower
 CREST = Pchip([1.84, 2.00, 2.20, 2.40, 2.60, 2.80, 3.00, 3.20, 3.40, 3.70,
                4.00, 4.20, 4.40, 4.60, 4.80, 4.97],
-              [0.625, 0.74, 0.87, 0.985, 1.11, 1.22, 1.285, 1.335, 1.358, 1.362,
-               1.358, 1.345, 1.325, 1.30, 1.277, 1.262])
+              [0.625, 0.74, 0.87, 0.985, 1.104, 1.205, 1.264, 1.307, 1.328, 1.332,
+               1.328, 1.315, 1.296, 1.276, 1.259, 1.248])
 SILL_W = Pchip([1.84, 1.95, 2.10, 2.40, 2.80, 3.20, 3.60, 4.00, 4.40, 4.70, 4.97],
                [0.0, 0.085, 0.205, 0.355, 0.455, 0.505, 0.525, 0.525, 0.51, 0.48, 0.44])
 S_FRONT, S_GLASS_END, S_REAR = 1.84, 4.60, 4.97
 HINGE_S, HINGE_Z = 1.90, 0.60
 OPEN_ANGLE = 40.0                 # photos show ~30-40 deg
-
-
-def fore_upper_z(s, x):
-    """z of the forebody upper surface at half-width x."""
-    p = FORE(s)
-    t = min(1.0, x / p["wc"])
-    return p["zc"] + (p["zt"] - p["zc"]) * max(0.0, 1 - t ** p["mu"]) ** (1 / p["nu"])
 
 
 def section(s, n=40, inset=0.0, th0=-math.pi / 2, th1=math.pi / 2):
@@ -34,8 +29,10 @@ def section(s, n=40, inset=0.0, th0=-math.pi / 2, th1=math.pi / 2):
     for i in range(n + 1):
         th = th0 + (th1 - th0) * i / n
         st, ct = math.sin(th), math.cos(th)
-        x = w * math.copysign(abs(st) ** (2 / 2.5), st)
-        z = zs + (zt - zs) * (abs(ct) ** (2 / 1.9))
+        u = abs(ct) ** (2 / 1.9)                 # height fraction sill -> crest
+        # head-on photos: sides lean inward (half width ~0.79 w at mid height)
+        x = w * math.copysign(math.sqrt(max(0.0, 1.0 - u ** 1.35)), st)
+        z = zs + (zt - zs) * u
         pts.append(P(s, x, z))
     return pts
 

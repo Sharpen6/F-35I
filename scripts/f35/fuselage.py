@@ -6,7 +6,7 @@ scaled to the published 15.67 m length - see docs/research.md.
 
 Construction (all solids, combined with exact booleans)
 -------------------------------------------------------
-F  forebody  - super-ellipse sections with the F-35 nose chine, nose -> s=6.
+F  forebody  - upper dome + lower V / canted sides meeting at a sharp chine, nose -> s=6.
 M  main body - 8-control-point sections (spine, shoulder, strake/chine edge,
                lower cowl side, flat belly, keel) from s=3.9 -> 13.55.
 M -= front wedges   : three planes per side give the raked "<" inlet lip
@@ -24,63 +24,125 @@ from .geom import P, Pchip, Table, mesh_object, loft_rings, boolean, Y0
 from . import materials as M
 
 # ---------------------------------------------------------------------------
-# F: forebody super-ellipse table
+# F: forebody sections with a sharp chine
 #   s, zt (top centre), zb (keel), wc (chine half width), zc (chine z),
-#   mu, nu (upper exponents), ml, nl (lower exponents)
+#   au  angle of the upper surface where it meets the chine (deg below horizontal)
+#   xu, zu  a point the upper curve passes through, as fractions of wc and of
+#           (zt - zc) above the chine; along the cockpit this is the canopy sill
+#   xk, zk  lower corner (fractions of wc and of (zc - zb) above the keel):
+#           on the chine-keel line at the radome (V underside), at keel level
+#           further aft (canted side + flat belly)
+#   fk  corner fillet (fraction of the shorter adjacent edge)
+# Photos (head-on and 3/4 views, camera-matched) show the radome as an upper
+# dome over a V-shaped underside, meeting at a sharp chine that rises from the
+# tip and runs back into the inlet / strake edge.
 # ---------------------------------------------------------------------------
 FORE = Table(
-    ["zt", "zb", "wc", "zc", "mu", "nu", "ml", "nl"],
+    ["zt", "zb", "wc", "zc", "au", "xu", "zu", "xk", "zk", "fk"],
     [
-        (0.00, 0.000, 0.000, 0.004, 0.00, 2.0, 1.10, 2.0, 1.20),
-        (0.10, 0.050, -0.050, 0.065, 0.00, 2.0, 1.12, 2.0, 1.20),
-        (0.20, 0.098, -0.095, 0.122, 0.00, 2.0, 1.15, 2.0, 1.25),
-        (0.40, 0.186, -0.180, 0.212, 0.00, 2.0, 1.18, 2.0, 1.30),
-        (0.60, 0.268, -0.262, 0.312, 0.00, 2.0, 1.20, 2.1, 1.35),
-        (0.80, 0.330, -0.330, 0.388, 0.00, 2.1, 1.22, 2.2, 1.40),
-        (1.00, 0.386, -0.395, 0.448, 0.01, 2.2, 1.25, 2.3, 1.45),
-        (1.20, 0.430, -0.445, 0.497, 0.02, 2.3, 1.28, 2.4, 1.50),
-        (1.40, 0.480, -0.490, 0.522, 0.03, 2.4, 1.30, 2.5, 1.55),
-        (1.60, 0.552, -0.520, 0.542, 0.04, 2.5, 1.35, 2.6, 1.60),
-        (1.85, 0.630, -0.545, 0.566, 0.05, 2.7, 1.45, 2.7, 1.65),
-        (2.20, 0.680, -0.550, 0.610, 0.06, 3.0, 1.60, 2.8, 1.70),
-        (2.60, 0.720, -0.560, 0.676, 0.08, 3.1, 1.65, 2.9, 1.75),
-        (3.00, 0.765, -0.585, 0.722, 0.10, 3.2, 1.70, 3.0, 1.80),
-        (3.40, 0.810, -0.605, 0.762, 0.11, 3.2, 1.70, 3.0, 1.80),
-        (3.80, 0.860, -0.625, 0.812, 0.12, 3.2, 1.70, 3.1, 1.85),
-        (4.20, 0.930, -0.645, 0.868, 0.13, 3.2, 1.70, 3.2, 1.90),
-        (4.60, 1.040, -0.660, 0.890, 0.14, 3.2, 1.70, 3.2, 1.90),
-        (5.00, 1.195, -0.675, 0.900, 0.15, 3.0, 1.70, 3.2, 1.90),
-        (5.50, 1.150, -0.680, 0.860, 0.15, 2.8, 1.70, 3.2, 1.90),
-        (6.00, 1.050, -0.690, 0.780, 0.15, 2.6, 1.70, 3.0, 1.90),
+        (0.000, 0.080, 0.080, 0.004, 0.080, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
+        (0.100, 0.128, 0.030, 0.065, 0.090, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
+        (0.200, 0.172, -0.017, 0.122, 0.100, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
+        (0.400, 0.245, -0.106, 0.212, 0.115, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
+        (0.600, 0.308, -0.195, 0.312, 0.130, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
+        (0.800, 0.351, -0.271, 0.388, 0.145, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
+        (1.000, 0.392, -0.345, 0.448, 0.160, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
+        (1.200, 0.430, -0.405, 0.497, 0.178, 70.0, 0.700, 0.720, 0.54, 0.48, 0.60),
+        (1.400, 0.480, -0.460, 0.522, 0.194, 70.0, 0.700, 0.720, 0.57, 0.40, 0.70),
+        (1.600, 0.552, -0.499, 0.542, 0.210, 70.0, 0.700, 0.720, 0.62, 0.30, 0.75),
+        (1.850, 0.630, -0.534, 0.566, 0.235, 68.6, 0.700, 0.720, 0.67, 0.17, 0.70),
+        (2.200, 0.680, -0.548, 0.610, 0.275, 64.9, 0.700, 0.720, 0.71, 0.06, 0.60),
+        (2.600, 0.720, -0.560, 0.676, 0.320, 55.8, 0.612, 0.778, 0.72, 0.00, 0.45),
+        (3.000, 0.765, -0.585, 0.722, 0.365, 56.0, 0.671, 0.708, 0.72, 0.00, 0.45),
+        (3.400, 0.810, -0.605, 0.762, 0.405, 54.6, 0.681, 0.681, 0.72, 0.00, 0.45),
+        (3.800, 0.860, -0.625, 0.812, 0.435, 53.3, 0.647, 0.732, 0.72, 0.00, 0.45),
+        (4.200, 0.930, -0.645, 0.868, 0.455, 53.5, 0.599, 0.798, 0.72, 0.00, 0.45),
+        (4.600, 1.040, -0.660, 0.890, 0.465, 57.1, 0.553, 0.857, 0.72, 0.00, 0.45),
+        (5.000, 1.195, -0.675, 0.900, 0.470, 60.8, 0.483, 0.910, 0.72, 0.00, 0.45),
+        (5.500, 1.150, -0.680, 0.860, 0.470, 62.0, 0.500, 0.850, 0.72, 0.00, 0.45),
+        (6.000, 1.050, -0.690, 0.780, 0.470, 62.0, 0.500, 0.850, 0.72, 0.00, 0.45),
     ])
 F_END = 6.0
 
 N_UP = 30               # samples on the upper half-section
 N_LO = 26               # samples on the lower half-section
 
+_HALF_CACHE = {}
 
-def fore_point(s, theta):
-    """Super-ellipse point on the forebody at parameter theta (0=top, pi=keel)."""
-    p = FORE(s)
-    if theta <= math.pi / 2:
-        st, ct = math.sin(theta), math.cos(theta)
-        x = p["wc"] * (max(st, 0) ** (2.0 / p["mu"]))
-        z = p["zc"] + (p["zt"] - p["zc"]) * (max(ct, 0) ** (2.0 / p["nu"]))
-    else:
-        st, ct = math.sin(theta), -math.cos(theta)
-        x = p["wc"] * (max(st, 0) ** (2.0 / p["ml"]))
-        z = p["zc"] - (p["zc"] - p["zb"]) * (max(ct, 0) ** (2.0 / p["nl"]))
-    return (x, z)
+
+def _filleted(pts, frac, n=24):
+    """Polyline C -> K -> B with the corner at K rounded (quadratic Bezier)."""
+    c, k, b = (Vector(p) for p in pts)
+    d1, d2 = k - c, b - k
+    t = frac * min(d1.length, d2.length)
+    if t < 1e-6:
+        return [tuple(c), tuple(k), tuple(b)]
+    a0 = k - d1.normalized() * t
+    a1 = k + d2.normalized() * t
+    out = [tuple(c)]
+    for i in range(n + 1):
+        u = i / n
+        q = a0 * (1 - u) ** 2 + k * 2 * u * (1 - u) + a1 * u * u
+        out.append(tuple(q))
+    out.append(tuple(b))
+    return out
+
+
+def fore_half(s):
+    """Half-section of the forebody at station s.
+
+    Returns (upper, lower): upper runs from the top centre to the chine,
+    lower from the chine to the keel; both lists of (x, z) with x >= 0."""
+    key = round(min(max(s, 0.0), F_END), 4)
+    hit = _HALF_CACHE.get(key)
+    if hit is not None:
+        return hit
+    p = FORE(key)
+    zt, zb, wc, zc = p["zt"], p["zb"], max(p["wc"], 1e-4), p["zc"]
+    zt = max(zt, zc + 1e-4)
+    zb = min(zb, zc - 1e-4)
+    au = math.radians(p["au"])
+    hu, hl = zt - zc, zc - zb
+    up = hermite_spline([(0.0, zt), (p["xu"] * wc, zc + p["zu"] * hu), (wc, zc)], 40,
+                        start_tangent=Vector((1.0, 0.0)),
+                        end_tangent=Vector((math.cos(au), -math.sin(au))))
+    lo = _filleted([(wc, zc), (p["xk"] * wc, zb + p["zk"] * hl), (0.0, zb)], p["fk"])
+    up = [(max(0.0, v.x), v.y) for v in up]
+    lo = [(max(0.0, x), z) for x, z in lo]
+    up[0] = (0.0, zt)
+    lo[-1] = (0.0, zb)
+    _HALF_CACHE[key] = (up, lo)
+    return up, lo
+
+
+def _x_at_z(poly, z):
+    best = None
+    for (x0, z0), (x1, z1) in zip(poly, poly[1:]):
+        if (z0 - z) * (z1 - z) <= 0 and abs(z1 - z0) > 1e-9:
+            x = x0 + (z - z0) / (z1 - z0) * (x1 - x0)
+            best = x if best is None else max(best, x)
+    return best
 
 
 def fore_x_at(s, z):
     """Forebody half width at height z."""
-    p = FORE(min(s, F_END))
-    if z >= p["zc"]:
-        t = min(1.0, (z - p["zc"]) / max(1e-6, p["zt"] - p["zc"]))
-        return p["wc"] * max(0.0, 1 - t ** p["nu"]) ** (1 / p["mu"])
-    t = min(1.0, (p["zc"] - z) / max(1e-6, p["zc"] - p["zb"]))
-    return p["wc"] * max(0.0, 1 - t ** p["nl"]) ** (1 / p["ml"])
+    up, lo = fore_half(min(s, F_END))
+    zt, zc, zb = up[0][1], up[-1][1], lo[-1][1]
+    if z >= zt or z <= zb:
+        return 0.0
+    x = _x_at_z(up if z >= zc else lo, z)
+    return 0.0 if x is None else x
+
+
+def fore_upper_z(s, x):
+    """Height of the forebody upper surface at half width x."""
+    up, _ = fore_half(min(s, F_END))
+    best = None
+    for (x0, z0), (x1, z1) in zip(up, up[1:]):
+        if (x0 - x) * (x1 - x) <= 0 and abs(x1 - x0) > 1e-9:
+            z = z0 + (x - x0) / (x1 - x0) * (z1 - z0)
+            best = z if best is None else max(best, z)
+    return up[-1][1] if best is None else best
 
 
 # ---------------------------------------------------------------------------
@@ -96,30 +158,31 @@ Q_ROWS = {
         (11.5, (0.0, 1.02)), (12.2, (0.0, 0.99)), (12.8, (0.0, 0.90)),
         (13.25, (0.0, 0.78)), (13.6, (0.0, 0.66)), (14.0, (0.0, 0.53)),
         (14.3, (0.0, 0.46))],
-    # Q1 spine shoulder
-    1: [(3.90, (0.36, 0.46)), (4.30, (0.36, 0.60)), (4.60, (0.36, 0.80)),
-        (5.10, (0.36, 1.17)), (5.40, (0.36, 1.19)), (6.00, (0.36, 1.15)),
-        (7.00, (0.38, 1.08)), (9.00, (0.40, 1.03)), (11.0, (0.40, 0.97)),
+    # Q1 spine shoulder (narrow ridge behind the canopy, head-on photo)
+    1: [(3.90, (0.32, 0.46)), (4.30, (0.32, 0.60)), (4.60, (0.32, 0.80)),
+        (5.10, (0.32, 1.14)), (5.40, (0.31, 1.15)), (6.00, (0.30, 1.11)),
+        (7.00, (0.32, 1.06)), (9.00, (0.36, 1.01)), (11.0, (0.38, 0.96)),
         (12.2, (0.40, 0.93)), (12.8, (0.38, 0.84)), (13.25, (0.37, 0.74)),
         (13.6, (0.38, 0.63)), (14.0, (0.42, 0.52)), (14.3, (0.46, 0.46))],
-    # Q2 valley between the spine and the inlet shoulder
-    2: [(3.90, (0.58, 0.44)), (4.30, (0.62, 0.62)), (4.60, (0.66, 0.78)),
-        (5.10, (0.74, 0.86)), (5.60, (0.80, 0.86)), (6.50, (0.84, 0.82)),
-        (8.00, (0.86, 0.79)), (10.0, (0.86, 0.76)), (11.5, (0.84, 0.73)),
+    # Q2 foot of the spine; nearly flat out to the inlet shoulder
+    2: [(3.90, (0.58, 0.44)), (4.30, (0.60, 0.60)), (4.60, (0.62, 0.74)),
+        (5.10, (0.64, 0.80)), (5.60, (0.68, 0.80)), (6.50, (0.74, 0.78)),
+        (8.00, (0.80, 0.77)), (10.0, (0.84, 0.75)), (11.5, (0.84, 0.73)),
         (12.4, (0.80, 0.68)), (13.0, (0.74, 0.63)), (13.6, (0.72, 0.57)),
         (14.3, (0.74, 0.47))],
     # Q3 shoulder top above the inlet
-    3: [(3.90, (1.40, 0.675)), (5.20, (1.42, 0.705)), (6.00, (1.44, 0.70)),
-        (7.50, (1.45, 0.67)), (9.50, (1.44, 0.64)), (11.0, (1.40, 0.62)),
+    3: [(3.90, (1.25, 0.47)), (4.60, (1.28, 0.50)), (5.20, (1.33, 0.56)),
+        (6.00, (1.40, 0.63)), (7.00, (1.44, 0.66)), (7.50, (1.45, 0.67)), (9.50, (1.44, 0.64)), (11.0, (1.40, 0.62)),
         (12.0, (1.40, 0.60)), (13.0, (1.37, 0.56)), (13.6, (1.33, 0.51)),
         (14.0, (1.31, 0.47)), (14.3, (1.25, 0.42))],
     # Q4 strake / chine edge (sharp)
-    4: [(3.90, (1.74, 0.345)), (5.20, (1.74, 0.35)), (6.00, (1.76, 0.34)),
-        (7.00, (1.79, 0.33)), (9.00, (1.82, 0.30)), (12.0, (1.86, 0.27)),
+    4: [(3.90, (1.56, 0.29)), (4.40, (1.57, 0.295)), (5.00, (1.62, 0.31)),
+        (5.80, (1.70, 0.32)), (6.60, (1.76, 0.32)), (7.50, (1.80, 0.31)), (9.00, (1.82, 0.30)), (12.0, (1.86, 0.27)),
         (12.5, (1.74, 0.26)), (13.0, (1.60, 0.25)), (13.5, (1.49, 0.24)),
         (14.0, (1.42, 0.23)), (14.3, (1.36, 0.22))],
     # Q5 lower outboard side of the cowl
-    5: [(3.90, (1.60, -0.42)), (5.40, (1.60, -0.45)), (7.00, (1.60, -0.43)),
+    5: [(3.90, (1.36, -0.40)), (4.60, (1.38, -0.41)), (5.40, (1.46, -0.43)),
+        (6.20, (1.54, -0.44)), (7.00, (1.59, -0.43)),
         (9.50, (1.59, -0.42)), (11.5, (1.52, -0.40)), (12.4, (1.32, -0.36)),
         (13.0, (1.18, -0.28)), (13.6, (1.08, -0.18)), (14.3, (0.98, -0.08))],
     # Q6 bottom outboard corner of the flat belly
@@ -227,8 +290,9 @@ def _ring_from_half(s, up, lo):
 
 
 def fore_ring(s):
-    up = [Vector(fore_point(s, math.pi / 2 * i / 200)) for i in range(201)]
-    lo = [Vector(fore_point(s, math.pi / 2 + math.pi / 2 * i / 200)) for i in range(201)]
+    up, lo = fore_half(s)
+    up = [Vector(p) for p in up]
+    lo = [Vector(p) for p in lo]
     return _ring_from_half(s, resample(up, N_UP + 1), resample(lo, N_LO + 1))
 
 
@@ -264,7 +328,7 @@ def build_forebody(collection):
     n = len(rings[0])
     verts, faces = loft_rings(rings, True, False, True)
     tip = len(verts)
-    verts.append(P(0.0, 0.0, 0.0))
+    verts.append(P(0.0, 0.0, FORE(0.0)["zc"]))
     for j in range(n):
         faces.append((tip, (j + 1) % n, j))
     ob = mesh_object("Fuselage", verts, faces, collection, M.get("skin"))
@@ -286,9 +350,9 @@ def build_main(collection):
 # ---------------------------------------------------------------------------
 # Raked inlet lip: three planes per side  (s = station, x = |half-width|)
 # ---------------------------------------------------------------------------
-TIP = (1.48, 4.28, 0.18)            # forward-most point of the cowl (x, s, z)
-LIP_A, LIP_B = 0.826, 0.168         # upper lip plane slopes
-LIP_C, LIP_D = 0.4235, 0.7926       # lower lip plane slopes
+TIP = (1.53, 4.28, 0.28)            # forward-most point of the cowl (x, s, z): top-outboard corner
+LIP_A, LIP_B = 0.69, 0.168          # upper lip plane slopes (lip meets the chine at s~4.75)
+LIP_C, LIP_D = 0.20, 0.45           # lower lip plane slopes (outer edge sweeps back going down)
 LIP_E = 1.58                        # outboard cowl flare
 
 
@@ -365,15 +429,21 @@ def _duct_section(s, side):
     t = max(0.0, min(1.0, (s - 5.25) / 1.75))
     tt = t * t * (3 - 2 * t)
     # outboard walls of the aperture (front view trapezoid)
+    # aperture: top edge slopes down outboard from the chine (0.89, 0.45) to the
+    # top-outboard corner (1.53, 0.27); outer wall cants inward to (1.28, -0.39)
     outer = [
-        (1.36, 0.585),
-        (1.47, 0.55),
-        (1.535, 0.45),
-        (1.555, 0.10),
-        (1.535, -0.34),
-        (1.47, -0.455),
-        (1.20, -0.47),
-        (0.95, -0.47),
+        (1.00, 0.425),
+        (1.20, 0.37),
+        (1.40, 0.31),
+        (1.495, 0.282),
+        (1.525, 0.245),
+        (1.47, 0.08),
+        (1.40, -0.12),
+        (1.33, -0.30),
+        (1.29, -0.375),
+        (1.24, -0.40),
+        (1.00, -0.40),
+        (0.80, -0.40),
     ]
     zc, xc = 0.05, 1.10
     pts = []
@@ -382,7 +452,7 @@ def _duct_section(s, side):
     for x, z in outer:
         pts.append((xc + (x - xc) * sc - shift, zc + (z - zc) * sc - 0.08 * tt))
     # inboard wall follows the forebody side + bump (front), straight aft
-    zs = [-0.47, -0.36, -0.22, -0.08, 0.06, 0.20, 0.33, 0.45]
+    zs = [-0.40, -0.30, -0.18, -0.05, 0.08, 0.20, 0.32, 0.43]
     inner = []
     for z in zs:
         zz = zc + (z - zc) * sc - 0.08 * tt

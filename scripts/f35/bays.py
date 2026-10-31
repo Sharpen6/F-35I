@@ -188,7 +188,8 @@ def build(ctx):
         set_hinge(d, p0, p1, meta["kind"], (0.0, meta["lim"]),
                   {"side": meta["side"], "door": meta["sub"], "want": list(meta["want"])})
         objs[name] = d
-    set_hinge(gun, P(5.05, 1.38, 0.62), P(5.80, 1.38, 0.62), "gun_door", (0, 70),
+    gz = _edge_z(gun, 1.38)              # hinge on the door's outboard edge, on the skin
+    set_hinge(gun, P(5.05, 1.38, gz), P(5.80, 1.38, gz), "gun_door", (0, 70),
               {"side": 1, "want": [0, 0, -1]})
     set_hinge(refuel, P(5.97, 0.11, 1.18), P(5.97, -0.11, 1.18), "refuel_door", (0, 100),
               {"side": 0, "want": [0, 0, -1]})
