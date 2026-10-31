@@ -20,6 +20,9 @@ def build_all(parts):
     if "wings" in parts:
         from . import wings
         wings.build(ctx)
+        if "fuselage" in parts:          # lower wing-root fillets (blend wing and body)
+            from . import fillets
+            fillets.build(ctx)
     if "tails" in parts:
         from . import tails
         tails.build(ctx)

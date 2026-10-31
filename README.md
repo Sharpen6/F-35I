@@ -30,7 +30,10 @@ built only from publicly available reference material (see [`docs/research.md`](
 | `scripts/damage/f35_damage.py` | Damage and flight-effects simulator (pure Python, no Blender needed) |
 | `scripts/damage/make_report.py` | Generates `docs/damage_model.md` |
 | `scripts/review_compare.py` | Orthographic silhouettes registered to the public 3-view drawing, with overlap (IoU) |
-| `scripts/preview.py`, `scripts/render/` | Review renders and the progress stills |
+| `scripts/preview.py`, `scripts/render/` | Review renders, photo-matched cameras (`review.py`), background clip renders (`launch.py`, `clips.py`) |
+| `scripts/tools/overlay.py` | Draws the model's outline and edges over a reference photo |
+| `scripts/tools/clearance.py` | Landing-gear checks: nothing outside the skin with the gear up, no part through a door during the swing |
+| `data/camera_matches/` | Cameras solved from reference photos (position, rotation, lens) |
 | `blend/F-35I_Adir.blend` | The built model, ready to open in Blender 5.1 |
 | `data/damage_model.json` | Components, hitboxes, intact attributes and ground attitudes, exported by the build |
 | `renders/` | Images and GIFs for the making-of video (`progress`, `turntable`, `gifs`, `animation`, `review`) |
@@ -40,6 +43,17 @@ built only from publicly available reference material (see [`docs/research.md`](
 pip install bpy==5.1.2            # or run inside Blender 5.1
 python3 scripts/build_f35i.py --out blend/F-35I_Adir.blend
 python3 scripts/damage/make_report.py     # regenerate the damage report
+```
+
+## Checking it against photos
+Inside Blender 5.1 (for example through the Blender MCP add-on), with `scripts/render` and
+`scripts/tools` on `sys.path`:
+```python
+import review, clearance
+review.match("c29")                  # render from the camera solved for reference photo c29
+review.match_edges("c29")            # flat edge render; tools/overlay.py draws it over the photo
+clearance.exposed(0.0)               # gear parts outside the closed airframe, gear up: expect {}
+clearance.crossings([0, 0.5, 1.0])   # gear edges cutting through skin or doors during the swing
 ```
 
 ## Animating it

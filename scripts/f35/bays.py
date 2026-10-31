@@ -5,9 +5,12 @@
   open "straight down" (~90-95 deg).  A GBU-31 class JDAM hangs from the
   main station in each bay.
 * nose-gear well (two side doors hanging down when open)
-* main-gear wells on the lower fuselage sides; one large door each, hinged
-  at its upper (outboard) edge, opening outward/down (as in photos of
-  parked F-35Is)
+* main-gear wells in the lower body side, the wing-root fillet and the
+  wing root.  Three doors per side: the aft outboard door (hinged at its
+  outboard edge under the wing root, above the wheel) follows the fillet,
+  so it hangs beside the leg as a gently curved panel while the gear is
+  down, as in photos of parked F-35s (c29, c50, c51, c53); the forward
+  outboard door and the inboard door only open while the gear is moving
 * GAU-22/A gun-port door on the left shoulder
 * air-refuelling receptacle door on the spine (F-35A/I boom receptacle)
 
@@ -26,20 +29,37 @@ from . import materials as M
 
 BAY_S = (6.55, 10.75)          # weapon bay station range
 BAY_X = (0.13, 1.09)           # inboard / outboard wall (each side)
-BAY_Z = (-1.00, -0.32)
+BAY_Z = (-1.00, -0.24)         # roof 0.55 m above the belly (GBU-31 + rack fit)
+DZ = 0.08                      # bay internals sit 8 cm higher since the belly was raised
 INNER_DOOR_X = (0.135, 0.455)
 OUTER_DOOR_X = (0.465, 1.085)
 NOSE_WELL = (-0.21, 0.21, 3.00, 4.65, -1.0, 0.04)       # x0 x1 s0 s1 z0 z1
-MAIN_WELL_S = (8.60, 10.62)
-# (x, z) cross-section of the main-gear well (left side; mirrored for right)
-MAIN_WELL_POLY = [(1.13, -1.05), (1.95, -0.45), (1.95, -0.30), (1.67, -0.17),
-                  (1.40, 0.45), (0.78, 0.40), (0.78, -0.25), (1.13, -0.30)]
-MAIN_DOOR_CHORD = ((1.135, -0.862), (1.690, -0.185))    # skin points (x, z)
+MAIN_WELL_S = (8.20, 10.72)        # the stowed wheel reaches s 8.34
+# (x, z) cross-section of the main-gear well (left side; mirrored for right).
+# Its lower edge runs outside the skin from the belly corner to under the
+# wing root, so the opening spans the sloping body side and the wing root.
+MAIN_WELL_POLY = [(1.13, -1.00), (2.215, -0.43), (2.215, 0.21), (1.40, 0.40),
+                  (0.78, 0.40), (0.78, -0.17), (1.13, -0.21)]
+MAIN_SPLIT_X = 1.64            # inboard door | outboard doors
+MAIN_OUT_X = 2.20              # outboard hinge line (under the wing root, above the wheel)
+MAIN_AFT_S = 9.70              # forward outboard door | aft outboard door
 
 
-def _bvh(ob):
+def _bvh(*obs):
+    """BVH over several objects (world space)."""
     dg = bpy.context.evaluated_depsgraph_get()
-    return BVHTree.FromObject(ob, dg)
+    verts, polys = [], []
+    for ob in obs:
+        if ob is None:
+            continue
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        mw = ob.matrix_world
+        off = len(verts)
+        verts.extend(mw @ v.co for v in me.vertices)
+        polys.extend([off + i for i in p.vertices] for p in me.polygons)
+        ev.to_mesh_clear()
+    return BVHTree.FromPolygons(verts, polys)
 
 
 def _fix(ob):
@@ -110,7 +130,8 @@ def build(ctx):
     wcoll = get_collection("Weapons", root)
     objs = {}
     bay_mat = M.get("bay")
-    bvh = _bvh(fus)                      # rays are cast before cutting
+    wings = [ctx["objects"].get(f"{n}_{t}") for n in ("Wing", "WingFillet") for t in ("L", "R")]
+    bvh = _bvh(fus, *wings)              # rays are cast before cutting
     up = (0, 0, 1)
     s0, s1 = BAY_S
     door_specs = []
@@ -133,21 +154,39 @@ def build(ctx):
                            8, 20, up,
                            dict(kind="nose_door", side=side, hx=side * (x1 - 0.003), lim=90.0, sub="",
                                 want=(0, 0, -1), s=(ns0 + 0.01, ns1 - 0.01), hz=None)))
-    # main gear doors on the sloping lower side; hinged at the top edge
-    (cx0, cz0), (cx1, cz1) = MAIN_DOOR_CHORD
-    ch = Vector((cx1 - cx0, 0, cz1 - cz0)).normalized()
+    # main gear doors.  Skin chord (x, z) of each door at mid well, found by
+    # ray casts; the doors are ray-cast patches between two lateral limits.
+    ms0, ms1 = MAIN_WELL_S
     for side, tag in ((1, "L"), (-1, "R")):
-        nrm = Vector((side * -ch.z, 0, ch.x if False else -abs(ch.x)))
-        nrm = Vector((side * abs(ch.z), 0, -abs(ch.x))).normalized()
-        ms0, ms1 = MAIN_WELL_S
+        for name, (xa, xb), (sa, sb), hinge, kind, lim_pad in (
+                (f"MainGearDoor_Inner_{tag}", (1.135, MAIN_SPLIT_X), (ms0 + 0.01, ms1 - 0.01), "in",
+                 "main_well_door", 0.0),
+                (f"MainGearDoor_Fwd_{tag}", (MAIN_SPLIT_X, MAIN_OUT_X), (ms0 + 0.01, MAIN_AFT_S - 0.005), "out",
+                 "main_well_door", 4.0),
+                (f"MainGearDoor_{tag}", (MAIN_SPLIT_X, MAIN_OUT_X), (MAIN_AFT_S + 0.005, ms1 - 0.01), "out",
+                 "main_door", 3.0)):
+            pa = _skin_point(bvh, side * xa, 0.5 * (sa + sb))
+            pb = _skin_point(bvh, side * xb, 0.5 * (sa + sb))
+            ch = (pb - pa)
+            ch.y = 0.0
+            ch.normalize()
+            nrm = Vector((-ch.z, 0.0, ch.x * 1.0)) if side > 0 else Vector((ch.z, 0.0, -ch.x))
+            if nrm.z > 0:                       # outward normal points down/outboard
+                nrm = -nrm
 
-        def gf(u, v, side=side, nrm=nrm, ms0=ms0, ms1=ms1):
-            x = cx0 + (cx1 - cx0) * u
-            z = cz0 + (cz1 - cz0) * u
-            return P(ms0 + 0.01 + (ms1 - ms0 - 0.02) * v, side * x, z) + nrm * 1.5
-        door_specs.append((f"MainGearDoor_{tag}", gf, 12, 22, -nrm,
-                           dict(kind="main_door", side=side, hx=side * cx1, lim=100.0, sub="",
-                                want=(side, 0, 0), s=(ms0 + 0.01, ms1 - 0.01), hz=cz1)))
+            def gf(u, v, pa=pa, pb=pb, sa=sa, sb=sb, nrm=nrm):
+                q = pa.lerp(pb, u)
+                return Vector((q.x, P(sa + (sb - sa) * v, 0, 0).y, q.z)) + nrm * 1.2
+            slope = math.degrees(math.atan2(abs(pb.z - pa.z), abs(pb.x - pa.x)))
+            if hinge == "out":
+                lim = 90.0 - slope + lim_pad          # hangs (just past) vertical
+                hx, want = side * xb, (0, 0, -1)
+            else:
+                lim = 90.0 + slope + lim_pad          # swings down to vertical, clear of the wheel
+                hx, want = side * xa, (0, 0, -1)
+            door_specs.append((name, gf, 12, 22, -nrm,
+                               dict(kind=kind, side=side, hx=hx, lim=lim, sub="",
+                                    want=want, s=(sa, sb), hz=None)))
     doors = {}
     for name, fn, nu, nv, ray, meta in door_specs:
         d = surface_patch(name, coll, bvh, fn, nu, nv, ray, mat=M.get("skin"))
@@ -172,19 +211,19 @@ def build(ctx):
     cutters.append(_cavity("Cav_Refuel", helpers, -0.13, 0.13, 5.53, 6.00, 1.05, 1.6, bay_mat))
     for cut in cutters:
         boolean(fus, cut, 'DIFFERENCE', apply=True)
+        if cut.name.startswith("Cav_MainGear_"):
+            for n in ("Wing_", "WingFillet_"):
+                ob = ctx["objects"].get(n + cut.name[-1])
+                if ob is not None:
+                    boolean(ob, cut, 'DIFFERENCE', apply=True)
         bpy.data.objects.remove(cut)
     fus.data.set_sharp_from_angle(angle=math.radians(35))
     # ------------------------------------------------------------- hinges
     for name, (d, meta) in doors.items():
         sa, sb = meta["s"]
-        if meta["kind"] == "main_door":
-            hz = meta["hz"]
-            p0, p1 = P(sa, meta["hx"], hz), P(sb, meta["hx"], hz)
-        else:
-            # hinge line on the door's own edge (lowest skin point there)
-            zs = [(ob_v.co.z) for ob_v in d.data.vertices]
-            hz = _edge_z(d, meta["hx"])
-            p0, p1 = P(sa, meta["hx"], hz), P(sb, meta["hx"], hz)
+        # hinge line on the door's own edge
+        hz = _edge_z(d, meta["hx"])
+        p0, p1 = P(sa, meta["hx"], hz), P(sb, meta["hx"], hz)
         set_hinge(d, p0, p1, meta["kind"], (0.0, meta["lim"]),
                   {"side": meta["side"], "door": meta["sub"], "want": list(meta["want"])})
         objs[name] = d
@@ -200,18 +239,18 @@ def build(ctx):
     for side, tag in ((1, "L"), (-1, "R")):
         # roof rails + transverse frames
         for k, xx in enumerate((0.36, 0.95)):
-            _box(f"BayRail_{tag}{k}", coll, side * xx, 0.025, s0 + 0.15, s1 - 0.15, -0.37, -0.32, gear_mat)
+            _box(f"BayRail_{tag}{k}", coll, side * xx, 0.025, s0 + 0.15, s1 - 0.15, -0.37 + DZ, -0.32 + DZ, gear_mat)
         for k in range(7):
             s = s0 + 0.25 + k * (s1 - s0 - 0.5) / 6
-            _box(f"BayFrame_{tag}{k}", coll, side * 0.61, 0.95, s - 0.02, s + 0.02, -0.355, -0.32, bay_mat)
+            _box(f"BayFrame_{tag}{k}", coll, side * 0.61, 0.95, s - 0.02, s + 0.02, -0.355 + DZ, -0.32 + DZ, bay_mat)
         # main station: bomb rack + GBU-31 class JDAM
-        _box(f"BombRack_{tag}", coll, side * 0.76, 0.12, 7.85, 9.45, -0.36, -0.30, gear_mat)
-        jd = build_jdam(wcoll, f"GBU31_{tag}", P(8.62, side * 0.76, -0.565))
+        _box(f"BombRack_{tag}", coll, side * 0.76, 0.12, 7.85, 9.45, -0.36 + DZ, -0.30 + DZ, gear_mat)
+        jd = build_jdam(wcoll, f"GBU31_{tag}", P(8.62, side * 0.76, -0.565 + DZ))
         objs[jd.name] = jd
         # door station: AIM-120 on a launcher fixed to the inboard door
         door = objs[f"BayDoor_Inner_{tag}"]
-        ms = build_amraam(wcoll, f"AIM120_{tag}", P(8.55, side * 0.30, -0.67))
-        rail = _box(f"AMRAAM_Launcher_{tag}", wcoll, side * 0.30, 0.05, 7.80, 9.30, -0.845, -0.755,
+        ms = build_amraam(wcoll, f"AIM120_{tag}", P(8.55, side * 0.30, -0.67 + DZ))
+        rail = _box(f"AMRAAM_Launcher_{tag}", wcoll, side * 0.30, 0.05, 7.80, 9.30, -0.845 + DZ, -0.755 + DZ,
                     gear_mat)
         for ob in [ms, rail]:
             mw = ob.matrix_world.copy()
@@ -220,6 +259,15 @@ def build(ctx):
         objs[ms.name] = ms
     ctx["objects"].update(objs)
     return objs
+
+
+def _skin_point(bvh, x, s):
+    """Outer skin point below/outboard at lateral position x, station s (ray up)."""
+    o = P(s, x, -3.0)
+    hit = bvh.ray_cast(o, Vector((0, 0, 1)), 10.0)
+    if hit[0] is None:
+        raise RuntimeError(f"no skin at x={x} s={s}")
+    return hit[0]
 
 
 def _edge_z(door, hx):

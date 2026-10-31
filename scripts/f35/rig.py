@@ -55,6 +55,7 @@ WANT = {
     "lef": (0, 0, -1), "flaperon": (0, 0, -1), "stabilator": (0, 0, -1),
     "rudder": (1, 0, 0), "canopy": (0, 0, 1), "bay_door": (0, 0, -1),
     "nose_door": (0, 0, -1), "gun_door": (0, 0, -1), "refuel_door": (0, 0, -1),
+    "main_door": (0, 0, -1), "main_well_door": (0, 0, -1),
     "tailhook": (0, 0, -1),
 }
 
@@ -85,6 +86,9 @@ def _expr(kind, ob):
         return f"{lim}*{SS}({lead}, {lead + 0.9}, bays)*{D2R}"
     if kind in ("nose_door", "main_door"):
         return f"{lim}*{SS}(0, 0.25, gear)*{D2R}"
+    if kind == "main_well_door":
+        # open only while the leg travels (it swings between gear 0.25 and 0.95)
+        return f"{lim}*{SS}(0, 0.22, gear)*(1 - {SS}(0.955, 1.0, gear))*{D2R}"
     if kind == "gun_door":
         return f"{lim}*{SS}(0, 1, gun)*{D2R}"
     if kind == "refuel_door":

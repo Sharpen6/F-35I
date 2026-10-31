@@ -22,7 +22,7 @@ def _new(name):
 
 def principled(name, color, rough=0.5, metal=0.0, coat=0.0, emission=None,
                emission_strength=0.0, alpha=1.0, transmission=0.0, ior=1.45,
-               spec=0.5):
+               spec=0.5, spec_tint=None, thin_film=0.0):
     mat = _new(name)
     b = _bsdf(mat)
     b.inputs["Base Color"].default_value = (*color, 1.0)
@@ -36,6 +36,11 @@ def principled(name, color, rough=0.5, metal=0.0, coat=0.0, emission=None,
     if transmission > 0:
         b.inputs["Transmission Weight"].default_value = transmission
         b.inputs["IOR"].default_value = ior
+    if spec_tint is not None and "Specular Tint" in b.inputs:
+        b.inputs["Specular Tint"].default_value = (*spec_tint, 1.0)
+    if thin_film > 0 and "Thin Film Thickness" in b.inputs:
+        b.inputs["Thin Film Thickness"].default_value = thin_film      # nm (ITO coating)
+        b.inputs["Thin Film IOR"].default_value = 1.9
     if alpha < 1.0:
         b.inputs["Alpha"].default_value = alpha
         try:
@@ -284,8 +289,11 @@ def _make(name):
         "edge":      dict(color=(0.098, 0.100, 0.104), rough=0.70, metal=0.1),
         "panel":     dict(color=(0.125, 0.128, 0.132), rough=0.52, metal=0.2),
         "radome":    dict(color=(0.215, 0.225, 0.235), rough=0.45, metal=0.2),
-        "canopy":    dict(color=(0.55, 0.42, 0.18), rough=0.03, metal=0.0,
-                          transmission=1.0, ior=1.5, alpha=1.0),
+        # clear, lightly bronze-tinted transparency; the gold shows mainly in
+        # reflections (ITO coating), as in photos where the pilot is plainly visible
+        "canopy":    dict(color=(0.86, 0.81, 0.68), rough=0.02, metal=0.0,
+                          transmission=1.0, ior=1.5, alpha=1.0, spec_tint=(1.0, 0.80, 0.45),
+                          thin_film=420.0),
         "canopy_frame": dict(color=(0.17, 0.18, 0.19), rough=0.45, metal=0.3),
         "intake":    dict(color=(0.15, 0.155, 0.16), rough=0.6),      # RAM-coated duct, grey
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),

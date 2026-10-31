@@ -29,15 +29,19 @@ NG_R, NG_RIM, NG_W = 0.2985, 0.127, 0.191     # 23.5x7.5R10 tyre
 NG_STOW_C = (0.0, 3.40, -0.28)     # wheel centre when stowed
 NG_B = (0.0, 3.80, -0.08)          # drag-brace airframe pivot
 NG_E = (0.0, 5.00, -0.15)          # actuator airframe pivot
-# main gear (left; right is mirrored)
-MG_T = (1.55, 10.15, -0.30)
+# main gear (left; right is mirrored).  Head-on and side photos (c29, c50,
+# c53) show near-vertical legs that disappear into the wing root just outboard
+# of the inlet cowl, so the trunnion sits in the wing-root end of the well,
+# high enough (inside the wing-root fillet) that the stowed leg clears the
+# closed doors.
+MG_T = (1.90, 10.12, 0.25)
 MG_C = (2.17, 10.27, -1.328)       # wheel track 4.34 m
 MG_R, MG_RIM, MG_W = 0.432, 0.216, 0.279      # 34x11.0R17 tyre
 MG_AXLE_OFF = 0.215                # strut centreline inboard of wheel centre
-MG_STOW_C = (1.25, 9.13, -0.02)    # wheel centre stowed (target)
+MG_STOW_C = (1.20, 8.85, 0.13)     # wheel centre stowed (target), above/outboard of the weapon bay roof
 MG_STOW_TILT = 50.0                # axle tilt when stowed (deg, outboard-up)
-MG_B = (1.30, 9.45, -0.18)         # drag-brace airframe pivot
-MG_E = (1.22, 10.70, -0.10)        # actuator airframe pivot
+MG_B = (1.74, 9.40, 0.28)          # drag-brace airframe pivot (well roof)
+MG_E = (1.62, 10.62, 0.31)         # actuator airframe pivot (well roof)
 
 
 def W(p):
@@ -332,8 +336,9 @@ def build_main(coll, bones, side):
     a2 = Vector((side * math.cos(tilt), 0.0, math.sin(tilt)))
     Ss = Cs - a2 * MG_AXLE_OFF
     axis, ang, R = solve_trunnion(T, S - T, a1, Ss - T, a2)
-    # trunnion along the solved hinge axis
-    strut_objs.append(cylinder(f"MG_Trunnion_{tag}", T - axis * 0.05, T + axis * 0.22, 0.058, None,
+    # trunnion along the solved hinge axis, running up into the wing root
+    ax_up = axis if axis.z > 0 else -axis
+    strut_objs.append(cylinder(f"MG_Trunnion_{tag}", T - ax_up * 0.12, T + ax_up * 0.07, 0.058, None,
                                coll, gear, segments=16))
     strut_objs.append(cylinder(f"MG_UpperStrut_{tag}", T - u * 0.07, T + u * 0.60, 0.088, 0.082, coll, gear))
     strut_objs.append(cylinder(f"MG_Gland_{tag}", T + u * 0.57, T + u * 0.63, 0.094, None, coll, gear))
@@ -363,7 +368,7 @@ def build_main(coll, bones, side):
     # drag brace (forward)
     Bw = W(mirror(MG_B, side))
     Dw = T + u * 0.50 + fwd_p * 0.07
-    pole = Vector((0, 0, 1))
+    pole = Vector((-side, 0, 0))                 # knee folds inboard, into the well (up would pierce the wing)
     K, Lk, n = brace_geometry(Bw, Dw, pole)
     br_u = bar(f"MG_DragBrace_U_{tag}", Bw, K, 0.085, 0.06, n.cross((Dw - Bw).normalized()), coll, gear,
                bevel=0.008)
