@@ -11,8 +11,10 @@ built only from publicly available reference material (see [`docs/research.md`](
 * **Airframe:** fuselage with DSI inlets (compression bump and swept cowl lips traced from the front drawing), wings, canted twin tails, all-moving stabilators,
   F135 nozzle (15 outer flaps, pale ceramic divergent flaps, opens for afterburner) standing free
   behind a sawtooth shroud with the stabilator booms beside it, one-piece canopy, cockpit with the
-  large panoramic display.
-* **Undercarriage:** nose and main gear with solved retraction kinematics, doors sequenced to the legs,
+  large panoramic display. Sensors and small parts placed from photos: faceted EOTS window under the chin,
+  six DAS windows, L-shaped air-data probes, formation light strips on the inlets.
+* **Undercarriage:** nose and main gear with solved retraction kinematics, doors sequenced to the legs
+  (two long nose-gear doors with sawtooth fronts that stay open beside the leg, as on the real jet),
   wheels that spin with the distance rolled, nose-wheel steering.
 * **Weapon bays:** both internal bays with doors, a GBU-31 JDAM and an AIM-120 AMRAAM in each.
 * **Pilot:** seated in the ejection seat, hands follow the side-stick and throttle, head looks

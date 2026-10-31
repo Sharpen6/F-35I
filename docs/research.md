@@ -178,6 +178,12 @@ There are two internal bays, each with two doors (four doors in total).
 
 - **Finish:** gear legs and bay interiors are white [P].
 - **Door counts:** not found in public text. Use walkaround photos (see Sources).
+- **Nose-gear doors** (photos c20, c22, c34, c51, c53) [P]:
+  - Two long doors stay open while the gear is down, one each side of the leg. The aircraft number is often painted on them.
+  - In the model they run from about station 2.45 m (just behind the EOTS window) to 4.70 m (the strut), hinged near the outer edges of the flat bottom of the forward fuselage (|x| ≈ 0.40–0.43 m).
+  - The front edge is sawtoothed. The aft edge is raked, so the free edge is slightly longer than the hinge edge.
+  - Seen head-on (c22) the open doors close in towards the bottom; the model hangs them 15° inboard of vertical.
+  - Back-projection through the c51 camera puts the hinge line higher at the front (z ≈ −0.16) than the model (−0.49). The model keeps the hinges on the bottom because the closed doors must fit the fuselage's lower skin.
 
 ### Canopy
 
@@ -210,8 +216,10 @@ There are two internal bays, each with two doors (four doors in total).
 - **Tailhook:** the F-35A has an emergency arresting hook.
 - **Drag chute:** a pod between the vertical tails, used by Norway and some other European operators. It is not listed for Israel.
 - **Sensors:**
-  - EOTS sits behind a faceted sapphire window under the nose.
-  - There are six DAS apertures distributed around the airframe.
+  - EOTS sits behind a faceted sapphire window under the nose. Its window spans stations ≈ 1.4–2.2 m, about 0.25 m ahead of the nose-gear doors (back-projected from c51; c34 and c53 agree) [P]. The window has seven flat facets with a gold sheen, set in a shallow box-like housing (c20).
+  - There are six DAS apertures distributed around the airframe [O]. Public text does not give their positions. Photos show one just ahead of the windscreen, one behind the canopy, and one on each lower side of the nose just above the front of the nose-gear doors (a small hexagonal window that flashes pink or teal, c34, c51, c53) [P]. The model puts the two remaining (lower) apertures on the centre line under the chin and under the aft fuselage; that placement is a guess.
+  - L-shaped air-data probes stick out from the lower sides of the nose beside the "CAUTION HOT" panels, at about station 1.95 m (c20, c34) [P].
+- **Formation lights:** a pair of light-green strips on the outer side of each inlet, aft of the lip, at stations ≈ 4.9–5.9 m and about 0.16 m above the datum (back-projected from c51; also visible in c20 and c53) [P].
 
 ## 4. Cockpit
 

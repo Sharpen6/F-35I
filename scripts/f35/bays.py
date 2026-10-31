@@ -4,7 +4,8 @@
   the door-mounted AIM-120 station) and an outboard-hinged main door; both
   open "straight down" (~90-95 deg).  A GBU-31 class JDAM hangs from the
   main station in each bay.
-* nose-gear well (two side doors hanging down when open)
+* nose-gear well with two long side doors hinged on the bottom corners;
+  they hang down beside the leg while the gear is down
 * main-gear wells in the lower body side, the wing-root fillet and the
   wing root.  Three doors per side: the aft outboard door (hinged at its
   outboard edge under the wing root, above the wheel) follows the fillet,
@@ -34,7 +35,22 @@ BAY_Z = (-1.00, -0.24)         # roof 0.55 m above the belly (GBU-31 + rack fit)
 DZ = 0.08                      # bay internals sit 8 cm higher since the belly was raised
 INNER_DOOR_X = (0.135, 0.455)
 OUTER_DOOR_X = (0.465, 1.085)
-NOSE_WELL = (-0.21, 0.21, 3.00, 4.65, -1.0, 0.04)       # x0 x1 s0 s1 z0 z1
+# Nose-gear well and its two long side doors (photos c20, c22, c34, c51, c53:
+# both doors stay open with the gear down and hang from the bottom corners of
+# the forward fuselage, the aircraft number painted on them).  Each door runs
+# from its hinge line on the bottom corner (|x| = NOSE_WELL_X) to the centre
+# line, from just behind the EOTS window to the strut.  Front edge sawtoothed,
+# aft edge raked so the free edge is slightly longer than the hinge edge.
+NOSE_WELL_X = (0.43, 0.40)         # hinge line |x| at the front / aft end, near the edge of the flat bottom
+                                   # (door chord ~0.4 m as measured on c51; further out the doors pick up
+                                   # the curve of the bottom corner and look bulky when open)
+NOSE_WELL_S = (2.45, 4.70)
+NOSE_WELL_Z = (-1.20, 0.04)        # cutter bottom (below the skin) / well roof
+NOSE_TEETH = 2                     # sawtooth teeth across each door's front edge
+NOSE_TOOTH = 0.10
+NOSE_AFT_RAKE = 0.05
+NOSE_DOOR_LEAN = 15.0              # open doors hang with their free edge this far inboard of vertical (deg)
+                                   # (head-on photo c22: the doors close in towards the bottom)
 MAIN_WELL_S = (8.20, 10.72)        # the stowed wheel reaches s 8.34
 # (x, z) cross-section of the main-gear well (left side; mirrored for right).
 # Its lower edge runs outside the skin from the belly corner to under the
@@ -44,6 +60,61 @@ MAIN_WELL_POLY = [(1.13, -1.00), (2.215, -0.43), (2.215, 0.21), (1.40, 0.40),
 MAIN_SPLIT_X = 1.64            # inboard door | outboard doors
 MAIN_OUT_X = 2.20              # outboard hinge line (under the wing root, above the wheel)
 MAIN_AFT_S = 9.70              # forward outboard door | aft outboard door
+
+
+def nose_front(x):
+    """Station of the well / door front edge at lateral position x (sawtooth)."""
+    xf = NOSE_WELL_X[0]
+    t = min(abs(x), xf) / xf * NOSE_TEETH
+    f = t - math.floor(t)
+    return NOSE_WELL_S[0] + NOSE_TOOTH * (1.0 - abs(2.0 * f - 1.0))
+
+
+def nose_aft(x):
+    xa = NOSE_WELL_X[1]
+    return NOSE_WELL_S[1] - NOSE_AFT_RAKE * min(abs(x), xa) / xa
+
+
+def nose_half_width(s):
+    """|x| of the hinge line at station s."""
+    (s0, s1), (x0, x1) = NOSE_WELL_S, NOSE_WELL_X
+    t = min(1.0, max(0.0, (s - s0) / (s1 - s0)))
+    return x0 + (x1 - x0) * t
+
+
+def nose_plan():
+    """Plan outline (x, s) of the nose-gear well, front edge first."""
+    n = 4 * NOSE_TEETH
+    x0, x1 = NOSE_WELL_X
+    front = [(x0 * (-1 + 2 * k / n), nose_front(x0 * (-1 + 2 * k / n))) for k in range(n + 1)]
+    front[0] = (-x0, NOSE_WELL_S[0])
+    front[-1] = (x0, NOSE_WELL_S[0])
+    aft = [(x1, nose_aft(x1)), (0.0, nose_aft(0.0)), (-x1, nose_aft(x1))]
+    return front + aft
+
+
+def _plan_prism(name, coll, plan_xs, z0, z1, mat):
+    """Closed vertical prism: simple polygon in plan (x, s) from z0 to z1.
+    The caps are ear-clipped so a sawtooth outline stays a valid solid."""
+    bm = bmesh.new()
+    lo = [bm.verts.new(P(s, x, z0)) for x, s in plan_xs]
+    hi = [bm.verts.new(P(s, x, z1)) for x, s in plan_xs]
+    n = len(plan_xs)
+    for i in range(n):
+        j = (i + 1) % n
+        bm.faces.new((lo[i], lo[j], hi[j], hi[i]))
+    bm.faces.new(lo)
+    bm.faces.new(list(reversed(hi)))
+    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 4], ngon_method='EAR_CLIP')
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    ob = bpy.data.objects.new(name, me)
+    coll.objects.link(ob)
+    if mat is not None:
+        me.materials.append(mat)
+    return ob
 
 
 def _bvh(*obs):
@@ -146,15 +217,30 @@ def build(ctx):
                                12, 30, up,
                                dict(kind="bay_door", side=side, hx=hinge_x * side, lim=lim,
                                     sub=kind, want=(0, 0, -1), s=(s0 + 0.01, s1 - 0.01), hz=None)))
-    # nose gear doors (hinged at the outer edges, hang down when open)
-    x0, x1, ns0, ns1, _, _ = NOSE_WELL
+    # nose gear doors: hinged on the bottom corners, each reaching the centre
+    # line; open, they hang with the free edge a little inboard of vertical.
+    sm = 0.5 * (NOSE_WELL_S[0] + NOSE_WELL_S[1])
+    sf, sa_ = NOSE_WELL_S[0] + 0.008, nose_aft(NOSE_WELL_X[1]) - 0.008
     for side, tag in ((1, "L"), (-1, "R")):
-        door_specs.append((f"NoseGearDoor_{tag}",
-                           lambda u, v, side=side: P(ns0 + 0.01 + (ns1 - ns0 - 0.02) * v,
-                                                     side * (0.003 + (x1 - 0.006) * u), -2.5),
-                           8, 20, up,
-                           dict(kind="nose_door", side=side, hx=side * (x1 - 0.003), lim=90.0, sub="",
-                                want=(0, 0, -1), s=(ns0 + 0.01, ns1 - 0.01), hz=None)))
+        def nose_grid(u, v, side=side):
+            # u across the door (centre line -> hinge), v along it.  Each
+            # column runs from the sawtooth front edge to the raked aft edge;
+            # x follows the tapering hinge line (two fixed-point passes).
+            x = 0.003 + (nose_half_width(sm) - 0.006) * u
+            for _ in range(3):
+                s_lo, s_hi = nose_front(x) + 0.008, nose_aft(x) - 0.008
+                sv = s_lo + (s_hi - s_lo) * v
+                x = 0.003 + (nose_half_width(sv) - 0.006) * u
+            return P(sv, side * x, -2.5)
+        ph0 = _skin_point(bvh, side * (nose_half_width(sf) - 0.003), sf)
+        ph1 = _skin_point(bvh, side * (nose_half_width(sa_) - 0.003), sa_)
+        hm = _skin_point(bvh, side * nose_half_width(sm), sm)
+        cm = _skin_point(bvh, side * 0.003, sm)
+        chord = math.degrees(math.atan2(hm.z - cm.z, abs(hm.x - cm.x)))
+        door_specs.append((f"NoseGearDoor_{tag}", nose_grid, 8 * NOSE_TEETH + 1, 30, up,
+                           dict(kind="nose_door", side=side, hx=side * NOSE_WELL_X[1],
+                                lim=round(90.0 - chord - NOSE_DOOR_LEAN, 1), sub="", want=(0, 0, -1),
+                                s=(sf, sa_), hz=None, p0=ph0, p1=ph1)))
     # main gear doors.  Skin chord (x, z) of each door at mid well, found by
     # ray casts; the doors are ray-cast patches between two lateral limits.
     ms0, ms1 = MAIN_WELL_S
@@ -207,7 +293,7 @@ def build(ctx):
         if side < 0:
             poly = list(reversed(poly))
         cutters.append(_prism(f"Cav_MainGear_{tag}", helpers, poly, *MAIN_WELL_S, bay_mat))
-    cutters.append(_cavity("Cav_NoseGear", helpers, *NOSE_WELL, bay_mat))
+    cutters.append(_plan_prism("Cav_NoseGear", helpers, nose_plan(), *NOSE_WELL_Z, bay_mat))
     cutters.append(_cavity("Cav_Gun", helpers, 1.20, 1.40, 5.03, 5.82, 0.38, 1.2, M.get("intake_dark")))
     cutters.append(_cavity("Cav_Refuel", helpers, -0.13, 0.13, 5.53, 6.00, 1.05, 1.6, bay_mat))
     for cut in cutters:
@@ -222,9 +308,11 @@ def build(ctx):
     # ------------------------------------------------------------- hinges
     for name, (d, meta) in doors.items():
         sa, sb = meta["s"]
-        # hinge line on the door's own edge
-        hz = _edge_z(d, meta["hx"])
-        p0, p1 = P(sa, meta["hx"], hz), P(sb, meta["hx"], hz)
+        if "p0" in meta:                 # hinge line given as skin points
+            p0, p1 = meta["p0"], meta["p1"]
+        else:                            # hinge line on the door's own edge
+            hz = _edge_z(d, meta["hx"])
+            p0, p1 = P(sa, meta["hx"], hz), P(sb, meta["hx"], hz)
         set_hinge(d, p0, p1, meta["kind"], (0.0, meta["lim"]),
                   {"side": meta["side"], "door": meta["sub"], "want": list(meta["want"])})
         objs[name] = d

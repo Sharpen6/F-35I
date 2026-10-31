@@ -377,8 +377,10 @@ def _make(name):
         "marking_grey": dict(color=(0.11, 0.115, 0.12), rough=0.5),
         "marking_yellow": dict(color=(0.75, 0.55, 0.05), rough=0.5),
         "marking_black": dict(color=(0.02, 0.02, 0.02), rough=0.5),
-        "das_window": dict(color=(0.05, 0.04, 0.03), rough=0.05, metal=0.5),
-        "eots_glass": dict(color=(0.30, 0.22, 0.10), rough=0.03, metal=0.6),
+        # dark windows with an interference coating: the DAS apertures flash pink /
+        # teal in photos (a ~420 nm film), the EOTS facets show a gold sheen (~110 nm)
+        "das_window": dict(color=(0.025, 0.025, 0.03), rough=0.06, metal=0.0, spec=0.8, thin_film=420.0),
+        "eots_glass": dict(color=(0.07, 0.055, 0.035), rough=0.04, metal=0.0, spec=0.9, thin_film=112.0),
         # cockpit
         "cockpit":   dict(color=(0.06, 0.065, 0.07), rough=0.6),
         "cockpit_panel": dict(color=(0.03, 0.03, 0.035), rough=0.5),
