@@ -18,7 +18,7 @@ import math
 import bmesh
 from mathutils import Vector, Matrix
 
-from .geom import P, get_collection, mesh_object, cylinder, uv_sphere, add_modifier_bevel
+from .geom import P, get_collection, mesh_object, cylinder, uv_sphere, add_modifier_bevel, loft_rings
 from . import materials as M
 
 # --------------------------------------------------------------- key points
@@ -38,6 +38,7 @@ MG_T = (1.90, 10.12, 0.25)
 MG_C = (2.17, 10.27, -1.328)       # wheel track 4.34 m
 MG_R, MG_RIM, MG_W = 0.432, 0.216, 0.279      # 34x11.0R17 tyre
 MG_AXLE_OFF = 0.215                # strut centreline inboard of wheel centre
+MG_OLEO = 1.15                     # oleo body length below the trunnion (piston below it)
 MG_STOW_C = (1.20, 8.85, 0.13)     # wheel centre stowed (target), above/outboard of the weapon bay roof
 MG_STOW_TILT = 50.0                # axle tilt when stowed (deg, outboard-up)
 MG_B = (1.74, 9.40, 0.28)          # drag-brace airframe pivot (well roof)
@@ -340,17 +341,37 @@ def build_main(coll, bones, side):
     ax_up = axis if axis.z > 0 else -axis
     strut_objs.append(cylinder(f"MG_Trunnion_{tag}", T - ax_up * 0.12, T + ax_up * 0.07, 0.058, None,
                                coll, gear, segments=16))
-    strut_objs.append(cylinder(f"MG_UpperStrut_{tag}", T - u * 0.07, T + u * 0.60, 0.088, 0.082, coll, gear))
-    strut_objs.append(cylinder(f"MG_Gland_{tag}", T + u * 0.57, T + u * 0.63, 0.094, None, coll, gear))
-    strut_objs.append(cylinder(f"MG_Piston_{tag}", T + u * 0.60, S + u * 0.02, 0.062, None, coll, chrome))
-    strut_objs.append(uv_sphere(f"MG_Knuckle_{tag}", S, (0.085, 0.085, 0.085), coll, gear, seg=16, rings=8))
+    # long white oleo body (~0.19 m) with a tapered main fitting at the top
+    # and a short chrome piston: photos c29/c53 show the thick cylinder
+    # filling most of the leg below the wing root
+    oleo = MG_OLEO
+    # main fitting: widest just below the skin, round where it meets the
+    # oleo, so head-on it reads as the inverted V of the photos.  The top
+    # stays narrow: stowed, the leg's lateral axis points up into the wing.
+    rings = []
+    for t, a_, b_ in ((0.05, 0.11, 0.10), (0.22, 0.17, 0.10), (0.34, 0.14, 0.098), (0.62, 0.097, 0.097)):
+        c = T + u * t
+        rings.append([c + out_p * (a_ * math.cos(2 * math.pi * k / 24)) + aft_p * (b_ * math.sin(2 * math.pi * k / 24))
+                      for k in range(24)])
+    v, f = loft_rings(rings, True, True, True)
+    fit = mesh_object(f"MG_MainFitting_{tag}", v, f, coll, gear, smooth=True)
+    _recalc(fit)
+    strut_objs.append(fit)
+    strut_objs.append(cylinder(f"MG_UpperStrut_{tag}", T - u * 0.07, T + u * oleo, 0.095, 0.090, coll, gear,
+                               segments=24))
+    strut_objs.append(cylinder(f"MG_Gland_{tag}", T + u * (oleo - 0.04), T + u * (oleo + 0.04), 0.102, None,
+                               coll, gear, segments=24))
+    strut_objs.append(cylinder(f"MG_Piston_{tag}", T + u * oleo, S + u * 0.02, 0.066, None, coll, chrome,
+                               segments=20))
+    strut_objs.append(cylinder(f"MG_Knuckle_{tag}", S - a1 * 0.08, S + a1 * 0.10, 0.088, None, coll, gear,
+                               segments=20))            # axle fitting at the foot of the piston
     strut_objs.append(cylinder(f"MG_Axle_{tag}", S, C + a1 * 0.17, 0.045, None, coll, gear, segments=14))
     strut_objs.append(cylinder(f"MG_Brake_{tag}", C - a1 * 0.115, C - a1 * 0.03, 0.16, None, coll,
                                M.get("intake_dark"), segments=24))
-    # torque links (aft side)
-    t_up = T + u * 0.64 + aft_p * 0.09
-    knee = T + u * ((0.64 + Ls) / 2) + aft_p * 0.22
-    t_lo = S - u * 0.07 + aft_p * 0.085
+    # torque links (aft side), from the gland down to the axle fork
+    t_up = T + u * (oleo + 0.05) + aft_p * 0.11
+    knee = T + u * ((oleo + 0.05 + Ls - 0.07) / 2) + aft_p * 0.20
+    t_lo = S - u * 0.07 + aft_p * 0.10
     nrm = u.cross(aft_p)
     strut_objs.append(bar(f"MG_TorqueLink_U_{tag}", t_up, knee, 0.06, 0.035, nrm, coll, gear, bevel=0.006))
     strut_objs.append(bar(f"MG_TorqueLink_L_{tag}", knee, t_lo, 0.06, 0.035, nrm, coll, gear, bevel=0.006))
@@ -358,7 +379,7 @@ def build_main(coll, bones, side):
                                coll, chrome, segments=10))
     # brake line down the front of the strut
     fwd_p = -aft_p
-    pts = [T + u * 0.05 + fwd_p * 0.10, T + u * 0.55 + fwd_p * 0.10, S - u * 0.12 + fwd_p * 0.08,
+    pts = [T + u * 0.45 + fwd_p * 0.11, T + u * (oleo - 0.06) + fwd_p * 0.11, S - u * 0.12 + fwd_p * 0.09,
            C - a1 * 0.09 + fwd_p * 0.12]
     for k in range(len(pts) - 1):
         strut_objs.append(cylinder(f"MG_BrakeLine{k}_{tag}", pts[k], pts[k + 1], 0.009, None, coll,
@@ -367,7 +388,7 @@ def build_main(coll, bones, side):
     wheel = build_wheel(f"MG_Wheel_{tag}", coll, C, a1, MG_R, MG_RIM, MG_W)
     # drag brace (forward)
     Bw = W(mirror(MG_B, side))
-    Dw = T + u * 0.50 + fwd_p * 0.07
+    Dw = T + u * 0.50 + fwd_p * 0.11
     pole = Vector((-side, 0, 0))                 # knee folds inboard, into the well (up would pierce the wing)
     K, Lk, n = brace_geometry(Bw, Dw, pole)
     br_u = bar(f"MG_DragBrace_U_{tag}", Bw, K, 0.085, 0.06, n.cross((Dw - Bw).normalized()), coll, gear,
@@ -383,7 +404,7 @@ def build_main(coll, bones, side):
                                None, coll, gear, segments=10))
     # retraction actuator
     Ew = W(mirror(MG_E, side))
-    Fw = T + u * 0.34 + aft_p * 0.10
+    Fw = T + u * 0.34 + aft_p * 0.12
     dirEF = (Fw - Ew).normalized()
     act_len = (Fw - Ew).length
     barrel_len, rod_len = 0.55, 0.58
