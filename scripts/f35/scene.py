@@ -31,50 +31,138 @@ def _look(ob, target):
     ob.rotation_euler = d.to_track_quat('-Z', 'Y').to_euler()
 
 
+# apron markings: a yellow lead-in line along the jet's axis with a stop bar just ahead of the nose
+# wheel, and tyre marks along the nose and main wheel tracks (y = s - 7.835, see gear.NG_C / MG_C)
+LEAD_IN_HALF = 0.075            # 15 cm line
+STOP_BAR_Y = -3.585 - 0.55      # 0.55 m ahead of the nose-wheel axle
+STOP_BAR_HALF = 1.0
+TRACKS_X = (0.0, 2.17)          # nose wheel, main wheels (|x|)
+
+
 def concrete_material():
+    """Weathered concrete apron: 5 m slabs with sealed joints and slab-to-slab tone changes, large faint
+    stains, oil spots, tyre marks along the wheel tracks, and a worn yellow lead-in line."""
     mat = bpy.data.materials.get("F35_Apron") or bpy.data.materials.new("F35_Apron")
     mat.use_nodes = True
     nt = mat.node_tree
-    for n in list(nt.nodes):
-        nt.nodes.remove(n)
-    out = nt.nodes.new("ShaderNodeOutputMaterial")
-    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    tc = nt.nodes.new("ShaderNodeTexCoord")
-    noise = nt.nodes.new("ShaderNodeTexNoise")
-    noise.inputs["Scale"].default_value = 0.35
-    noise.inputs["Detail"].default_value = 8.0
-    nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
-    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    nodes, links = nt.nodes, nt.links
+    for n in list(nodes):
+        nodes.remove(n)
+    out = nodes.new("ShaderNodeOutputMaterial")
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    tc = nodes.new("ShaderNodeTexCoord")
+    co = tc.outputs["Object"]                     # the apron sits at the origin: object = world x, y
+    sep = nodes.new("ShaderNodeSeparateXYZ")
+    links.new(co, sep.inputs["Vector"])
+    X, Y = sep.outputs["X"], sep.outputs["Y"]
+
+    def m(op, a, b=None, clamp=False):
+        n = nodes.new("ShaderNodeMath")
+        n.operation = op
+        n.use_clamp = clamp
+        for i, v in enumerate((a, b)):
+            if v is None:
+                continue
+            if isinstance(v, (int, float)):
+                n.inputs[i].default_value = float(v)
+            else:
+                links.new(v, n.inputs[i])
+        return n.outputs[0]
+
+    def noise(scale, detail=4.0, rough=0.55, vec=None):
+        n = nodes.new("ShaderNodeTexNoise")
+        n.inputs["Scale"].default_value = scale
+        n.inputs["Detail"].default_value = detail
+        n.inputs["Roughness"].default_value = rough
+        links.new(vec if vec is not None else co, n.inputs["Vector"])
+        return n.outputs["Fac"]
+
+    def band(v, lo, hi):                           # 0 below lo .. 1 above hi
+        r = nodes.new("ShaderNodeMapRange")
+        r.interpolation_type = 'SMOOTHSTEP'
+        r.inputs["From Min"].default_value = lo
+        r.inputs["From Max"].default_value = hi
+        links.new(v, r.inputs["Value"])
+        return r.outputs["Result"]
+
+    def mix_rgb(fac, a, b, blend='MIX'):
+        n = nodes.new("ShaderNodeMix")
+        n.data_type = 'RGBA'
+        n.blend_type = blend
+        if isinstance(fac, float):
+            n.inputs["Factor"].default_value = fac
+        else:
+            links.new(fac, n.inputs["Factor"])
+        for key, v in (("A", a), ("B", b)):
+            if isinstance(v, tuple):
+                n.inputs[key].default_value = (*v, 1.0)
+            else:
+                links.new(v, n.inputs[key])
+        return n.outputs["Result"]
+
+    # base tone: mottled concrete
+    mott = noise(0.35, 8.0, 0.6)
+    ramp = nodes.new("ShaderNodeValToRGB")
     ramp.color_ramp.elements[0].position = 0.35
-    ramp.color_ramp.elements[0].color = (0.30, 0.30, 0.29, 1)
+    ramp.color_ramp.elements[0].color = (0.29, 0.29, 0.28, 1)
     ramp.color_ramp.elements[1].position = 0.75
-    ramp.color_ramp.elements[1].color = (0.46, 0.45, 0.43, 1)
-    nt.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
-    # 5 m slabs with dark expansion joints
-    brick = nt.nodes.new("ShaderNodeTexBrick")
+    ramp.color_ramp.elements[1].color = (0.44, 0.43, 0.41, 1)
+    links.new(mott, ramp.inputs["Fac"])
+    col = ramp.outputs["Color"]
+    # 5 m slabs: each slab a slightly different tone, dark sealed joints
+    brick = nodes.new("ShaderNodeTexBrick")
     brick.offset = 0.0
     brick.squash = 1.0
     brick.inputs["Scale"].default_value = 0.2
     brick.inputs["Mortar Size"].default_value = 0.004
+    brick.inputs["Mortar Smooth"].default_value = 0.3
+    brick.inputs["Bias"].default_value = 0.0
     brick.inputs["Brick Width"].default_value = 1.0
     brick.inputs["Row Height"].default_value = 1.0
     brick.inputs["Color1"].default_value = (1, 1, 1, 1)
-    brick.inputs["Color2"].default_value = (0.95, 0.95, 0.95, 1)
-    brick.inputs["Mortar"].default_value = (0.25, 0.25, 0.25, 1)
-    nt.links.new(tc.outputs["Object"], brick.inputs["Vector"])
-    mul = nt.nodes.new("ShaderNodeMix")
-    mul.data_type = 'RGBA'
-    mul.blend_type = 'MULTIPLY'
-    mul.inputs["Factor"].default_value = 1.0
-    nt.links.new(ramp.outputs["Color"], mul.inputs["A"])
-    nt.links.new(brick.outputs["Color"], mul.inputs["B"])
-    nt.links.new(mul.outputs["Result"], bsdf.inputs["Base Color"])
-    bsdf.inputs["Roughness"].default_value = 0.88
-    bump = nt.nodes.new("ShaderNodeBump")
+    brick.inputs["Color2"].default_value = (0.84, 0.83, 0.81, 1)
+    brick.inputs["Mortar"].default_value = (0.16, 0.16, 0.16, 1)
+    links.new(co, brick.inputs["Vector"])
+    col = mix_rgb(1.0, col, brick.outputs["Color"], 'MULTIPLY')
+    # large faint stains and small oil spots
+    stain = band(noise(0.06, 3.0, 0.5), 0.55, 0.72)
+    col = mix_rgb(m('MULTIPLY', stain, 0.22), col, (0.12, 0.115, 0.105))
+    oil = band(noise(0.9, 2.0, 0.5), 0.70, 0.78)
+    oil = m('MULTIPLY', oil, band(noise(0.15, 2.0, 0.5), 0.5, 0.6))      # spots only in some areas
+    col = mix_rgb(m('MULTIPLY', oil, 0.55), col, (0.06, 0.058, 0.055))
+    # tyre marks: streaks along y in bands around the wheel tracks, ahead of the parked jet
+    stretch = nodes.new("ShaderNodeVectorMath")
+    stretch.operation = 'MULTIPLY'
+    stretch.inputs[1].default_value = (9.0, 0.12, 1.0)
+    links.new(co, stretch.inputs[0])
+    streak = band(noise(1.0, 3.0, 0.6, stretch.outputs["Vector"]), 0.45, 0.75)
+    ax = m('ABSOLUTE', X)
+    tracks = None
+    for xc in TRACKS_X:
+        d = m('ABSOLUTE', m('SUBTRACT', ax, xc))
+        t = m('SUBTRACT', 1.0, band(d, 0.12, 0.45))
+        tracks = t if tracks is None else m('MAXIMUM', tracks, t)
+    ahead = m('SUBTRACT', 1.0, band(Y, -1.0, 4.0))          # fades out under and behind the jet
+    tyre = m('MULTIPLY', m('MULTIPLY', tracks, streak), ahead)
+    col = mix_rgb(m('MULTIPLY', tyre, 0.45), col, (0.035, 0.034, 0.033))
+    # worn yellow lead-in line and stop bar
+    wear = band(noise(6.0, 4.0, 0.6), 0.28, 0.42)            # 1 = paint intact
+    line = m('SUBTRACT', 1.0, band(ax, LEAD_IN_HALF - 0.004, LEAD_IN_HALF + 0.004))
+    bar_y = m('SUBTRACT', 1.0, band(m('ABSOLUTE', m('SUBTRACT', Y, STOP_BAR_Y)), LEAD_IN_HALF - 0.004,
+                                    LEAD_IN_HALF + 0.004))
+    bar_x = m('SUBTRACT', 1.0, band(ax, STOP_BAR_HALF - 0.004, STOP_BAR_HALF + 0.004))
+    paint = m('MULTIPLY', m('MAXIMUM', line, m('MULTIPLY', bar_y, bar_x)), wear)
+    col = mix_rgb(paint, col, (0.62, 0.40, 0.025))
+    links.new(col, bsdf.inputs["Base Color"])
+    # roughness: concrete 0.9, paint 0.62, oil 0.45
+    r = m('SUBTRACT', 0.9, m('MULTIPLY', paint, 0.28))
+    r = m('SUBTRACT', r, m('MULTIPLY', oil, 0.4))
+    links.new(r, bsdf.inputs["Roughness"])
+    bump = nodes.new("ShaderNodeBump")
     bump.inputs["Strength"].default_value = 0.15
-    nt.links.new(noise.outputs["Fac"], bump.inputs["Height"])
-    nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
-    nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    links.new(mott, bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
     mat.diffuse_color = (0.38, 0.38, 0.37, 1)
     return mat
 
