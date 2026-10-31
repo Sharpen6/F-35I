@@ -3,3 +3,11 @@ __pycache__/
 *.blend1
 /tmp/
 renders/frames/
+
+# large HDRIs stay local (scripts/tools/get_hdri.py fetches them); the 2k one is in git
+references/hdri/*_4k.*
+references/hdri/*_8k.*
+references/hdri/*_16k.*
+references/hdri/thumbs/
+*.part
+references/hdri/*.sun.json

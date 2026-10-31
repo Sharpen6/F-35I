@@ -69,6 +69,29 @@ def build(parts=None, reload=True):
     return assemble.build_all(parts or ALL_PARTS)
 
 
+def save(path, copy=False):
+    """Save the built file.  External images (the HDRI) are written relative to the saved file,
+    so a clone of the repository still finds references/hdri/ next to blend/."""
+    path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    keep = {}
+    for img in bpy.data.images:
+        if img.source != 'FILE' or not img.filepath or img.packed_file:
+            continue
+        try:
+            rel = os.path.relpath(bpy.path.abspath(img.filepath), os.path.dirname(path))
+        except ValueError:                      # another drive: leave it absolute
+            continue
+        keep[img.name] = img.filepath
+        img.filepath_raw = "//" + rel.replace("\\", "/")
+    try:
+        bpy.ops.wm.save_as_mainfile(filepath=path, compress=True, copy=copy, relative_remap=False)
+    finally:
+        for name, fp in keep.items():
+            bpy.data.images[name].filepath_raw = fp
+    return path
+
+
 if __name__ == "__main__":
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
     out = None
@@ -85,7 +108,6 @@ if __name__ == "__main__":
             i += 1
     info = build(parts)
     if out:
-        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-        bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(out), compress=True)
+        save(out)
         print("SAVED", out)
     print("BUILD_INFO", info)

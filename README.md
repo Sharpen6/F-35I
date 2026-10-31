@@ -21,6 +21,9 @@ built only from publicly available reference material (see [`docs/research.md`](
   left / right / up / down and tilts.
 * **Cockpit switches:** 24 switches, each moves its lever (and guard), lights its LED when the battery
   is on, and drives the system it commands (lights, display, gear, bays, canopy, hook ...).
+* **Paint and light:** dark grey under a satin clear coat, tuned against two photos rendered from their
+  solved cameras, so sides read charcoal and sky-facing panels read silver as on the real jet. The
+  scene is lit by a CC0 partly cloudy airfield sky (HDRI from Poly Haven) with a matched sun lamp.
 * **Damage model:** 30 hitboxes, health per component, intact flight attributes and what each kind of
   damage changes (tilt after losing a wing, top speed after engine damage, fuel leaks, gear collapse ...).
   Parts break off with burnt, torn edges, the skin gets soot and scorch marks, smoke and fuel-vapour trails.
@@ -38,6 +41,7 @@ built only from publicly available reference material (see [`docs/research.md`](
 | `scripts/tools/overlay.py` | Draws the model's outline and edges over a reference photo |
 | `scripts/tools/clearance.py` | Landing-gear checks: nothing outside the skin with the gear up, no part through a door during the swing |
 | `data/camera_matches/` | Cameras solved from reference photos (position, rotation, lens) |
+| `references/hdri/` | The sky the scene is lit by (CC0, Poly Haven, 2k). `scripts/tools/get_hdri.py` fetches the 4k / 8k copies that renders use for sharper backgrounds |
 | `blend/F-35I_Adir.blend` | The built model, ready to open in Blender 5.1 |
 | `blend/history/` | One blend per milestone with an index of what changed and the mesh counts ([`INDEX.md`](blend/history/INDEX.md)); `scripts/tools/blend_history.py add <name>` appends the current one |
 | `data/damage_model.json` | Components, hitboxes, intact attributes and ground attitudes, exported by the build |

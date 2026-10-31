@@ -314,6 +314,31 @@ Approximate sRGB values (sources disagree, so treat these as guides only):
 | 36118 | #5B5E6A |
 | 36134 | Not found |
 
+How the paint looks in photos, measured as sRGB brightness (0..1) on c51 and c29 and on the model
+rendered from the same solved cameras (before = procedural sky and the old flat grey, after = this
+paint under the HDRI sky, sun placed roughly as in each photo):
+
+| Photo | Region | Photo | Before | After |
+|---|---|---|---|---|
+| c51 (bright cloud) | Upper fuselage behind the canopy | 0.67 | 0.23 | 0.41 |
+| c51 | Wing top | 0.80 | 0.29 | 0.46 |
+| c51 | Forward fuselage side | 0.19 | 0.16 | 0.22 |
+| c51 | Centre fuselage side | 0.15 | 0.14 | 0.17 |
+| c29 (clear sky) | Nose top | 0.52 | 0.37 | 0.55 |
+| c29 | Inlet cheek | 0.42 | 0.25 | 0.37 |
+| c29 | Wing on the image left | 0.25 | 0.15 | 0.23 |
+| c29 | Fin on the image left | 0.68 | 0.76 | 0.63 |
+
+- The same paint is almost black where it faces the camera and silvery where it catches the sky at a
+  glancing angle. A plain matt grey cannot do both, so the model uses a darker base than the paint
+  chip (linear 0.094) under a satin clear coat (weight 0.6, roughness 0.3) with a little sheen (0.15).
+- c51's upper surfaces are still about 0.25 darker than the photo: its sky is solid bright cloud, the
+  HDRI's is blue with cumulus. The image-right wing in c29 is not in the table because the sun
+  position there is only estimated (it is lit in the render and shaded in the photo).
+- The lighting is a CC0 HDRI from Poly Haven (Kloofendal 48d Partly Cloudy, Greg Zaal): open horizon,
+  bright cumulus, sun at 48 degrees. The sun is clipped out of the HDRI and replaced by a sun lamp with
+  the same direction and irradiance, so shadows stay sharp.
+
 ## 6. Signature features
 
 - **Nozzle:** the F135 axisymmetric convergent–divergent nozzle has two overlapping sets of **15 flaps** (15 + 15).

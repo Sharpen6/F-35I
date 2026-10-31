@@ -47,8 +47,14 @@ def _look(ob, target):
     ob.rotation_euler = d.to_track_quat('-Z', 'Y').to_euler()
 
 
-def setup(engine="CYCLES", samples=64, res=(1280, 720), ground=True):
+def setup(engine="CYCLES", samples=64, res=(1280, 720), ground=True, hdri=("4k",)):
     sc = bpy.context.scene
+    if hdri:
+        try:
+            from f35 import scene as f35_scene
+            f35_scene.use_hdri_size(*hdri)       # sharper background than the 2k in the blend
+        except Exception:
+            pass
     for ob in bpy.data.objects:
         if ob.name.startswith(HIDE_PREFIX):
             ob.hide_render = True

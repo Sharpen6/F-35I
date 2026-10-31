@@ -182,12 +182,17 @@ def _panel_detail(nodes, links):
 
 
 def skin_material():
-    """Radar-absorbent 'Have Glass' grey with subtle panel mottling."""
+    """Radar-absorbent 'Have Glass' grey with subtle panel mottling.
+
+    Tuned against photos c29 (clear sky) and c51 (bright cloud) rendered from their solved cameras
+    under an HDRI sky: the coating is dark where it faces the camera and turns silvery where it
+    catches the sky at a glancing angle, so the base is darker than the paint chip and a satin
+    coat plus a little sheen carry the sky reflection."""
     mat = _new("F35_Skin_RAM")
     nt = mat.node_tree
     nodes, links = nt.nodes, nt.links
     b = nodes["Principled BSDF"]
-    base = (0.118, 0.121, 0.125)       # FS 36170 class grey (linear)
+    base = (0.094, 0.097, 0.100)       # FS 36170 class grey (linear), darkened for the coat on top
     tc = nodes.new("ShaderNodeTexCoord")
     noise = nodes.new("ShaderNodeTexNoise")
     noise.inputs["Scale"].default_value = 2.2
@@ -223,8 +228,9 @@ def skin_material():
     links.new(fac, pmul.inputs["B"])
     # roughness variation (Have Glass coatings have a soft metallic sheen)
     rr = nodes.new("ShaderNodeMapRange")
-    rr.inputs["To Min"].default_value = 0.38
-    rr.inputs["To Max"].default_value = 0.46
+    rr.name = "SkinRough"
+    rr.inputs["To Min"].default_value = 0.42
+    rr.inputs["To Max"].default_value = 0.50
     links.new(noise.outputs["Fac"], rr.inputs["Value"])
     # battle damage (0..1) spreads soot / burns.  Sources (the largest wins):
     #   object property 'damage'                      - whole object
@@ -275,8 +281,15 @@ def skin_material():
     rpan = _m('ADD', rr.outputs["Result"], _m('SUBTRACT', _m('MULTIPLY', line, 0.12), _m('MULTIPLY', light, 0.06)))
     links.new(rpan, rmix.inputs["A"])
     links.new(rmix.outputs["Result"], b.inputs["Roughness"])
-    b.inputs["Metallic"].default_value = 0.22
-    b.inputs["Specular IOR Level"].default_value = 0.45
+    b.inputs["Metallic"].default_value = 0.15
+    b.inputs["Specular IOR Level"].default_value = 0.5
+    # satin top coat (sky sheen at glancing angles) and a little sheen; soot burns both away
+    clean = _m('SUBTRACT', 1.0, msk.outputs["Result"])
+    links.new(_m('MULTIPLY', clean, 0.6), b.inputs["Coat Weight"])
+    b.inputs["Coat Roughness"].default_value = 0.3
+    b.inputs["Coat IOR"].default_value = 1.5
+    links.new(_m('MULTIPLY', clean, 0.15), b.inputs["Sheen Weight"])
+    b.inputs["Sheen Roughness"].default_value = 0.5
     # fine grain bump
     n2 = nodes.new("ShaderNodeTexNoise")
     n2.inputs["Scale"].default_value = 180.0
@@ -291,6 +304,7 @@ def skin_material():
     links.new(line, gbump.inputs["Height"])
     links.new(bump.outputs["Normal"], gbump.inputs["Normal"])
     links.new(gbump.outputs["Normal"], b.inputs["Normal"])
+    links.new(gbump.outputs["Normal"], b.inputs["Coat Normal"])
     mat.diffuse_color = (*base, 1)
     return mat
 

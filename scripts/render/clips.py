@@ -129,8 +129,14 @@ def enable_gpu():
     return None
 
 
-def setup_render(res, samples, fps, engine="EEVEE"):
+def setup_render(res, samples, fps, engine="EEVEE", hdri=("4k",)):
     sc = bpy.context.scene
+    if hdri:
+        try:
+            from f35 import scene as f35_scene
+            print("HDRI", f35_scene.use_hdri_size(*hdri), flush=True)
+        except Exception as e:                      # no HDRI or an old blend: keep what is there
+            print("HDRI unchanged:", e, flush=True)
     if engine.upper() == "CYCLES":
         sc.render.engine = 'CYCLES'
         kind = enable_gpu()
@@ -303,7 +309,7 @@ def write_mp4(frames_dir, mp4_path, fps, n=None):
 def render_clip(name, args):
     bpy.ops.wm.open_mainfile(filepath=args.blend)
     clear_rig_animation()
-    setup_render(args.res, args.samples, args.fps, args.engine)
+    setup_render(args.res, args.samples, args.fps, args.engine, args.hdri)
     n, desc = CLIPS[name](args.fps)
     sc = bpy.context.scene
     sc.frame_start, sc.frame_end = 1, n
@@ -343,10 +349,12 @@ def main():
     ap.add_argument("--suffix", default="", help="appended to the output names, e.g. _v2")
     ap.add_argument("--blend", default=os.path.join(ROOT, "blend", "F-35I_Adir.blend"))
     ap.add_argument("--work", default=os.path.join(ROOT, "renders", "frames"))
+    ap.add_argument("--hdri", default="4k", help="HDRI sizes to try for the background, e.g. 8k,4k ('' keeps 2k)")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--test", action="store_true", help="render 5 sample frames only")
     args = ap.parse_args(argv)
     args.res = tuple(int(v) for v in args.res.lower().split("x"))
+    args.hdri = tuple(v for v in args.hdri.split(",") if v)
     args.gif_width = args.gif_width or None
     os.makedirs(os.path.join(ROOT, "renders", "gifs"), exist_ok=True)
     os.makedirs(os.path.join(ROOT, "renders", "animation"), exist_ok=True)
