@@ -8,7 +8,7 @@ built only from publicly available reference material (see [`docs/research.md`](
 ![Damage state](renders/progress/008_damage_front_left.png)
 
 ## What is in the model
-* **Airframe:** fuselage with DSI inlets, wings, canted twin tails, all-moving stabilators,
+* **Airframe:** fuselage with DSI inlets (compression bump and swept cowl lips traced from the front drawing), wings, canted twin tails, all-moving stabilators,
   F135 nozzle (15 outer flaps, pale ceramic divergent flaps, opens for afterburner) standing free
   behind a sawtooth shroud with the stabilator booms beside it, one-piece canopy, cockpit with the
   large panoramic display.

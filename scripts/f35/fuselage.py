@@ -10,10 +10,13 @@ F  forebody  - upper dome + lower V / canted sides meeting at a sharp chine, nos
 M  main body - 8-control-point sections (spine, shoulder, strake/chine edge,
                lower cowl side, flat belly, keel) from s=3.9 -> 14.3; aft of
                s ~12.8 the centre is drawn onto the nozzle shroud circle.
+   F carries the diverterless (DSI) bumps: a broad bulge on each side below
+   the chine, ahead of and inside the inlet (dsi_bump).
 M -= front wedges   : three planes per side give the raked "<" inlet lip
 U  = F + M
-U -= duct cutters   : trapezoidal aperture with a diverterless (DSI) bump on
-                      the inboard wall, curving inboard to the engine face
+U -= duct cutters   : the aperture traced from the front-view drawings; the
+                      inboard wall is the bump itself, the duct curves
+                      inboard to the engine face
 U -= cockpit tub cutter
 U -= nozzle well    : sawtooth shroud edge round the nozzle; the stabilator
                       booms carry on beside it
@@ -85,6 +88,51 @@ LIFT_GAP = 0.010
 LIFT_K = 0.03                   # blend width of the smooth max (m)
 CANOPY_SILL = ([4.40, 4.70, 4.97], [0.51, 0.48, 0.44])     # canopy.SILL_W aft end
 
+# DSI bump.  The inboard side of each inlet aperture is no wall but the bump
+# itself: a broad bulge on the forebody side below the chine, swelling from
+# about s 3.0 to its crest just ahead of the lip and running on into the duct
+# as its inboard wall (the cowl joins the body only above and below it).
+# Front view (front drawings c25 / ref09 registered on an orthographic
+# render, tools: review.ortho): the bump fills the inboard ~40 % of the
+# aperture, its outline running from the top-inboard corner (~1.02, 0.42)
+# out to x ~1.09 at z ~0.1-0.28 and back in to (~0.69, -0.40); photo c20
+# shows it as one smooth swelling under the chine.
+#   lateral offset (m) added to the forebody side by depth below the chine
+BUMP_DEPTH = Pchip([0.0, 0.045, 0.066, 0.116, 0.186, 0.266, 0.366, 0.466, 0.566,
+                    0.666, 0.766, 0.866, 0.94],
+                   [0.0, 0.07, 0.10, 0.165, 0.22, 0.258, 0.285, 0.28, 0.255,
+                    0.205, 0.11, 0.025, 0.0])
+BUMP_S = (3.00, 4.40, 4.95, 5.80)       # rises from / full from / full to / gone by (in the duct)
+
+
+def bump_extent(s):
+    """0..1 how much of the bump the forebody section at s carries."""
+    a, b, c, d = BUMP_S
+    return _smooth(a, b, s) * (1.0 - _smooth(c, d, s))
+
+
+def dsi_bump(s, depth):
+    """Lateral offset of the forebody side at station s, `depth` m below the chine."""
+    f = bump_extent(s)
+    if f <= 0.0 or depth <= 0.0 or depth >= 0.94:
+        return 0.0
+    return f * BUMP_DEPTH(depth)
+
+
+def _with_bump(s, lo):
+    """Lower half-section (chine -> keel) with the bump added."""
+    if bump_extent(s) <= 0.0:
+        return lo
+    zc = lo[0][1]
+    pts = []
+    for (x0, z0), (x1, z1) in zip(lo, lo[1:]):
+        n = max(1, int(math.hypot(x1 - x0, z1 - z0) / 0.015))
+        for i in range(n):
+            t = i / n
+            pts.append((x0 + (x1 - x0) * t, z0 + (z1 - z0) * t))
+    pts.append(lo[-1])
+    return [(x + dsi_bump(s, zc - z), z) for x, z in pts]
+
 N_UP = 30               # samples on the upper half-section
 N_LO = 26               # samples on the lower half-section
 
@@ -121,6 +169,7 @@ def fore_half(s):
     up, lo, zt, zb = _fore_raw(key)
     up = _sink_into_main(key, up)
     up[0] = (0.0, zt)
+    lo = _with_bump(key, lo)
     _HALF_CACHE[key] = (up, lo)
     return up, lo
 
@@ -264,26 +313,34 @@ Q_ROWS = {
     # the stabilator booms carry on (Q2-Q6), their inner faces hugging the
     # nozzle, as in the JASDF F-35A rear photos (references/nozzle).  The boom
     # ends taper (s 14.0-14.3) to a thin edge round the stabilator root.
+    # Near the inlet lip the cowl hugs the aperture (lips ~4 cm thick, as on
+    # the front drawings and photo c29) and flares out behind it: the cowl's
+    # top, outboard side and lower corner ramp out to the full body by s ~5.6
+    # (Q3-Q6), so its outer faces show from the front around the lip.
     # Q3 shoulder top above the inlet
-    3: [(3.90, (1.25, 0.47)), (4.60, (1.28, 0.50)), (5.20, (1.33, 0.53)),
-        (6.00, (1.40, 0.565)), (7.00, (1.44, 0.59)), (7.50, (1.45, 0.60)), (9.50, (1.44, 0.585)),
+    #    (back to full height by s 5.05: the gun lies under it, details.build_gun)
+    3: [(3.90, (1.25, 0.33)), (4.45, (1.27, 0.335)), (4.75, (1.29, 0.45)),
+        (5.05, (1.32, 0.52)), (5.20, (1.33, 0.53)), (6.00, (1.40, 0.565)), (7.00, (1.44, 0.59)), (7.50, (1.45, 0.60)), (9.50, (1.44, 0.585)),
         (11.0, (1.40, 0.575)), (12.0, (1.40, 0.565)), (13.0, (1.37, 0.54)), (13.6, (1.32, 0.47)),
         (14.0, (1.30, 0.43)), (14.3, (1.22, 0.31))],
     # Q4 strake / chine edge (sharp)
-    4: [(3.90, (1.56, 0.29)), (4.40, (1.57, 0.295)), (5.00, (1.62, 0.31)),
-        (5.80, (1.70, 0.32)), (6.60, (1.76, 0.32)), (7.50, (1.80, 0.31)), (9.00, (1.82, 0.30)), (12.0, (1.86, 0.27)),
+    #    (forward-most at the lip tip TIP: side drawing and photo c28 put it
+    #    ~0.1 m above the nose tip)
+    4: [(3.90, (1.49, 0.195)), (4.28, (1.50, 0.20)), (4.70, (1.55, 0.235)),
+        (5.20, (1.625, 0.28)), (5.80, (1.70, 0.31)), (6.60, (1.76, 0.32)), (7.50, (1.80, 0.31)), (9.00, (1.82, 0.30)), (12.0, (1.86, 0.27)),
         (12.5, (1.74, 0.26)), (13.0, (1.60, 0.25)), (13.5, (1.49, 0.24)),
         (14.0, (1.42, 0.23)), (14.3, (1.33, 0.22))],
     # Q5 lower outboard side of the cowl
-    5: [(3.90, (1.36, -0.39)), (4.60, (1.38, -0.40)), (5.40, (1.46, -0.42)),
-        (6.20, (1.54, -0.43)), (7.00, (1.59, -0.42)),
+    5: [(3.90, (1.20, -0.50)), (4.65, (1.22, -0.51)), (5.20, (1.36, -0.47)),
+        (5.60, (1.45, -0.445)), (6.20, (1.54, -0.43)), (7.00, (1.59, -0.42)),
         (9.50, (1.59, -0.41)), (11.5, (1.52, -0.39)), (12.4, (1.32, -0.35)),
         (12.8, (1.22, -0.27)), (13.3, (1.16, -0.12)), (13.6, (1.14, 0.03)),
         (14.0, (1.10, 0.08)), (14.3, (1.05, 0.15))],
     # Q6 bottom outboard corner of the flat belly.  Belly ~0.08 m higher than
     # the 3-view: camera-matched side and head-on photos show more daylight
     # between belly and wheels
-    6: [(3.90, (1.36, -0.57)), (5.00, (1.36, -0.60)), (5.60, (1.30, -0.665)),
+    6: [(3.90, (1.15, -0.60)), (4.65, (1.16, -0.60)), (5.20, (1.29, -0.625)),
+        (5.60, (1.30, -0.665)),
         (6.20, (1.24, -0.73)), (6.80, (1.20, -0.77)), (10.5, (1.19, -0.775)),
         (11.5, (1.14, -0.78)), (12.2, (1.08, -0.745)), (12.6, (0.92, -0.62)),
         (13.0, (0.68, -0.43)), (13.3, (0.46, -0.27)), (13.6, (0.50, -0.05)),
@@ -473,7 +530,7 @@ def build_main(collection):
 # ---------------------------------------------------------------------------
 # Raked inlet lip: three planes per side  (s = station, x = |half-width|)
 # ---------------------------------------------------------------------------
-TIP = (1.53, 4.28, 0.28)            # forward-most point of the cowl (x, s, z): top-outboard corner
+TIP = (1.495, 4.28, 0.20)           # forward-most point of the cowl (x, s, z): top-outboard corner
 LIP_A, LIP_B = 0.69, 0.168          # upper lip plane slopes (lip meets the chine at s~4.75)
 LIP_C, LIP_D = 0.20, 0.45           # lower lip plane slopes (outer edge sweeps back going down)
 LIP_E = 1.58                        # outboard cowl flare
@@ -538,66 +595,74 @@ def lip_cutters(collection):
 
 
 # ---------------------------------------------------------------------------
-# Duct cutter with the DSI bump on its inboard wall
+# Duct cutter: the aperture, its inboard wall on the bump
 # ---------------------------------------------------------------------------
-def _bump(s, z):
-    """Diverterless bump height (m) on the inboard duct wall."""
-    fs = max(0.0, 1.0 - ((s - 4.75) / 0.85) ** 2)
-    fz = max(0.0, 1.0 - ((z + 0.02) / 0.42) ** 2)
-    return 0.11 * fs * fz
+# Aperture traced from the front drawings (c25 / ref09: dark region, model
+# coordinates): the top edge falls from the bump (1.02, 0.42) to the
+# top-outboard corner (1.46, 0.19); the outboard wall cants in along
+# x = 1.387 + 0.44 z to (1.18, -0.475); the floor is flat.
+APERTURE = [
+    (1.000, 0.430), (1.100, 0.380), (1.200, 0.330), (1.300, 0.280), (1.400, 0.230),
+    (1.440, 0.208), (1.461, 0.186), (1.463, 0.160), (1.444, 0.110), (1.387, 0.000),
+    (1.343, -0.100), (1.299, -0.200), (1.255, -0.300), (1.211, -0.400), (1.192, -0.445),
+    (1.172, -0.471), (1.140, -0.482), (1.000, -0.482), (0.800, -0.482),
+]
+DUCT_GAP = 0.006        # inboard wall just outside the forebody: the bump runs on into the duct
+DUCT_WALL_Z = [-0.482, -0.45, -0.40, -0.35, -0.30, -0.25, -0.20, -0.15, -0.10, -0.05,
+               0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.39, 0.43]
 
 
 def _duct_section(s, side):
-    """Closed duct polygon (x, z) at station s (x positive = this side)."""
+    """Closed duct polygon (x, z) at station s (x positive = this side).
+
+    The aperture as far aft as s 5.25, then the duct shrinks and turns
+    inboard toward the engine face; the inboard wall is the forebody side
+    with its bump (DUCT_GAP outside it)."""
     t = max(0.0, min(1.0, (s - 5.25) / 1.75))
     tt = t * t * (3 - 2 * t)
-    # outboard walls of the aperture (front view trapezoid)
-    # aperture: top edge slopes down outboard from the chine (0.89, 0.45) to the
-    # top-outboard corner (1.53, 0.27); outer wall cants inward to (1.28, -0.39)
-    outer = [
-        (1.00, 0.425),
-        (1.20, 0.37),
-        (1.40, 0.31),
-        (1.495, 0.282),
-        (1.525, 0.245),
-        (1.47, 0.08),
-        (1.40, -0.12),
-        (1.33, -0.30),
-        (1.29, -0.375),
-        (1.24, -0.40),
-        (1.00, -0.40),
-        (0.80, -0.40),
-    ]
     zc, xc = 0.05, 1.10
-    pts = []
     sc = 1.0 - 0.30 * tt
     shift = 0.38 * tt
-    for x, z in outer:
-        pts.append((xc + (x - xc) * sc - shift, zc + (z - zc) * sc - 0.08 * tt))
-    # inboard wall follows the forebody side + bump (front), straight aft
-    zs = [-0.40, -0.30, -0.18, -0.05, 0.08, 0.20, 0.32, 0.43]
-    inner = []
-    for z in zs:
-        zz = zc + (z - zc) * sc - 0.08 * tt
-        xw = fore_x_at(min(s, 5.2), z) + 0.025 + _bump(s, z)
-        xw = xc + (xw - xc) * sc - shift
-        inner.append((xw, zz))
-    # polygon: top-inboard -> outboard walls (top..bottom) -> inboard wall up
-    poly = [inner[-1]] + pts + inner[0:-1]
+
+    def place(x, z):
+        return xc + (x - xc) * sc - shift, zc + (z - zc) * sc - 0.08 * tt
+    pts = [place(x, z) for x, z in APERTURE]
+    inner = [place(fore_x_at(min(s, 5.2), z) + DUCT_GAP, z) for z in DUCT_WALL_Z]
+    # polygon: top-inboard -> aperture (top edge, outboard wall, floor) -> inboard wall up
+    poly = [inner[-1]] + pts + inner[:-1]
     return [(x * side, z) for x, z in poly]
 
 
 def build_duct_cutter(collection, side=1):
-    st = [3.2, 3.6, 4.0, 4.2, 4.4, 4.6, 4.8, 5.0, 5.2, 5.4, 5.6, 5.8, 6.0,
-          6.2, 6.4, 6.6, 6.8, 7.0]
+    # dense where the inboard wall follows the bump (it must stay outside the
+    # forebody between stations, within DUCT_GAP)
+    st = [round(3.2 + 0.1 * i, 2) for i in range(29)] + [6.2, 6.4, 6.6, 6.8, 7.0]
     rings = []
     for s in st:
         sec = _duct_section(s, side)
         rings.append([P(s, x, z) for x, z in sec])
-    verts, faces = loft_rings(rings, True, True, True)
+    verts, faces = loft_rings(rings, True, False, False)
     ob = mesh_object(f"DuctCutter_{'L' if side > 0 else 'R'}", verts, faces,
                      collection, M.get("intake"), smooth=True)
-    _fix_normals(ob)
+    me = ob.data
+    me.materials.append(M.get("intake_dark"))
+    # end caps: the sections are not star-shaped round their centroid (the
+    # bump bulges into them), so a centre fan would fold over itself and
+    # break the exact boolean; fill them as n-gons and ear-clip instead
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    y0 = min(v.co.y for v in bm.verts)
+    bnd = [e for e in bm.edges if e.is_boundary]
+    start = [e for e in bnd if abs(e.verts[0].co.y - y0) < 1e-6]
+    end = [e for e in bnd if abs(e.verts[0].co.y - y0) >= 1e-6]
+    caps = bmesh.ops.contextual_create(bm, geom=start)["faces"]
+    far = bmesh.ops.contextual_create(bm, geom=end)["faces"]
+    for f in far:
+        f.material_index = 1            # the far end (engine face, behind the S-bend) is dark
+    bmesh.ops.triangulate(bm, faces=caps + far, quad_method='BEAUTY', ngon_method='EAR_CLIP')
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(me)
+    bm.free()
     return ob
 
 

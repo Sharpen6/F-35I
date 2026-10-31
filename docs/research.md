@@ -319,6 +319,11 @@ Approximate sRGB values (sources disagree, so treat these as guides only):
     - The lower aft fuselage converges smoothly onto the bottom of the nozzle.
     - The outer flaps are flat metal plates with rivet rows. The pale, soot-streaked divergent flaps reach just past them and form the light, serrated ring seen at the exit.
 - **DSI (diverterless supersonic inlet):** each inlet has a 3-D compression bump with a forward-swept cowl lip and no boundary-layer splitter plate. It was first flown on an F-16 testbed on 11 Dec 1996.
+  - How the model's inlets were shaped, traced from the public front-view drawing and checked against photos c20, c28 and c29 [M][P]:
+    - Seen head-on, the opening is a raked, roughly trapezoidal aperture from about 1.00 to 1.46 m out from the centreline. Its top edge slopes down outboard from the chine, its outboard edge leans inward towards the bottom, and its floor is flat.
+    - The compression bump bulges out of the inboard wall between stations 3.0 and 5.8 m. It is deepest (about 0.29 m) at mid-height and fills the inboard part of the opening, so only a crescent of dark duct shows from the front.
+    - The cowl lip is thin and swept: its tip, at the outboard top corner, sits at station 4.28 m, about 1.50 m out from the centreline. Below the tip the lip rakes back to the floor.
+    - Behind the lip the duct is light grey and darkens within about 0.9 m, as the photos show.
 - **Canted twin tails:** about 20° outboard, with full-span rudders.
 - **Chined nose:** a sharp chine runs from the nose tip back along the fuselage side into the LERX and the inlet top. The faceted EOTS window sits underneath.
 - **Planform alignment:** the wing and stabilator LE/TE angles match (about 34° and −14°).

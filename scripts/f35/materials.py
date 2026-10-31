@@ -80,6 +80,33 @@ def sooty(name, base, soot, rough=0.6, metal=0.0, stretch=(9.0, 1.2, 9.0), ramp=
     return mat
 
 
+def depth_fade(name, near, far, y0, y1, rough=0.55):
+    """Colour fading from `near` to `far` along object-space Y (y0 -> y1):
+    the inlet duct lining, light behind the lip and dark deep inside, as in
+    photos (c20: white lining at the lip; c29 head-on: black beyond)."""
+    mat = _new(name)
+    nt = mat.node_tree
+    nodes, links = nt.nodes, nt.links
+    b = _bsdf(mat)
+    tc = nodes.new("ShaderNodeTexCoord")
+    sep = nodes.new("ShaderNodeSeparateXYZ")
+    links.new(tc.outputs["Object"], sep.inputs["Vector"])
+    mr = nodes.new("ShaderNodeMapRange")
+    mr.clamp = True
+    mr.inputs["From Min"].default_value = y0
+    mr.inputs["From Max"].default_value = y1
+    links.new(sep.outputs["Y"], mr.inputs["Value"])
+    cr = nodes.new("ShaderNodeValToRGB")
+    cr.color_ramp.interpolation = 'EASE'
+    cr.color_ramp.elements[0].color = (*near, 1.0)
+    cr.color_ramp.elements[1].color = (*far, 1.0)
+    links.new(mr.outputs["Result"], cr.inputs["Fac"])
+    links.new(cr.outputs["Color"], b.inputs["Base Color"])
+    b.inputs["Roughness"].default_value = rough
+    mat.diffuse_color = (*near, 1.0)
+    return mat
+
+
 def _panel_detail(nodes, links):
     """Projected panel-line maps (see panels.py) -> (line, tape, light) sockets.
 
@@ -313,6 +340,9 @@ def _make(name):
         return skin_material()
     if name in SWITCHABLE:
         return switchable(name, *SWITCHABLE[name])
+    if name == "intake":
+        # duct lining: light grey behind the lip (s ~4.3-5.0), dark by s ~5.9
+        return depth_fade("F35_intake", (0.52, 0.52, 0.50), (0.035, 0.035, 0.038), -2.85, -1.95)
     if name == "nozzle_ceramic":
         return sooty("F35_nozzle_ceramic", (0.56, 0.53, 0.48), (0.24, 0.21, 0.18), rough=0.7)
     table = {
@@ -329,7 +359,6 @@ def _make(name):
                           transmission=1.0, ior=1.5, alpha=1.0, spec_tint=(1.0, 0.88, 0.66),
                           thin_film=112.0),
         "canopy_frame": dict(color=(0.17, 0.18, 0.19), rough=0.45, metal=0.3),
-        "intake":    dict(color=(0.15, 0.155, 0.16), rough=0.6),      # RAM-coated duct, grey
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),
         # outer flaps: dark gunmetal; divergent flaps: light ceramic coating
         # (photos of the exit: a whitish-tan serrated ring inside the dark flaps)
