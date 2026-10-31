@@ -313,6 +313,11 @@ Approximate sRGB values (sources disagree, so treat these as guides only):
   - The inner surfaces are white or tan.
   - On the 3-view, the exit is at X ≈ 14.0 m. The nozzle tapers from about 1.2 m wide at X ≈ 13.5 m to about 0.85 m of dark nozzle at the exit [M].
   - The F135 engine is 5.59 m long, with a 1.09 m inlet diameter and 1.17 m maximum diameter [O].
+  - Close-up photos of a JASDF F-35A (Komatsu, 2023; see Sources) show how the nozzle meets the body [P]:
+    - The aft fuselage ends in a **sawtooth shroud all round the nozzle**: roughly 60 small teeth (about 6 cm pitch) just over the outer flap roots. The teeth show above and below the nozzle.
+    - Beside the nozzle only the **stabilator booms** continue aft. Their inner faces wrap closely round the nozzle's sides, and the booms end at about the nozzle exit.
+    - The lower aft fuselage converges smoothly onto the bottom of the nozzle.
+    - The outer flaps are flat metal plates with rivet rows. The pale, soot-streaked divergent flaps reach just past them and form the light, serrated ring seen at the exit.
 - **DSI (diverterless supersonic inlet):** each inlet has a 3-D compression bump with a forward-swept cowl lip and no boundary-layer splitter plate. It was first flown on an F-16 testbed on 11 Dec 1996.
 - **Canted twin tails:** about 20° outboard, with full-span rudders.
 - **Chined nose:** a sharp chine runs from the nose tip back along the fuselage side into the LERX and the inlet top. The faceted EOTS window sits underneath.
@@ -423,6 +428,12 @@ Approximate sRGB values (sources disagree, so treat these as guides only):
 
 **Nozzle and inlet**
 - https://aviationweek.com/aerospace/program-management/closer-look-stealth-part-5-nozzles-exhausts
+- Wikimedia Commons photos of JASDF F-35A 09-8718 at Komatsu Air Base, 7 Oct 2023 (CC BY-SA 4.0). They were used as modelling references only and are not redistributed here:
+  - "exhaust nozzle right rear view", "exhaust nozzle left rear view", "exhaust nozzle right rear low-angle view"
+  - "right rear view ... 01", "left rear view ... 02", "left rear low-angle view ... 01"
+  - "IPP exhaust left rear view"
+  - All are at https://commons.wikimedia.org/wiki/File:JASDF_F-35A_(09-8718)_exhaust_nozzle_right_rear_view_at_Komatsu_Air_Base_October_7,_2023.jpg and its sibling pages.
+- Wikimedia Commons "F-35A at Eglin Air Force Base 2 Aug 2016" (public domain).
 - https://pdf.aeroexpo.online/pdf/pratt-whitney/f-35c/170325-4929.html
 - https://en.wikipedia.org/wiki/Diverterless_supersonic_inlet
 - https://www.globalsecurity.org/military/systems/aircraft/dsi.htm

@@ -51,6 +51,35 @@ def principled(name, color, rough=0.5, metal=0.0, coat=0.0, emission=None,
     return mat
 
 
+def sooty(name, base, soot, rough=0.6, metal=0.0, stretch=(9.0, 1.2, 9.0), ramp=(0.32, 0.58)):
+    """Base colour streaked with soot along the flow (+Y, object space):
+    heat-stained nozzle parts (photos: pale ceramic flaps with brown streaks)."""
+    mat = _new(name)
+    nt = mat.node_tree
+    nodes, links = nt.nodes, nt.links
+    b = _bsdf(mat)
+    tc = nodes.new("ShaderNodeTexCoord")
+    mp = nodes.new("ShaderNodeMapping")
+    mp.inputs["Scale"].default_value = stretch
+    links.new(tc.outputs["Object"], mp.inputs["Vector"])
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 3.0
+    noise.inputs["Detail"].default_value = 8.0
+    noise.inputs["Roughness"].default_value = 0.65
+    links.new(mp.outputs["Vector"], noise.inputs["Vector"])
+    cr = nodes.new("ShaderNodeValToRGB")
+    cr.color_ramp.elements[0].position = ramp[0]
+    cr.color_ramp.elements[0].color = (*soot, 1.0)
+    cr.color_ramp.elements[1].position = ramp[1]
+    cr.color_ramp.elements[1].color = (*base, 1.0)
+    links.new(noise.outputs["Fac"], cr.inputs["Fac"])
+    links.new(cr.outputs["Color"], b.inputs["Base Color"])
+    b.inputs["Roughness"].default_value = rough
+    b.inputs["Metallic"].default_value = metal
+    mat.diffuse_color = (*base, 1.0)
+    return mat
+
+
 def _panel_detail(nodes, links):
     """Projected panel-line maps (see panels.py) -> (line, tape, light) sockets.
 
@@ -284,6 +313,8 @@ def _make(name):
         return skin_material()
     if name in SWITCHABLE:
         return switchable(name, *SWITCHABLE[name])
+    if name == "nozzle_ceramic":
+        return sooty("F35_nozzle_ceramic", (0.56, 0.53, 0.48), (0.24, 0.21, 0.18), rough=0.7)
     table = {
         # aircraft exterior
         "edge":      dict(color=(0.098, 0.100, 0.104), rough=0.70, metal=0.1),
@@ -300,8 +331,10 @@ def _make(name):
         "canopy_frame": dict(color=(0.17, 0.18, 0.19), rough=0.45, metal=0.3),
         "intake":    dict(color=(0.15, 0.155, 0.16), rough=0.6),      # RAM-coated duct, grey
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),
-        "nozzle":    dict(color=(0.22, 0.20, 0.18), rough=0.55, metal=0.6),
-        "nozzle_in": dict(color=(0.30, 0.22, 0.16), rough=0.4, metal=0.8),
+        # outer flaps: dark gunmetal; divergent flaps: light ceramic coating
+        # (photos of the exit: a whitish-tan serrated ring inside the dark flaps)
+        "nozzle":    dict(color=(0.24, 0.23, 0.22), rough=0.38, metal=0.75),
+        "nozzle_in": dict(color=(0.07, 0.065, 0.06), rough=0.6, metal=0.3),
         "bay":       dict(color=(0.78, 0.79, 0.78), rough=0.55),
         "gear":      dict(color=(0.82, 0.83, 0.82), rough=0.4, metal=0.1),
         "chrome":    dict(color=(0.8, 0.8, 0.82), rough=0.12, metal=1.0),

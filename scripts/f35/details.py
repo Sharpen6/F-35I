@@ -173,14 +173,14 @@ def build_lights(coll, skin):
 
 
 def build_tailhook(coll, skin):
-    """Arresting hook stowed flush under the aft fuselage, hinged at its front."""
+    """Arresting hook stowed flush under the aft fuselage, hinged at its front;
+    it follows the lower contour up toward the nozzle."""
     p0, n0 = skin.bottom(11.95, 0.0)
-    if p0 is None:
+    p1, n1 = skin.bottom(13.05, 0.0)
+    if p0 is None or p1 is None:
         return []
     hinge = p0 + Vector((0, 0, 0.05))
-    L = 1.35
-    tip = hinge + Vector((0, L, 0.0))
-    pts = []
+    tip = p1 + Vector((0, 0, 0.035))
     arm = cylinder("Tailhook", hinge, tip, 0.045, 0.040, coll, M.get("marking_grey"), segments=12)
     shoe = cylinder("Tailhook_Shoe", tip + Vector((0, -0.05, 0.01)), tip + Vector((0, 0.10, -0.06)), 0.055,
                     0.035, coll, M.get("chrome"), segments=12)

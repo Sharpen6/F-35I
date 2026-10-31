@@ -9,7 +9,9 @@ built only from publicly available reference material (see [`docs/research.md`](
 
 ## What is in the model
 * **Airframe:** fuselage with DSI inlets, wings, canted twin tails, all-moving stabilators,
-  F135 nozzle with afterburner petals, one-piece canopy, cockpit with the large panoramic display.
+  F135 nozzle (15 outer flaps, pale ceramic divergent flaps, opens for afterburner) standing free
+  behind a sawtooth shroud with the stabilator booms beside it, one-piece canopy, cockpit with the
+  large panoramic display.
 * **Undercarriage:** nose and main gear with solved retraction kinematics, doors sequenced to the legs,
   wheels that spin with the distance rolled, nose-wheel steering.
 * **Weapon bays:** both internal bays with doors, a GBU-31 JDAM and an AIM-120 AMRAAM in each.

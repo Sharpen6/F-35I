@@ -8,12 +8,15 @@ Construction (all solids, combined with exact booleans)
 -------------------------------------------------------
 F  forebody  - upper dome + lower V / canted sides meeting at a sharp chine, nose -> s=6.
 M  main body - 8-control-point sections (spine, shoulder, strake/chine edge,
-               lower cowl side, flat belly, keel) from s=3.9 -> 13.55.
+               lower cowl side, flat belly, keel) from s=3.9 -> 14.3; aft of
+               s ~12.8 the centre is drawn onto the nozzle shroud circle.
 M -= front wedges   : three planes per side give the raked "<" inlet lip
 U  = F + M
 U -= duct cutters   : trapezoidal aperture with a diverterless (DSI) bump on
                       the inboard wall, curving inboard to the engine face
 U -= cockpit tub cutter
+U -= nozzle well    : sawtooth shroud edge round the nozzle; the stabilator
+                      booms carry on beside it
 """
 import math
 import bmesh
@@ -238,51 +241,59 @@ Q_ROWS = {
         (6.00, (0.0, 1.215)), (6.60, (0.0, 1.16)), (7.50, (0.0, 1.14)),
         (8.50, (0.0, 1.11)), (9.50, (0.0, 1.08)), (10.5, (0.0, 1.05)),
         (11.5, (0.0, 1.02)), (12.2, (0.0, 0.99)), (12.8, (0.0, 0.90)),
-        (13.25, (0.0, 0.78)), (13.6, (0.0, 0.66)), (14.0, (0.0, 0.53)),
-        (14.3, (0.0, 0.46))],
+        (13.05, (0.0, 0.82)), (13.3, (0.0, 0.73)), (13.6, (0.0, 0.725)),
+        (14.3, (0.0, 0.725))],
     # Q1 spine shoulder: a narrow ridge behind the canopy (photo-matched
     # head-on view: nothing of the spine shows outside the canopy outline)
     1: [(3.90, (0.32, 0.46)), (4.30, (0.32, 0.60)), (4.60, (0.30, 0.80)),
         (5.10, (0.27, 1.15)), (5.40, (0.26, 1.16)), (6.00, (0.26, 1.12)),
         (7.00, (0.29, 1.07)), (9.00, (0.34, 1.02)), (11.0, (0.38, 0.96)),
-        (12.2, (0.40, 0.93)), (12.8, (0.38, 0.84)), (13.25, (0.37, 0.74)),
-        (13.6, (0.38, 0.63)), (14.0, (0.42, 0.52)), (14.3, (0.46, 0.46))],
+        (12.2, (0.40, 0.93)), (12.8, (0.38, 0.84)), (13.05, (0.35, 0.78)),
+        (13.3, (0.30, 0.65)), (13.6, (0.29, 0.645)), (14.3, (0.29, 0.645))],
     # Q2 foot of the spine; nearly flat out to the inlet shoulder.  ~0.1 m
     # lower than the 3-view: the camera-matched head-on photo shows the
     # upper body beside the canopy that much lower
     2: [(3.90, (0.58, 0.44)), (4.30, (0.60, 0.60)), (4.60, (0.62, 0.69)),
         (5.10, (0.63, 0.71)), (5.60, (0.68, 0.70)), (6.50, (0.74, 0.68)),
         (8.00, (0.80, 0.68)), (10.0, (0.84, 0.67)), (11.5, (0.84, 0.665)),
-        (12.4, (0.80, 0.64)), (13.0, (0.74, 0.61)), (13.6, (0.72, 0.57)),
-        (14.3, (0.74, 0.47))],
+        (12.4, (0.80, 0.64)), (13.0, (0.74, 0.61)), (13.3, (0.64, 0.53)),
+        (13.6, (0.54, 0.40)), (14.0, (0.52, 0.36)), (14.3, (0.52, 0.30))],
+    # Aft of s ~12.8 the body converges onto the nozzle shroud (s 13.3): above
+    # and below the nozzle the section is drawn onto the shroud circle
+    # (_shroud_blend) and cut away behind the teeth; beside the nozzle only
+    # the stabilator booms carry on (Q2-Q6), their inner faces hugging the
+    # nozzle, as in the JASDF F-35A rear photos (references/nozzle).  The boom
+    # ends taper (s 14.0-14.3) to a thin edge round the stabilator root.
     # Q3 shoulder top above the inlet
     3: [(3.90, (1.25, 0.47)), (4.60, (1.28, 0.50)), (5.20, (1.33, 0.53)),
         (6.00, (1.40, 0.565)), (7.00, (1.44, 0.59)), (7.50, (1.45, 0.60)), (9.50, (1.44, 0.585)),
-        (11.0, (1.40, 0.575)), (12.0, (1.40, 0.565)), (13.0, (1.37, 0.54)), (13.6, (1.33, 0.51)),
-        (14.0, (1.31, 0.47)), (14.3, (1.25, 0.42))],
+        (11.0, (1.40, 0.575)), (12.0, (1.40, 0.565)), (13.0, (1.37, 0.54)), (13.6, (1.32, 0.47)),
+        (14.0, (1.30, 0.43)), (14.3, (1.22, 0.31))],
     # Q4 strake / chine edge (sharp)
     4: [(3.90, (1.56, 0.29)), (4.40, (1.57, 0.295)), (5.00, (1.62, 0.31)),
         (5.80, (1.70, 0.32)), (6.60, (1.76, 0.32)), (7.50, (1.80, 0.31)), (9.00, (1.82, 0.30)), (12.0, (1.86, 0.27)),
         (12.5, (1.74, 0.26)), (13.0, (1.60, 0.25)), (13.5, (1.49, 0.24)),
-        (14.0, (1.42, 0.23)), (14.3, (1.36, 0.22))],
+        (14.0, (1.42, 0.23)), (14.3, (1.33, 0.22))],
     # Q5 lower outboard side of the cowl
     5: [(3.90, (1.36, -0.39)), (4.60, (1.38, -0.40)), (5.40, (1.46, -0.42)),
         (6.20, (1.54, -0.43)), (7.00, (1.59, -0.42)),
         (9.50, (1.59, -0.41)), (11.5, (1.52, -0.39)), (12.4, (1.32, -0.35)),
-        (13.0, (1.18, -0.28)), (13.6, (1.08, -0.18)), (14.3, (0.98, -0.08))],
+        (12.8, (1.22, -0.27)), (13.3, (1.16, -0.12)), (13.6, (1.14, 0.03)),
+        (14.0, (1.10, 0.08)), (14.3, (1.05, 0.15))],
     # Q6 bottom outboard corner of the flat belly.  Belly ~0.08 m higher than
     # the 3-view: camera-matched side and head-on photos show more daylight
     # between belly and wheels
     6: [(3.90, (1.36, -0.57)), (5.00, (1.36, -0.60)), (5.60, (1.30, -0.665)),
         (6.20, (1.24, -0.73)), (6.80, (1.20, -0.77)), (10.5, (1.19, -0.775)),
-        (11.5, (1.14, -0.78)), (12.2, (1.08, -0.745)), (12.9, (0.95, -0.57)),
-        (13.5, (0.86, -0.36)), (14.3, (0.78, -0.12))],
+        (11.5, (1.14, -0.78)), (12.2, (1.08, -0.745)), (12.6, (0.92, -0.62)),
+        (13.0, (0.68, -0.43)), (13.3, (0.46, -0.27)), (13.6, (0.50, -0.05)),
+        (14.0, (0.52, 0.0)), (14.3, (0.52, 0.14))],
     # Q7 keel (inside F ahead of s~5.1)
     7: [(3.90, (0.0, -0.565)), (4.60, (0.0, -0.60)), (5.40, (0.0, -0.655)),
         (6.20, (0.0, -0.725)), (6.80, (0.0, -0.78)), (10.4, (0.0, -0.785)),
         (11.0, (0.0, -0.85)), (11.4, (0.0, -0.875)), (11.9, (0.0, -0.835)),
-        (12.4, (0.0, -0.75)), (12.9, (0.0, -0.62)), (13.2, (0.0, -0.52)),
-        (13.6, (0.0, -0.36)), (14.0, (0.0, -0.22)), (14.3, (0.0, -0.15))],
+        (12.4, (0.0, -0.75)), (12.9, (0.0, -0.62)), (13.3, (0.0, -0.485)),
+        (13.6, (0.0, -0.48)), (14.3, (0.0, -0.48))],
 }
 
 _QT = None
@@ -408,8 +419,10 @@ def main_upper(s):
 
 def main_ring(s):
     q = q_points(s)
-    up = [Vector(p) for p in main_upper(s)]
-    lo = hermite_spline(q[4:8], 16, end_tangent=Vector((-1, 0)))
+    up = _shroud_blend(s, main_upper(s))
+    lo = _shroud_blend(s, hermite_spline(q[4:8], 16, end_tangent=Vector((-1, 0))))
+    up = [Vector(p) for p in up]
+    lo = [Vector(p) for p in lo]
     return _ring_from_half(s, resample(up, N_UP + 1), resample(lo, N_LO + 1))
 
 
@@ -589,30 +602,85 @@ def build_duct_cutter(collection, side=1):
 
 
 NOZ_Z = 0.12            # engine / nozzle axis height
-NOZ_SHROUD_S = 13.25    # aft fuselage shroud edge (serrated)
-NOZ_WELL_R = 0.585
+NOZ_SHROUD_S = 13.30    # aft fuselage shroud edge (serrated): tooth roots
+NOZ_TOOTH = 0.05        # tooth depth (photos: ~60 teeth round the nozzle, ~6 cm pitch)
+NOZ_TEETH = 60          # teeth round the shroud
+NOZ_SKIN_R = 0.596      # shroud skin radius about the nozzle axis (outer flap roots r 0.58-0.586)
+NOZ_CUT_R = 0.606       # behind the teeth everything inside this radius is cut away
+NOZ_CORE = (12.92, 0.555)              # engine bay opened from here (flame holder shows)
+SHROUD_BLEND = (12.45, NOZ_SHROUD_S)   # the section centre is drawn onto the shroud circle
+BOOM_SECTOR = (-15.0, 48.0, 14.0)      # angles about the axis left to the booms: from, to, ramp (deg)
 
 
-def build_nozzle_well_cutter(collection, teeth=14, depth=0.16):
-    """Cylinder removing the centre of the aft body behind the shroud edge.
+def _shroud_blend(s, pts):
+    """Draw the centre of a main-body half-section (above and below the
+    nozzle) onto the shroud circle round the nozzle axis; the boom sectors
+    beside the nozzle are left alone.  Behind the teeth the centre is cut away
+    (build_nozzle_well_cutter), so the skin ends in teeth just outside the
+    nozzle flap roots, as on the real aircraft (references/nozzle)."""
+    w = _smooth(SHROUD_BLEND[0], SHROUD_BLEND[1], s)
+    out = []
+    a0, a1, ramp = BOOM_SECTOR
+    for p in pts:
+        x, z = p[0], p[1]
+        dz = z - NOZ_Z
+        r = math.hypot(x, dz)
+        if w <= 0.0 or r < 1e-6:
+            out.append((x, z))
+            continue
+        th = math.degrees(math.atan2(dz, x))
+        m = max(_smooth(a1, a1 + ramp, th), 1.0 - _smooth(a0 - ramp, a0, th))
+        rn = r + (NOZ_SKIN_R - r) * w * m
+        out.append((x * rn / r, NOZ_Z + dz * rn / r))
+    return out
 
-    Its front face is serrated so the shroud gets the F-35 sawtooth edge."""
-    n = teeth * 2
-    rings = []
-    front = []
-    for i in range(n):
-        a = 2 * math.pi * i / n
-        s = NOZ_SHROUD_S + (depth if i % 2 else 0.0)
-        front.append(P(s, NOZ_WELL_R * math.cos(a), NOZ_Z + NOZ_WELL_R * math.sin(a)))
-    rings.append(front)
-    for s, r in ((13.6, NOZ_WELL_R + 0.03), (14.35, 0.76), (15.5, 0.80)):
-        rings.append([P(s, r * math.cos(2 * math.pi * i / n),
-                        NOZ_Z + r * 0.92 * math.sin(2 * math.pi * i / n))
-                      for i in range(n)])
-    verts, faces = loft_rings(rings, True, True, True)
-    ob = mesh_object("NozzleWellCutter", verts, faces, collection,
-                     M.get("edge"), smooth=False)
-    _fix_normals(ob)
+
+def build_nozzle_well_cutter(collection):
+    """Opens the aft body round the nozzle so it stands free.
+
+    A solid of revolution about the nozzle axis: everything inside NOZ_CUT_R
+    behind a sawtooth face (NOZ_TEETH teeth round the axis, roots at
+    NOZ_SHROUD_S) goes.  The skin drawn onto the shroud circle (inside that
+    radius) so ends in aft-pointing teeth all round, while the booms beside
+    the nozzle keep a concave inner face that hugs it (photos: the boom
+    overhangs the nozzle side).  A narrower core (NOZ_CORE) reaches forward
+    to the augmentor, so the flame holder and turbine show through the
+    nozzle."""
+    n = 2 * NOZ_TEETH
+    s_core, r_core = NOZ_CORE
+    s_back = 16.5
+    bm = bmesh.new()
+    a, b, c, d = [], [], [], []
+    for j in range(n):
+        th = 2.0 * math.pi * j / n
+        ct, sn = math.cos(th), math.sin(th)
+        sf = NOZ_SHROUD_S + (NOZ_TOOTH if j % 2 else 0.0)
+        a.append(bm.verts.new(P(s_core, r_core * ct, NOZ_Z + r_core * sn)))
+        b.append(bm.verts.new(P(sf, r_core * ct, NOZ_Z + r_core * sn)))
+        c.append(bm.verts.new(P(sf, NOZ_CUT_R * ct, NOZ_Z + NOZ_CUT_R * sn)))
+        d.append(bm.verts.new(P(s_back, NOZ_CUT_R * ct, NOZ_Z + NOZ_CUT_R * sn)))
+    cf = bm.verts.new(P(s_core, 0.0, NOZ_Z))
+    cb = bm.verts.new(P(s_back, 0.0, NOZ_Z))
+    inner, teeth = [], []
+    for j in range(n):
+        k = (j + 1) % n
+        inner.append(bm.faces.new((cf, a[k], a[j])))
+        inner.append(bm.faces.new((a[j], a[k], b[k], b[j])))
+        teeth.append(bm.faces.new((b[j], b[k], c[k], c[j])))
+        bm.faces.new((c[j], c[k], d[k], d[j]))
+        bm.faces.new((cb, d[j], d[k]))
+    for f in inner:
+        f.material_index = 1
+    # the tooth flanks are twisted quads: split them so the cut is exact
+    bmesh.ops.triangulate(bm, faces=teeth, quad_method='BEAUTY', ngon_method='BEAUTY')
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new("NozzleWellCutter")
+    bm.to_mesh(me)
+    bm.free()
+    ob = bpy.data.objects.new("NozzleWellCutter", me)
+    collection.objects.link(ob)
+    me.materials.append(M.get("skin"))          # tooth edges and the booms' inner faces
+    me.materials.append(M.get("nozzle_in"))     # inside the engine bay
     return ob
 
 
