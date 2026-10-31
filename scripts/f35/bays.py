@@ -26,6 +26,7 @@ from mathutils.bvhtree import BVHTree
 from .geom import P, get_collection, mesh_object, loft_rings, boolean, add_solidify, cylinder
 from .surfaces import set_hinge
 from . import materials as M
+from . import normals
 
 BAY_S = (6.55, 10.75)          # weapon bay station range
 BAY_X = (0.13, 1.09)           # inboard / outboard wall (each side)
@@ -217,7 +218,7 @@ def build(ctx):
                 if ob is not None:
                     boolean(ob, cut, 'DIFFERENCE', apply=True)
         bpy.data.objects.remove(cut)
-    fus.data.set_sharp_from_angle(angle=math.radians(35))
+    normals.apply(fus, "Fuselage")       # smooth source normals up to the new cut edges
     # ------------------------------------------------------------- hinges
     for name, (d, meta) in doors.items():
         sa, sb = meta["s"]

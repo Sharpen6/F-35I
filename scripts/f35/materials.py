@@ -290,10 +290,13 @@ def _make(name):
         "panel":     dict(color=(0.125, 0.128, 0.132), rough=0.52, metal=0.2),
         "radome":    dict(color=(0.215, 0.225, 0.235), rough=0.45, metal=0.2),
         # clear, lightly bronze-tinted transparency; the gold shows mainly in
-        # reflections (ITO coating), as in photos where the pilot is plainly visible
+        # reflections (ITO coating), as in photos where the pilot is plainly visible.
+        # A ~110 nm film (n 1.9 on n 1.5 glass) reflects a first-order gold that
+        # pales at grazing angles; the earlier 420 nm film gave a second-order
+        # red + blue peak, i.e. a magenta canopy.
         "canopy":    dict(color=(0.86, 0.81, 0.68), rough=0.02, metal=0.0,
-                          transmission=1.0, ior=1.5, alpha=1.0, spec_tint=(1.0, 0.80, 0.45),
-                          thin_film=420.0),
+                          transmission=1.0, ior=1.5, alpha=1.0, spec_tint=(1.0, 0.88, 0.66),
+                          thin_film=112.0),
         "canopy_frame": dict(color=(0.17, 0.18, 0.19), rough=0.45, metal=0.3),
         "intake":    dict(color=(0.15, 0.155, 0.16), rough=0.6),      # RAM-coated duct, grey
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),

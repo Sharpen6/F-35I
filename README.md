@@ -26,7 +26,7 @@ built only from publicly available reference material (see [`docs/research.md`](
 | Path | Contents |
 | --- | --- |
 | `scripts/build_f35i.py` | Entry point: builds the whole aircraft into a fresh scene |
-| `scripts/f35/` | Modules: fuselage, wings, tails, nozzle, canopy, cockpit, gear, bays, pilot, markings, rig, destruct, anim ... |
+| `scripts/f35/` | Modules: fuselage, wings, fillets, tails, nozzle, canopy, cockpit, gear, bays, pilot, markings, panels, normals (clean shading over boolean seams), rig, destruct, anim ... |
 | `scripts/damage/f35_damage.py` | Damage and flight-effects simulator (pure Python, no Blender needed) |
 | `scripts/damage/make_report.py` | Generates `docs/damage_model.md` |
 | `scripts/review_compare.py` | Orthographic silhouettes registered to the public 3-view drawing, with overlap (IoU) |

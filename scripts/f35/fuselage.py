@@ -22,6 +22,7 @@ from mathutils import Vector
 
 from .geom import P, Pchip, Table, mesh_object, loft_rings, boolean, Y0
 from . import materials as M
+from . import normals
 
 # ---------------------------------------------------------------------------
 # F: forebody sections with a sharp chine
@@ -65,6 +66,21 @@ FORE = Table(
         (6.000, 1.050, -0.700, 0.780, 0.470, 42.0, 0.320, 0.850, 0.72, 0.00, 0.45),
     ])
 F_END = 6.0
+# Behind the canopy the forebody's upper side sinks into the main body (it
+# would otherwise stand ~0.1 m proud of it as a lobe with a crisp edge; the
+# photos, e.g. c53, show the side behind the canopy flowing smoothly into the
+# shoulder).  Between these stations it is blended toward the main-body
+# surface, outboard of the canopy sill, and ends SINK_IN inside it.
+SINK_S = (4.62, 5.30)
+SINK_IN = 0.012
+# ... and the main body, which is narrower there, is lifted to just inside the
+# forebody's upper side as far aft as LIFT_S[0], relaxing to its own shape by
+# LIFT_S[1]: so behind the canopy the side surface carries on aft and eases
+# down into the shoulder instead of dropping off a ledge.
+LIFT_S = (5.0, 5.8)
+LIFT_GAP = 0.010
+LIFT_K = 0.03                   # blend width of the smooth max (m)
+CANOPY_SILL = ([4.40, 4.70, 4.97], [0.51, 0.48, 0.44])     # canopy.SILL_W aft end
 
 N_UP = 30               # samples on the upper half-section
 N_LO = 26               # samples on the lower half-section
@@ -99,6 +115,21 @@ def fore_half(s):
     hit = _HALF_CACHE.get(key)
     if hit is not None:
         return hit
+    up, lo, zt, zb = _fore_raw(key)
+    up = _sink_into_main(key, up)
+    up[0] = (0.0, zt)
+    _HALF_CACHE[key] = (up, lo)
+    return up, lo
+
+
+_RAW_CACHE = {}
+
+
+def _fore_raw(key):
+    """Forebody half-section from the FORE table alone (no blending)."""
+    hit = _RAW_CACHE.get(key)
+    if hit is not None:
+        return hit
     p = FORE(key)
     zt, zb, wc, zc = p["zt"], p["zb"], max(p["wc"], 1e-4), p["zc"]
     zt = max(zt, zc + 1e-4)
@@ -113,8 +144,57 @@ def fore_half(s):
     lo = [(max(0.0, x), z) for x, z in lo]
     up[0] = (0.0, zt)
     lo[-1] = (0.0, zb)
-    _HALF_CACHE[key] = (up, lo)
-    return up, lo
+    _RAW_CACHE[key] = (up, lo, zt, zb)
+    return _RAW_CACHE[key]
+
+
+def _smooth(a, b, x):
+    t = min(1.0, max(0.0, (x - a) / (b - a)))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _sill_half_width(s):
+    ss, ws = CANOPY_SILL
+    if s <= ss[0]:
+        return ws[0]
+    for (s0, w0), (s1, w1) in zip(zip(ss, ws), zip(ss[1:], ws[1:])):
+        if s <= s1:
+            return w0 + (w1 - w0) * (s - s0) / (s1 - s0)
+    return ws[-1] * (1.0 - _smooth(ss[-1], ss[-1] + 0.28, s))
+
+
+def _sink_into_main(s, up):
+    """Blend the forebody upper curve toward the main body (see SINK_S)."""
+    w = _smooth(SINK_S[0], SINK_S[1], s)
+    if w <= 0.0:
+        return up
+    mu = main_upper(s)
+    xs = _sill_half_width(s)
+    out = []
+    xt, st, zt = TIP
+    for x, z in up:
+        zm = _z_at_x(mu, x)
+        if zm is None:
+            out.append((x, z))
+            continue
+        g = _smooth(xs + 0.03, xs + 0.15, x)          # leave the canopy sill alone
+        # outboard of x 0.55 the upper inlet-lip cutter removes the main body
+        # ahead of its plane, so the forebody must stay on top until past it
+        s_lip = st + LIP_A * (xt - x) + LIP_B * (z - zt)
+        k = _smooth(0.50, 0.58, x)
+        wl = w * (1.0 - k + k * _smooth(s_lip, s_lip + 0.10, s))
+        tgt = min(z, zm - SINK_IN)
+        out.append((x, z + (tgt - z) * wl * g))
+    return out
+
+
+def _z_at_x(poly, x):
+    best = None
+    for (x0, z0), (x1, z1) in zip(poly, poly[1:]):
+        if (x0 - x) * (x1 - x) <= 0 and abs(x1 - x0) > 1e-9:
+            z = z0 + (x - x0) / (x1 - x0) * (z1 - z0)
+            best = z if best is None else max(best, z)
+    return best
 
 
 def _x_at_z(poly, z):
@@ -303,9 +383,32 @@ def fore_ring(s):
     return _ring_from_half(s, resample(up, N_UP + 1), resample(lo, N_LO + 1))
 
 
+def main_upper(s):
+    """Upper half of the main-body section at s: (x, z) from the top centre
+    out to the strake edge (the same curve main_ring lofts)."""
+    q = q_points(s)
+    pts = [(v.x, v.y) for v in hermite_spline(q[0:5], 16, start_tangent=Vector((1, 0)))]
+    w = 1.0 - _smooth(LIFT_S[0], LIFT_S[1], s)
+    if w > 0.0 and s <= F_END:
+        fu = _fore_raw(round(min(max(s, 0.0), F_END), 4))[0]
+        wc = fu[-1][0]
+        lifted = []
+        for x, z in pts:
+            zf = _z_at_x(fu, x)
+            if zf is None:
+                lifted.append((x, z))
+                continue
+            a, b = z, zf - LIFT_GAP
+            smax = 0.5 * (a + b + math.sqrt((a - b) ** 2 + LIFT_K ** 2))   # smooth max: no crease
+            fade = 1.0 - _smooth(wc - 0.20, wc - 0.02, x)                  # none at the chine
+            lifted.append((x, z + (smax - z) * w * fade))
+        pts = lifted
+    return pts
+
+
 def main_ring(s):
     q = q_points(s)
-    up = hermite_spline(q[0:5], 16, start_tangent=Vector((1, 0)))
+    up = [Vector(p) for p in main_upper(s)]
     lo = hermite_spline(q[4:8], 16, end_tangent=Vector((-1, 0)))
     return _ring_from_half(s, resample(up, N_UP + 1), resample(lo, N_LO + 1))
 
@@ -535,6 +638,7 @@ def build(collection, helpers):
     for c in lip_cutters(helpers):
         boolean(main, c, 'DIFFERENCE', apply=True)
         bpy.data.objects.remove(c)
+    normals.capture("Fuselage", [fus, main])      # smooth source lofts (clean seam shading)
     boolean(fus, main, 'UNION', apply=True)
     bpy.data.objects.remove(main)
     for side in (1, -1):
@@ -547,5 +651,5 @@ def build(collection, helpers):
     nw = build_nozzle_well_cutter(helpers)
     boolean(fus, nw, 'DIFFERENCE', apply=True)
     bpy.data.objects.remove(nw)
-    fus.data.set_sharp_from_angle(angle=math.radians(35))
+    normals.apply(fus, "Fuselage")                 # also redone after the bay cuts
     return fus
