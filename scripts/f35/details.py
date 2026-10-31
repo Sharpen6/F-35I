@@ -196,9 +196,10 @@ def build_tailhook(coll, skin):
 
 
 def build_gun(coll):
-    """GAU-22/A barrel cluster behind the gun door (left shoulder)."""
+    """GAU-22/A barrel cluster behind the gun door (left shoulder), inside
+    the shoulder above the inlet duct (duct top ~0.34 here, skin ~0.54)."""
     out = []
-    c0 = P(5.10, 1.30, 0.66)
+    c0 = P(5.10, 1.30, 0.455)
     for k in range(4):
         a = 2 * math.pi * k / 4 + math.pi / 4
         off = Vector((0.032 * math.cos(a), 0, 0.032 * math.sin(a)))

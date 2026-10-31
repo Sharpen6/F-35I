@@ -207,7 +207,7 @@ def build(ctx):
             poly = list(reversed(poly))
         cutters.append(_prism(f"Cav_MainGear_{tag}", helpers, poly, *MAIN_WELL_S, bay_mat))
     cutters.append(_cavity("Cav_NoseGear", helpers, *NOSE_WELL, bay_mat))
-    cutters.append(_cavity("Cav_Gun", helpers, 1.20, 1.40, 5.03, 5.82, 0.45, 1.2, M.get("intake_dark")))
+    cutters.append(_cavity("Cav_Gun", helpers, 1.20, 1.40, 5.03, 5.82, 0.38, 1.2, M.get("intake_dark")))
     cutters.append(_cavity("Cav_Refuel", helpers, -0.13, 0.13, 5.53, 6.00, 1.05, 1.6, bay_mat))
     for cut in cutters:
         boolean(fus, cut, 'DIFFERENCE', apply=True)
