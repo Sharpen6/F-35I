@@ -10,7 +10,7 @@ Local GPU (recommended), from a Windows / Linux shell or from Blender itself:
 Headless bpy module:
     python3 scripts/render/clips.py [clip ...] --engine EEVEE --res 640x360 --samples 12
 
-Clips: gear_retract, canopy_open, pilot_look, controls, weapon_bays, turntable
+Clips: afterburner, gear_retract, canopy_open, pilot_look, controls, weapon_bays, turntable
 """
 import argparse
 import math
@@ -233,7 +233,26 @@ def clip_turntable(fps):
     return n, "turntable"
 
 
+def clip_afterburner(fps):
+    """Engine run-up from the rear quarter: idle, MIL, full afterburner (the nozzle opens, the
+    flame lights with its shock diamonds and flickers), then back to idle. Slow push in."""
+    set_visibility()
+    cam = camera((-8.2, 20.0, 0.35), (0.0, 8.0, 0.0), 40)
+    def T(t):
+        return 1 + int(round(t * fps))
+    n = T(11.0)
+    for f, loc in ((1, (-8.2, 20.0, 0.35)), (n, (-6.6, 17.2, 0.55))):
+        cam.location = loc
+        look_at(cam, (0.0, 8.0, 0.0))
+        cam.keyframe_insert("location", frame=f)
+        cam.keyframe_insert("rotation_euler", frame=f)
+    path("throttle", [(T(0), 0.0), (T(0.8), 0.0), (T(2.6), 0.75), (T(3.6), 0.75), (T(4.4), 1.0),
+                      (T(8.2), 1.0), (T(9.4), 0.75), (T(10.2), 0.0), (n, 0.0)])
+    return n, "afterburner"
+
+
 CLIPS = {
+    "afterburner": clip_afterburner,
     "gear_retract": clip_gear_retract,
     "canopy_open": clip_canopy_open,
     "pilot_look": clip_pilot_look,

@@ -351,6 +351,11 @@ paint under the HDRI sky, sun placed roughly as in each photo):
     - Beside the nozzle only the **stabilator booms** continue aft. Their inner faces wrap closely round the nozzle's sides, and the booms end at about the nozzle exit.
     - The lower aft fuselage converges smoothly onto the bottom of the nozzle.
     - The outer flaps are flat metal plates with rivet rows. The pale, soot-streaked divergent flaps reach just past them and form the light, serrated ring seen at the exit.
+  - **Afterburner (how the model shows it) [M]:**
+    - With the throttle above MIL (0.75) the nozzle opens (exit radius 0.47 to 0.56 m, throat by 20 %) and a glowing volume lights behind it: a cone of hot gas about 4.6 m long that narrows downstream, orange at the nozzle and pinker towards its tail, with the inside of the nozzle glowing as well.
+    - A row of yellow-white **shock diamonds** sits on the axis, the first about 0.5 m behind the exit and then one every 0.78 m, each smaller and fainter than the one before. The spacing follows the usual shock-cell estimate of about 1.2 D √(M² − 1) for an exit diameter D of about 1.1 m and an exit Mach number of about 1.2.
+    - In daylight photos of F-35 take-offs the flame is mostly the bright nozzle interior and a short orange cone with faint diamonds; the model is tuned to that, not to night photos where the whole plume glows.
+    - The envelope flickers: a noise pattern drifts downstream with the frame while the diamonds stay put, as standing shock waves do.
 - **DSI (diverterless supersonic inlet):** each inlet has a 3-D compression bump with a forward-swept cowl lip and no boundary-layer splitter plate. It was first flown on an F-16 testbed on 11 Dec 1996.
   - How the model's inlets were shaped, traced from the public front-view drawing and checked against photos c20, c28 and c29 [M][P]:
     - Seen head-on, the opening is a raked, roughly trapezoidal aperture from about 1.00 to 1.46 m out from the centreline. Its top edge slopes down outboard from the chine, its outboard edge leans inward towards the bottom, and its floor is flat.

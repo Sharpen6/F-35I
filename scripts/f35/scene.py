@@ -104,9 +104,9 @@ def concrete_material():
     mott = noise(0.35, 8.0, 0.6)
     ramp = nodes.new("ShaderNodeValToRGB")
     ramp.color_ramp.elements[0].position = 0.35
-    ramp.color_ramp.elements[0].color = (0.29, 0.29, 0.28, 1)
+    ramp.color_ramp.elements[0].color = (0.25, 0.25, 0.24, 1)
     ramp.color_ramp.elements[1].position = 0.75
-    ramp.color_ramp.elements[1].color = (0.44, 0.43, 0.41, 1)
+    ramp.color_ramp.elements[1].color = (0.37, 0.365, 0.35, 1)
     links.new(mott, ramp.inputs["Fac"])
     col = ramp.outputs["Color"]
     # 5 m slabs: each slab a slightly different tone, dark sealed joints
@@ -163,7 +163,7 @@ def concrete_material():
     links.new(mott, bump.inputs["Height"])
     links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
     links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-    mat.diffuse_color = (0.38, 0.38, 0.37, 1)
+    mat.diffuse_color = (0.32, 0.32, 0.31, 1)
     return mat
 
 

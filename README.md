@@ -9,7 +9,8 @@ built only from publicly available reference material (see [`docs/research.md`](
 
 ## What is in the model
 * **Airframe:** fuselage with DSI inlets (compression bump and swept cowl lips traced from the front drawing), wings, canted twin tails, all-moving stabilators,
-  F135 nozzle (15 outer flaps, pale ceramic divergent flaps, opens for afterburner) standing free
+  F135 nozzle (15 outer flaps, pale ceramic divergent flaps, opens for afterburner, with a flickering
+  volumetric afterburner flame and shock diamonds) standing free
   behind a sawtooth shroud with the stabilator booms beside it, one-piece canopy, cockpit with the
   large panoramic display. Sensors and small parts placed from photos: faceted EOTS window under the chin,
   six DAS windows, L-shaped air-data probes, formation light strips on the inlets.
@@ -72,7 +73,7 @@ so it can be keyframed or driven. All drivers are "simple expressions" and work 
 | Property | Range | Moves |
 | --- | --- | --- |
 | `stick_pitch`, `stick_roll`, `pedals` | -1..1 | stabilators, flaperons (+ differential stabs), rudders, side-stick, pedals |
-| `throttle` | 0..1 (0.75 = MIL) | throttle lever, nozzle, afterburner glow above 0.75 |
+| `throttle` | 0..1 (0.75 = MIL) | throttle lever, nozzle, afterburner flame with shock diamonds above 0.75 |
 | `flaps`, `speedbrake` | 0..1 | flaperons / leading-edge flaps, rudders split outwards |
 | `gear` | 0 up .. 1 down | doors and legs, sequenced |
 | `nws`, `roll_distance` | -1..1, metres | nose-wheel steering, wheel spin |

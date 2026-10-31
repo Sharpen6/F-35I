@@ -281,114 +281,146 @@ def build_receptacle(coll):
                      segments=16)]
 
 
-def flame_material(name, core):
-    """Emission shell, fades along the plume; strength = object 'ab' prop."""
+AB_LEN = 4.6            # visible afterburner flame behind the nozzle exit (m)
+AB_IN = 13.10           # the glowing gas starts just behind the flame holder (station)
+AB_DIAMOND_0 = 0.50     # first shock diamond behind the nozzle exit (m)
+AB_DIAMOND_STEP = 0.78  # spacing of the shock cells (about 0.75 nozzle exit diameters)
+AB_BODY = 3.6           # emission of the flame envelope at the exit (1/m)
+AB_DIAMOND = 18.0       # emission inside the first shock diamond (1/m)
+
+
+def flame_volume_material(name="F35_AB_Flame"):
+    """Afterburner flame as a glowing volume (no surface).
+
+    A cone of hot gas tapers from the nozzle exit: orange near the nozzle, turning pink and fading
+    downstream, with a row of yellow-white shock diamonds on the axis that get weaker and smaller.
+    A 4D noise that drifts downstream (driven by the frame) makes the envelope flicker; the diamonds
+    stay put, as standing shock waves do.  The inside of the nozzle glows as well.
+    Strength = object property 'ab' (0..1, driven by the throttle above MIL)."""
     mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree
-    for n in list(nt.nodes):
-        nt.nodes.remove(n)
-    out = nt.nodes.new("ShaderNodeOutputMaterial")
-    mix = nt.nodes.new("ShaderNodeMixShader")
-    tr = nt.nodes.new("ShaderNodeBsdfTransparent")
-    em = nt.nodes.new("ShaderNodeEmission")
-    tc = nt.nodes.new("ShaderNodeTexCoord")
-    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
-    nt.links.new(tc.outputs["Generated"], sep.inputs[0])
-    # t = 0 at nozzle, 1 at plume end (plume runs along +Y)
-    # diamonds: 0.55 + 0.45 * cos^2(pi * 6 t)
-    m1 = nt.nodes.new("ShaderNodeMath")
-    m1.operation = 'MULTIPLY'
-    m1.inputs[1].default_value = math.pi * 6
-    nt.links.new(sep.outputs["Y"], m1.inputs[0])
-    cs = nt.nodes.new("ShaderNodeMath")
-    cs.operation = 'COSINE'
-    nt.links.new(m1.outputs[0], cs.inputs[0])
-    sq = nt.nodes.new("ShaderNodeMath")
-    sq.operation = 'MULTIPLY'
-    nt.links.new(cs.outputs[0], sq.inputs[0])
-    nt.links.new(cs.outputs[0], sq.inputs[1])
-    dia = nt.nodes.new("ShaderNodeMath")
-    dia.operation = 'MULTIPLY_ADD'
-    dia.inputs[1].default_value = 0.45 if core else 0.15
-    dia.inputs[2].default_value = 0.55 if core else 0.85
-    nt.links.new(sq.outputs[0], dia.inputs[0])
-    # fade = (1 - t)^1.6
-    inv = nt.nodes.new("ShaderNodeMath")
-    inv.operation = 'SUBTRACT'
-    inv.inputs[0].default_value = 1.0
-    nt.links.new(sep.outputs["Y"], inv.inputs[1])
-    fade = nt.nodes.new("ShaderNodeMath")
-    fade.operation = 'POWER'
-    fade.inputs[1].default_value = 1.6 if core else 2.2
-    fade.use_clamp = True
-    nt.links.new(inv.outputs[0], fade.inputs[0])
-    attr = nt.nodes.new("ShaderNodeAttribute")
+    nodes, links = nt.nodes, nt.links
+    for n in list(nodes):
+        nodes.remove(n)
+    out = nodes.new("ShaderNodeOutputMaterial")
+    tc = nodes.new("ShaderNodeTexCoord")
+    sep = nodes.new("ShaderNodeSeparateXYZ")
+    links.new(tc.outputs["Object"], sep.inputs[0])          # object at the origin: world coordinates
+
+    def m(op, a, b=None, clamp=False):
+        n = nodes.new("ShaderNodeMath")
+        n.operation = op
+        n.use_clamp = clamp
+        for i, v in enumerate((a, b)):
+            if v is None:
+                continue
+            if isinstance(v, (int, float)):
+                n.inputs[i].default_value = float(v)
+            else:
+                links.new(v, n.inputs[i])
+        return n.outputs[0]
+
+    def frame_value(label, expr):
+        """A Value node driven by the frame (simple expression: works with auto-run off)."""
+        v = nodes.new("ShaderNodeValue")
+        v.label = label
+        fc = v.outputs[0].driver_add("default_value")
+        fc.driver.type = 'SCRIPTED'
+        fc.driver.expression = expr
+        return v.outputs[0]
+
+    y_exit = P(S_EXIT, 0.0, 0.0)[1]
+    X, Y, Z = sep.outputs["X"], sep.outputs["Y"], sep.outputs["Z"]
+    d = m('SUBTRACT', Y, y_exit)                                  # metres behind the exit (< 0 inside)
+    t01 = m('DIVIDE', d, AB_LEN, clamp=True)
+    dz = m('SUBTRACT', Z, NOZ_Z)
+    r = m('SQRT', m('ADD', m('MULTIPLY', X, X), m('MULTIPLY', dz, dz)))
+    R = m('ADD', m('MULTIPLY', m('POWER', m('SUBTRACT', 1.0, t01), 0.75), 0.47), 0.03)
+    q = m('DIVIDE', r, R)
+
+    # turbulence: 4D noise advected downstream, evolving with the frame
+    comb = nodes.new("ShaderNodeCombineXYZ")
+    links.new(X, comb.inputs["X"])
+    links.new(m('SUBTRACT', Y, frame_value("drift", "frame*0.11")), comb.inputs["Y"])
+    links.new(Z, comb.inputs["Z"])
+    nz = nodes.new("ShaderNodeTexNoise")
+    nz.noise_dimensions = '4D'
+    nz.inputs["Scale"].default_value = 1.6
+    nz.inputs["Detail"].default_value = 3.0
+    nz.inputs["Roughness"].default_value = 0.55
+    links.new(comb.outputs[0], nz.inputs["Vector"])
+    links.new(frame_value("boil", "frame*0.09"), nz.inputs["W"])
+    n01 = m('ADD', m('MULTIPLY', m('SUBTRACT', nz.outputs["Fac"], 0.5), 2.2), 0.5, clamp=True)
+    qt = m('MULTIPLY', q, m('SUBTRACT', 1.12, m('MULTIPLY', n01, 0.24)))   # ragged edge
+    body = m('POWER', m('DIVIDE', m('SUBTRACT', 1.0, qt), 0.35, clamp=True), 1.2)   # plateau, soft rim
+    body = m('MULTIPLY', body, m('ADD', 0.55, m('MULTIPLY', n01, 0.9)))     # patchy glow
+    fade = m('POWER', m('SUBTRACT', 1.0, t01), 1.5)
+
+    # shock diamonds: a row of double cones on the axis (seen from the side each one is a rhombus,
+    # widest at its centre), one every AB_DIAMOND_STEP from AB_DIAMOND_0, shrinking and fading
+    ph = m('DIVIDE', m('SUBTRACT', d, AB_DIAMOND_0), AB_DIAMOND_STEP)
+    u = m('SUBTRACT', m('FRACT', m('ADD', ph, 0.5)), 0.5)        # -0.5..0.5, 0 at a diamond centre
+    k = m('SUBTRACT', ph, u)                                       # diamond index 0, 1, 2 ...
+    started = m('GREATER_THAN', ph, -0.45)
+    rd = m('MULTIPLY', R, m('MULTIPLY', m('SUBTRACT', 1.0, m('MULTIPLY', k, 0.09), clamp=True), 0.52))
+    w = m('MULTIPLY', rd, m('SUBTRACT', 1.0, m('DIVIDE', m('ABSOLUTE', u), 0.40), clamp=True))
+    inside = m('DIVIDE', m('SUBTRACT', w, r), 0.07, clamp=True)    # 7 cm soft edge
+    dfade = m('POWER', m('SUBTRACT', 1.0, t01), 1.6)
+    dia = m('MULTIPLY', m('MULTIPLY', inside, started), dfade)
+
+    attr = nodes.new("ShaderNodeAttribute")
     attr.attribute_type = 'OBJECT'
     attr.attribute_name = "ab"
-    k = nt.nodes.new("ShaderNodeMath")
-    k.operation = 'MULTIPLY'
-    nt.links.new(fade.outputs[0], k.inputs[0])
-    nt.links.new(attr.outputs["Fac"], k.inputs[1])
-    strength = nt.nodes.new("ShaderNodeMath")
-    strength.operation = 'MULTIPLY'
-    nt.links.new(k.outputs[0], strength.inputs[0])
-    nt.links.new(dia.outputs[0], strength.inputs[1])
-    gain = nt.nodes.new("ShaderNodeMath")
-    gain.operation = 'MULTIPLY'
-    gain.inputs[1].default_value = 10.0 if core else 3.0
-    nt.links.new(strength.outputs[0], gain.inputs[0])
-    nt.links.new(gain.outputs[0], em.inputs["Strength"])
-    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    e_body = m('MULTIPLY', m('MULTIPLY', body, fade), AB_BODY)
+    e_dia = m('MULTIPLY', dia, AB_DIAMOND)
+
+    ramp = nodes.new("ShaderNodeValToRGB")                     # envelope: orange -> pink downstream
     cr = ramp.color_ramp
-    if core:
-        cr.elements[0].color = (0.75, 0.85, 1.0, 1)
-        cr.elements[1].color = (1.0, 0.55, 0.18, 1)
-    else:
-        cr.elements[0].color = (1.0, 0.62, 0.25, 1)
-        cr.elements[1].color = (1.0, 0.30, 0.05, 1)
-    nt.links.new(sep.outputs["Y"], ramp.inputs[0])
-    nt.links.new(ramp.outputs["Color"], em.inputs["Color"])
-    a = nt.nodes.new("ShaderNodeMath")
-    a.operation = 'MULTIPLY'
-    a.inputs[1].default_value = 0.65 if core else 0.22
-    a.use_clamp = True
-    nt.links.new(k.outputs[0], a.inputs[0])
-    nt.links.new(a.outputs[0], mix.inputs[0])
-    nt.links.new(tr.outputs[0], mix.inputs[1])
-    nt.links.new(em.outputs[0], mix.inputs[2])
-    nt.links.new(mix.outputs[0], out.inputs["Surface"])
-    try:
-        mat.surface_render_method = 'BLENDED'
-    except Exception:
-        pass
+    cr.elements[0].position = 0.0
+    cr.elements[0].color = (1.0, 0.50, 0.16, 1)
+    cr.elements[1].position = 1.0
+    cr.elements[1].color = (0.85, 0.28, 0.42, 1)
+    mid = cr.elements.new(0.35)
+    mid.color = (1.0, 0.38, 0.22, 1)
+    links.new(t01, ramp.inputs["Fac"])
+    em_b = nodes.new("ShaderNodeEmission")
+    links.new(ramp.outputs["Color"], em_b.inputs["Color"])
+    links.new(m('MULTIPLY', e_body, attr.outputs["Fac"]), em_b.inputs["Strength"])
+    em_d = nodes.new("ShaderNodeEmission")                     # diamonds: yellow-white
+    em_d.inputs["Color"].default_value = (1.0, 0.80, 0.50, 1)
+    links.new(m('MULTIPLY', e_dia, attr.outputs["Fac"]), em_d.inputs["Strength"])
+    add = nodes.new("ShaderNodeAddShader")
+    links.new(em_b.outputs[0], add.inputs[0])
+    links.new(em_d.outputs[0], add.inputs[1])
+    links.new(add.outputs[0], out.inputs["Volume"])
+    for key, val in (("homogeneous_volume", False),         # Blender 4.x only
+                     ("volume_step_rate", 0.5)):             # diamonds are ~0.15 m thick
+        if hasattr(mat.cycles, key):
+            setattr(mat.cycles, key, val)
     mat.diffuse_color = (1.0, 0.5, 0.1, 0.3)
     return mat
 
 
 def build_flame(coll):
-    out = []
-    for name, length, r0, r1, core in (("AB_Flame_Core", 3.0, 0.26, 0.04, True),
-                                       ("AB_Flame_Outer", 4.4, 0.40, 0.08, False)):
-        rings = []
-        n = 24
-        for i in range(n + 1):
-            t = i / n
-            s = S_EXIT + 0.02 + length * t
-            r = r0 + (r1 - r0) * (t ** 0.8) + (0.04 if not core else 0.0) * math.sin(math.pi * t)
-            rings.append([P(s, r * math.cos(2 * math.pi * k / 28), NOZ_Z + r * math.sin(2 * math.pi * k / 28))
-                          for k in range(28)])
-        v, f = loft_rings(rings, True, True, True)
-        ob = mesh_object(name, v, f, coll, flame_material("F35_" + name, core), smooth=True)
-        ob["ab"] = 0.0
-        ob["light"] = "afterburner"
-        ob.visible_shadow = False
-        try:
-            ob.visible_volume_scatter = False
-        except Exception:
-            pass
-        out.append(ob)
-    return out
+    """One closed mesh holds the flame volume: from behind the flame holder, through the nozzle,
+    to AB_LEN behind the exit."""
+    prof = [(AB_IN, 0.44), (13.62, 0.44), (S_EXIT, 0.52), (S_EXIT + 0.6, 0.53), (S_EXIT + 1.8, 0.47),
+            (S_EXIT + 3.2, 0.36), (S_EXIT + AB_LEN, 0.20), (S_EXIT + AB_LEN + 0.15, 0.05)]
+    rings = [[P(s_, r * math.cos(2 * math.pi * k / 32), NOZ_Z + r * math.sin(2 * math.pi * k / 32))
+              for k in range(32)] for s_, r in prof]
+    v, f = loft_rings(rings, True, True, True)
+    ob = mesh_object("AB_Flame", v, f, coll, flame_volume_material(), smooth=True)
+    bm = bmesh.new()                         # Cycles needs outward normals to know the inside of a volume
+    bm.from_mesh(ob.data)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(ob.data)
+    bm.free()
+    ob["ab"] = 0.0
+    ob["light"] = "afterburner"
+    ob.visible_shadow = False
+    ob.visible_diffuse = False               # no noisy glow on the apron; reflections still see it
+    return [ob]
 
 
 def build(ctx):
