@@ -2,6 +2,9 @@
 
 One blend per milestone, oldest first (`index.csv` has the same table).
 Counts leave out the hidden hitbox helpers.
+From 12 on the sky image is linked relative to `blend/`, so a copy opened from here shows a
+pink sky until it is pointed at `references/hdri/` (File > External Data > Find Missing Files).
+Copying the file next to `blend/F-35I_Adir.blend` also works.
 
 | # | File | Date | Commit | What changed | MB | Objects | Vertices | Faces | Materials |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
