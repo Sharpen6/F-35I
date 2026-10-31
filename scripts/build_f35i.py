@@ -2,8 +2,9 @@
 
 Run headless:
     python3 scripts/build_f35i.py --out blend/F-35I_Adir.blend
-or inside Blender's Python console / Blender MCP:
-    exec(open(r'.../scripts/build_f35i.py').read())
+or inside a running Blender (Python console / Blender MCP):
+    import sys; sys.path.insert(0, r'<repo>/scripts')
+    import build_f35i; build_f35i.build()
 """
 import os
 import sys
@@ -20,8 +21,33 @@ ALL_PARTS = ["fuselage", "wings", "tails", "nozzle", "canopy", "cockpit",
              "damage", "scene"]
 
 
+def _soft_reset():
+    """Empty the open file without reloading it.  Used in an interactive
+    Blender (e.g. driven through the Blender MCP add-on): reloading factory
+    settings there would also unload the add-ons and stop their servers."""
+    ob = bpy.context.object
+    if ob is not None and ob.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    keep = bpy.context.scene
+    for s in list(bpy.data.scenes):
+        if s != keep:
+            bpy.data.scenes.remove(s)
+    for coll in (bpy.data.objects, bpy.data.meshes, bpy.data.curves, bpy.data.armatures,
+                 bpy.data.materials, bpy.data.node_groups, bpy.data.actions, bpy.data.cameras,
+                 bpy.data.lights, bpy.data.collections, bpy.data.worlds, bpy.data.textures):
+        for idb in list(coll):
+            coll.remove(idb)
+    for img in list(bpy.data.images):
+        if img.type not in {'RENDER_RESULT', 'COMPOSITING'}:
+            bpy.data.images.remove(img)
+    bpy.data.orphans_purge(do_recursive=True)
+
+
 def reset_scene():
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+    if bpy.app.background:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+    else:
+        _soft_reset()
     for c in list(bpy.data.collections):
         bpy.data.collections.remove(c)
 
