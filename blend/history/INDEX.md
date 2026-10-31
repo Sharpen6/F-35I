@@ -21,3 +21,4 @@ Copying the file next to `blend/F-35I_Adir.blend` also works.
 | 10 | `10_2026-10-31_2115_0d8356b_dsi-inlets.blend` | 2026-10-31 21:15 | 0d8356b | Inlets: DSI compression bump and drawn aperture with swept cowl lips | 5.7 | 472 | 144212 | 139929 | 54 |
 | 11 | `11_2026-10-31_2151_231dc42_nose-doors-eots.blend` | 2026-10-31 21:51 | 231dc42 | Nose: long nose-gear doors, faceted EOTS housing, DAS windows, air-data probes | 5.8 | 478 | 145489 | 141185 | 54 |
 | 12 | `12_2026-10-31_2222_ef50029_paint-sky.blend` | 2026-10-31 22:22 | ef50029 | Paint and sky: HDRI lighting with a matched sun, satin coat paint tuned to photos | 5.8 | 478 | 145489 | 141185 | 54 |
+| 13 | `13_2026-10-31_2256_5ee45a6_afterburner.blend` | 2026-10-31 22:56 | 5ee45a6 | Afterburner: volumetric flame with shock diamonds and flicker (Volumetric afterburner flame with shock diamonds; darker apron) | 5.8 | 477 | 144343 | 140017 | 53 |
