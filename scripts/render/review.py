@@ -162,3 +162,67 @@ def project(name, points):
         q = R.transposed() @ (Vector(p) - c)
         out.append((W / 2 + s["f_px"] * q.x / -q.z, H / 2 - s["f_px"] * q.y / -q.z))
     return out
+
+
+ORTHO = {
+    # view: (camera rotation, axis along the view, image-right axis, image-up axis)
+    "front": ((math.pi / 2, 0.0, 0.0), Vector((0, -40, 0)), 0, 2),
+    "back":  ((math.pi / 2, 0.0, math.pi), Vector((0, 40, 0)), 0, 2),
+    "side":  ((math.pi / 2, 0.0, math.pi / 2), Vector((40, 0, 0)), 1, 2),
+    "top":   ((0.0, 0.0, 0.0), Vector((0, 0, 40)), 0, 1),
+}
+
+
+def ortho(view="front", ppm=200.0, res=(2400, 1100), center=(0.0, 0.3), prefix="ortho_",
+          out=OUT, edges=True, gear_up=True):
+    """Orthographic render at `ppm` pixels per metre, image centre at `center`
+    (world coordinates along the image right / up axes).  Workbench with
+    studio light, cavity and outlines on a transparent background (edges=True)
+    to lay over a drawing; or Cycles otherwise.  A world point maps to pixel
+    (W/2 + sx * ppm * (p[right] - center[0]), H/2 - ppm * (p[up] - center[1])),
+    sx = -1 for the back view (its image right is -X), +1 otherwise (side: +Y,
+    seen from the left; top: +X with the nose down the image)."""
+    rot, off, ax_r, ax_u = ORTHO[view]
+    sc = bpy.context.scene
+    sh = sc.display.shading
+    keep = (sh.light, sh.color_type, tuple(sh.single_color), sh.show_cavity, sh.show_object_outline)
+    rig = bpy.data.objects.get("F35I_Rig")
+    gear = rig.get("gear") if rig else None
+    if gear_up and rig is not None:
+        rig["gear"] = 0.0
+        rig.update_tag()
+        sc.frame_set(sc.frame_current)
+    try:
+        if edges:
+            sh.light = 'STUDIO'
+            sh.color_type = 'SINGLE'
+            sh.single_color = (0.8, 0.8, 0.8)
+            sh.show_cavity = True
+            sh.cavity_type = 'BOTH'
+            sh.show_object_outline = True
+            sh.object_outline_color = (0.0, 0.0, 0.0)
+            setup("WORKBENCH", 1, res, ground=False)
+            sc.render.film_transparent = True
+            sc.render.image_settings.color_mode = 'RGBA'
+        else:
+            setup("CYCLES", 64, res, ground=False)
+        cam = _camera("OrthoCam")
+        cam.data.type = 'ORTHO'
+        cam.data.sensor_fit = 'HORIZONTAL'
+        cam.data.ortho_scale = res[0] / ppm
+        cam.rotation_euler = rot
+        loc = Vector(off)
+        loc[ax_r] = center[0]
+        loc[ax_u] = center[1]
+        cam.location = loc
+        sc.camera = cam
+        os.makedirs(out, exist_ok=True)
+        sc.render.filepath = os.path.join(out, f"{prefix}{view}.png")
+        bpy.ops.render.render(write_still=True)
+        return sc.render.filepath
+    finally:
+        sh.light, sh.color_type, sh.single_color, sh.show_cavity, sh.show_object_outline = keep
+        if gear_up and rig is not None and gear is not None:
+            rig["gear"] = gear
+            rig.update_tag()
+            sc.frame_set(sc.frame_current)

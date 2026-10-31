@@ -37,6 +37,7 @@ built only from publicly available reference material (see [`docs/research.md`](
 | `scripts/tools/clearance.py` | Landing-gear checks: nothing outside the skin with the gear up, no part through a door during the swing |
 | `data/camera_matches/` | Cameras solved from reference photos (position, rotation, lens) |
 | `blend/F-35I_Adir.blend` | The built model, ready to open in Blender 5.1 |
+| `blend/history/` | One blend per milestone with an index of what changed and the mesh counts ([`INDEX.md`](blend/history/INDEX.md)); `scripts/tools/blend_history.py add <name>` appends the current one |
 | `data/damage_model.json` | Components, hitboxes, intact attributes and ground attitudes, exported by the build |
 | `renders/` | Images and GIFs for the making-of video (`progress`, `turntable`, `gifs`, `animation`, `review`) |
 
