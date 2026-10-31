@@ -16,3 +16,4 @@ Counts leave out the hidden hitbox helpers.
 | 8 | `08_2026-10-31_1951_943f989_canopy-tint-shading.blend` | 2026-10-31 19:51 | 943f989 | Canopy gold tint, clean fuselage shading, smooth body behind the canopy | 5.1 | 472 | 133932 | 129753 | 54 |
 | 9 | `09_2026-10-31_2028_b0923b8_aft-end-nozzle.blend` | 2026-10-31 20:28 | b0923b8 | Aft end: free-standing F135 nozzle behind a sawtooth shroud | 5.4 | 472 | 142142 | 137897 | 54 |
 | 10 | `10_2026-10-31_2115_0d8356b_dsi-inlets.blend` | 2026-10-31 21:15 | 0d8356b | Inlets: DSI compression bump and drawn aperture with swept cowl lips | 5.7 | 472 | 144212 | 139929 | 54 |
+| 11 | `11_2026-10-31_2151_231dc42_nose-doors-eots.blend` | 2026-10-31 21:51 | 231dc42 | Nose: long nose-gear doors, faceted EOTS housing, DAS windows, air-data probes | 5.8 | 478 | 145489 | 141185 | 54 |
