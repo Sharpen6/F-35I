@@ -373,6 +373,7 @@ def _make(name):
                           transmission=1.0, ior=1.5, alpha=1.0, spec_tint=(1.0, 0.88, 0.66),
                           thin_film=112.0),
         "canopy_frame": dict(color=(0.17, 0.18, 0.19), rough=0.45, metal=0.3),
+        "canopy_bow": dict(color=(0.025, 0.025, 0.028), rough=0.5),
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),
         # outer flaps: dark gunmetal; divergent flaps: light ceramic coating
         # (photos of the exit: a whitish-tan serrated ring inside the dark flaps)

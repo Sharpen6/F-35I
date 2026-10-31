@@ -44,36 +44,36 @@ Hitbox: centre (x left, s aft of the nose, z up) and half sizes in metres; yaw a
 
 | Component | HP | Breaks off | Hitbox centre | Half size | Yaw / roll | Affects |
 |---|---|---|---|---|---|---|
-| `radome` Nose radome / AN/APG-81 radar | 120 | yes | 0.00, 0.61, -0.01 | 0.50, 0.62, 0.45 | 0 / 6 | Mach placard 1.20 when missing; drag +30 counts when destroyed; 55 kg lost if it breaks off; system: radar |
-| `cockpit` Cockpit and canopy | 160 |  | 0.00, 3.85, 0.85 | 0.50, 1.25, 0.55 | 0 / 0 | max dynamic pressure ×0.55 when destroyed; drag +40 counts when destroyed; system: pilot; system: canopy |
-| `fwd_fuselage` Forward fuselage (avionics, EOTS, DAS) | 420 |  | 0.00, 3.22, 0.26 | 1.75, 1.98, 1.00 | 0 / 0 | structural g / Mach limit (weight 0.35); drag +20 counts when destroyed; system: eots; system: das; system: avionics; system: nose_gear |
+| `radome` Nose radome / AN/APG-81 radar | 120 | yes | -0.01, 0.61, 0.01 | 0.51, 0.62, 0.43 | 0 / -3 | Mach placard 1.20 when missing; drag +30 counts when destroyed; 55 kg lost if it breaks off; system: radar |
+| `cockpit` Cockpit and canopy | 160 |  | 0.00, 3.40, 0.85 | 0.50, 1.25, 0.55 | 0 / 0 | max dynamic pressure ×0.55 when destroyed; drag +40 counts when destroyed; system: pilot; system: canopy |
+| `fwd_fuselage` Forward fuselage (avionics, EOTS, DAS) | 420 |  | 0.00, 3.22, 0.23 | 1.63, 1.98, 1.03 | 0 / 0 | structural g / Mach limit (weight 0.35); drag +20 counts when destroyed; system: eots; system: das; system: avionics; system: nose_gear |
 | `inlet_L` Left inlet and duct | 260 |  | 1.20, 6.10, 0.02 | 0.50, 1.85, 0.45 | -9 / 0 | engine airflow (half each) → thrust; drag +25 counts when destroyed |
 | `inlet_R` Right inlet and duct | 260 |  | -1.20, 6.10, 0.02 | 0.50, 1.85, 0.45 | 9 / 0 | engine airflow (half each) → thrust; drag +25 counts when destroyed |
-| `center_fuselage` Centre fuselage (main fuel tanks, wing carry-through) | 700 |  | 0.00, 7.86, 0.17 | 1.86, 2.67, 1.10 | 0 / 0 | fuel tank 'fuselage' (4200 kg): leaks when hit, lost if the part breaks off; structural g / Mach limit (weight 1.00); drag +20 counts when destroyed |
+| `center_fuselage` Centre fuselage (main fuel tanks, wing carry-through) | 700 |  | 0.00, 7.86, 0.20 | 1.84, 2.67, 1.07 | 0 / 0 | fuel tank 'fuselage' (4200 kg): leaks when hit, lost if the part breaks off; structural g / Mach limit (weight 1.00); drag +20 counts when destroyed |
 | `fuel_feed` Fuel feed / boost pumps | 180 |  | 0.00, 8.30, 0.55 | 0.45, 0.70, 0.30 | 0 / 0 | system: fuel_feed |
-| `weapon_bay_L` Left weapon bay | 220 |  | 0.61, 8.65, -0.66 | 0.48, 2.10, 0.34 | 0 / 0 | drag +15 counts when destroyed; system: weapons_L |
-| `weapon_bay_R` Right weapon bay | 220 |  | -0.61, 8.65, -0.66 | 0.48, 2.10, 0.34 | 0 / 0 | drag +15 counts when destroyed; system: weapons_R |
+| `weapon_bay_L` Left weapon bay | 220 |  | 0.61, 8.65, -0.62 | 0.48, 2.10, 0.38 | 0 / 0 | drag +15 counts when destroyed; system: weapons_L |
+| `weapon_bay_R` Right weapon bay | 220 |  | -0.61, 8.65, -0.62 | 0.48, 2.10, 0.38 | 0 / 0 | drag +15 counts when destroyed; system: weapons_R |
 | `engine` F135 engine | 520 |  | 0.00, 10.60, 0.12 | 0.64, 2.60, 0.64 | 0 / 0 | thrust ∝ health^1.2, flame-out below 15 % |
-| `nozzle` Afterburner and nozzle | 200 |  | -0.00, 13.54, 0.12 | 0.58, 0.45, 0.58 | 0 / -3 | thrust −20 % at 0, afterburner lost below 50 % |
+| `nozzle` Afterburner and nozzle | 200 |  | -0.00, 13.52, 0.11 | 0.59, 0.58, 0.59 | 0 / 0 | thrust −20 % at 0, afterburner lost below 50 % |
 | `ipp` Power and thermal management (IPP, 270 V DC for the EHAs, cooling) | 150 |  | 0.45, 12.10, -0.35 | 0.30, 0.45, 0.25 | 0 / 0 | system: electrical; system: cooling |
-| `aft_fuselage` Aft fuselage / tail booms | 450 |  | 0.00, 12.46, 0.03 | 1.87, 1.85, 1.02 | 0 / 0 | fuel tank 'aft' (900 kg): leaks when hit, lost if the part breaks off; structural g / Mach limit (weight 0.60); drag +15 counts when destroyed |
-| `gun` GAU-22/A gun | 90 |  | 1.30, 5.45, 0.66 | 0.07, 0.36, 0.07 | 0 / -11 | system: gun |
-| `pilot` Pilot | 100 |  | -0.00, 3.46, 0.74 | 0.39, 0.69, 0.55 | 6 / 6 | system: pilot |
-| `nose_gear` Nose landing gear | 150 |  | 0.00, 4.40, -0.91 | 0.18, 0.64, 0.86 | 0 / 0 | system: nose_gear; collapse on the ground: roll -0.0°, pitch -7.7° |
+| `aft_fuselage` Aft fuselage / tail booms | 450 |  | 0.00, 12.46, 0.07 | 1.87, 1.85, 0.99 | 0 / 0 | fuel tank 'aft' (900 kg): leaks when hit, lost if the part breaks off; structural g / Mach limit (weight 0.60); drag +15 counts when destroyed |
+| `gun` GAU-22/A gun | 90 |  | 1.30, 5.45, 0.46 | 0.07, 0.36, 0.07 | 0 / -11 | system: gun |
+| `pilot` Pilot | 100 |  | -0.00, 2.91, 0.74 | 0.39, 0.69, 0.55 | 6 / 6 | system: pilot |
+| `nose_gear` Nose landing gear | 150 |  | 0.00, 4.40, -0.91 | 0.18, 0.64, 0.86 | 0 / 0 | system: nose_gear; collapse on the ground: roll +0.0°, pitch -8.0° |
 | `wing_root_L` Inner left wing (wing box, fuel) | 460 | yes | 2.93, 9.63, 0.26 | 1.44, 2.94, 0.16 | 0 / 0 | lift 29 % of total at 2.84 m arm → roll asymmetry, CLmax, induced drag; fuel tank 'wing_L' (1589 kg): leaks when hit, lost if the part breaks off; structural g / Mach limit (weight 1.00); Mach placard 1.00 when missing; drag +20 counts when destroyed; 420 kg lost if it breaks off |
 | `wing_outer_L` Outer left wing panel | 260 | yes | 4.72, 10.28, 0.27 | 0.70, 1.52, 0.07 | -11 / 1 | lift 9 % of total at 4.68 m arm → roll asymmetry, CLmax, induced drag; Mach placard 1.20 when missing; drag +10 counts when destroyed; 190 kg lost if it breaks off |
 | `lef_L` Left leading-edge flap | 120 | yes | 3.77, 9.29, 0.24 | 1.79, 0.32, 0.10 | 33 / -1 | roll control 3 % of total; Mach placard 1.40 when missing; CLmax −0.03; 45 kg lost if it breaks off |
 | `flaperon_L` Left flaperon | 130 | yes | 3.12, 11.91, 0.26 | 1.15, 0.56, 0.07 | -1 / 0 | roll control 24 % of total; Mach placard 1.40 when missing; CLmax −0.04; 65 kg lost if it breaks off |
 | `stab_L` Left stabilator | 220 | yes | 2.12, 14.19, 0.22 | 1.32, 1.50, 0.08 | 0 / 0 | roll control 18 % of total; pitch authority 50 % → g-limit; Mach placard 1.20 when missing; drag +10 counts when destroyed; 150 kg lost if it breaks off |
 | `fin_L` Left vertical tail and rudder | 220 | yes | 1.79, 13.05, 1.37 | 0.07, 1.86, 1.32 | 0 / -20 | roll control 5 % of total; directional stability (Cnβ) → AoA limit; Mach placard 1.30 when missing; drag +10 counts when destroyed; 115 kg lost if it breaks off |
-| `main_gear_L` Left main gear | 160 |  | 1.90, 10.09, -0.83 | 0.31, 0.69, 1.00 | 2 / 29 | system: main_gear_L; collapse on the ground: roll +12.7°, pitch +4.6° |
+| `main_gear_L` Left main gear | 160 |  | 2.03, 10.02, -0.69 | 0.26, 0.68, 1.09 | 4 / 9 | system: main_gear_L; collapse on the ground: roll +13.6°, pitch +4.9° |
 | `wing_root_R` Inner right wing (wing box, fuel) | 460 | yes | -2.92, 9.63, 0.26 | 1.43, 2.94, 0.16 | 0 / 0 | lift 29 % of total at 2.84 m arm → roll asymmetry, CLmax, induced drag; fuel tank 'wing_R' (1589 kg): leaks when hit, lost if the part breaks off; structural g / Mach limit (weight 1.00); Mach placard 1.00 when missing; drag +20 counts when destroyed; 420 kg lost if it breaks off |
 | `wing_outer_R` Outer right wing panel | 260 | yes | -4.72, 10.31, 0.26 | 0.70, 1.51, 0.07 | 10 / 0 | lift 9 % of total at 4.68 m arm → roll asymmetry, CLmax, induced drag; Mach placard 1.20 when missing; drag +10 counts when destroyed; 190 kg lost if it breaks off |
 | `lef_R` Right leading-edge flap | 120 | yes | -3.77, 9.29, 0.24 | 1.79, 0.32, 0.10 | -33 / 1 | roll control 3 % of total; Mach placard 1.40 when missing; CLmax −0.03; 45 kg lost if it breaks off |
 | `flaperon_R` Right flaperon | 130 | yes | -3.12, 11.91, 0.26 | 1.15, 0.56, 0.07 | 1 / 0 | roll control 24 % of total; Mach placard 1.40 when missing; CLmax −0.04; 65 kg lost if it breaks off |
 | `stab_R` Right stabilator | 220 | yes | -2.12, 14.19, 0.22 | 1.32, 1.50, 0.08 | 0 / 0 | roll control 18 % of total; pitch authority 50 % → g-limit; Mach placard 1.20 when missing; drag +10 counts when destroyed; 150 kg lost if it breaks off |
 | `fin_R` Right vertical tail and rudder | 220 | yes | -1.79, 13.05, 1.37 | 0.07, 1.86, 1.32 | 0 / 20 | roll control 5 % of total; directional stability (Cnβ) → AoA limit; Mach placard 1.30 when missing; drag +10 counts when destroyed; 115 kg lost if it breaks off |
-| `main_gear_R` Right main gear | 160 |  | -1.90, 10.09, -0.83 | 0.31, 0.69, 1.00 | -2 / -29 | system: main_gear_R; collapse on the ground: roll -13.0°, pitch +4.6° |
+| `main_gear_R` Right main gear | 160 |  | -2.03, 10.02, -0.69 | 0.26, 0.68, 1.09 | -4 / -9 | system: main_gear_R; collapse on the ground: roll -13.5°, pitch +5.0° |
 
 **Hits.** A point hit gives 70 % of its damage to the smallest box that contains the point and shares the rest between the other boxes there. A blast loses damage linearly with the distance to each box. A part that breaks off takes its children with it (outer wing, LEF and flaperon go with the inner wing).
 
@@ -106,7 +106,7 @@ Hitbox: centre (x left, s aft of the nose, z up) and half sizes in metres; yaw a
 | right wing tank leak 20min | 100 % | 1.20 (Mach limit) | 1.06 | 4.25 | 0° | – | 140 kt | 3612 kg / 48.0 min (after 20 min) | – |
 | ipp failure | 100 % | 1.60 (Mach limit) | 1.06 | 9.0 | 0° | – | 140 kt | 4967 kg / 93.5 min | cooling; electrical |
 | radome shot off | 100 % | 1.20 (Mach limit) | 0.98 | 9.0 | 0° | – | 140 kt | 4967 kg / 89.0 min | radar; parts: radome |
-| left main gear collapsed | 100 % | 1.60 (Mach limit) | 1.06 | 9.0 | 0° | – | 140 kt | 4967 kg / 93.5 min | main_gear_L; on the ground: roll +12.7°, pitch +4.6° |
+| left main gear collapsed | 100 % | 1.60 (Mach limit) | 1.06 | 9.0 | 0° | – | 140 kt | 4967 kg / 93.5 min | main_gear_L; on the ground: roll +13.6°, pitch +4.9° |
 | cockpit hit pilot wounded | 100 % | 1.59 (thrust) | 0.96 | 9.0 | 0° | – | 140 kt | 4967 kg / 87.2 min | pilot |
 
 ## 5. Tilt against airspeed after losing a wing (sea level)
@@ -164,9 +164,9 @@ Measured on the mesh: the jet pivots about the line through the two tyres that s
 
 | Broken leg | Roll | Pitch | Rotation | First contact (x, s, z) |
 |---|---|---|---|---|
-| main_gear_L | +12.7° | +4.6° | 13.5° | 0.86, 11.78, -0.94 |
-| main_gear_R | -13.0° | +4.6° | 13.8° | -0.86, 11.78, -0.94 |
-| nose_gear | -0.0° | -7.7° | 7.7° | -0.04, 2.14, -0.66 |
+| main_gear_L | +13.6° | +4.9° | 14.5° | 0.92, 12.05, -0.84 |
+| main_gear_R | -13.5° | +5.0° | 14.5° | -0.92, 12.05, -0.84 |
+| nose_gear | +0.0° | -8.0° | 8.0° | 0.03, 1.71, -0.56 |
 
 Roll is positive with the left wing down, pitch positive nose up.
 

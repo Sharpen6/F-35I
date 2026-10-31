@@ -76,8 +76,10 @@ BONES = [
 
 
 def jp(name):
+    """Joint position in the world (J is in cockpit design stations, see cockpit.COCKPIT_DS)."""
+    from .cockpit import COCKPIT_DS
     x, s, z = J[name]
-    return Vector(P(s, x, z))
+    return Vector(P(s + COCKPIT_DS, x, z))
 
 
 def _seg_dist(p, a, b):

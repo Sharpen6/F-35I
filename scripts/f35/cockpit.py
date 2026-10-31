@@ -15,9 +15,13 @@ from .geom import P, get_collection, mesh_object, loft_rings, add_modifier_bevel
 from .textures import pcd_image
 from . import materials as M
 
+# Everything below is laid out in "design" stations and moved forward by COCKPIT_DS when placed
+# (W, pilot.jp): the 3-view drawing and photo c34 put the pilot's helmet at s ~3.3, a third of the
+# way back under the canopy just behind the canopy bow, with a long empty deck behind the seat.
+COCKPIT_DS = -0.55
 PANEL_TILT = math.radians(23.0)       # PCD face tilted back from vertical
-PANEL_C = (0.0, 3.06, 0.70)           # (x, s, z) centre of the PCD face
-EYE = (0.0, 3.90, 1.13)
+PANEL_C = (0.0, 3.20, 0.70)           # (x, s, z) centre of the PCD face (design stations)
+EYE = (0.0, 3.90, 1.13)               # design eye (s 3.35 after COCKPIT_DS)
 
 
 # --------------------------------------------------------------------------
@@ -94,7 +98,8 @@ def _obj(name, vf, coll, mat, loc=(0, 0, 0), rot=(0, 0, 0), smooth=False, bevel=
 
 
 def W(x, s, z):
-    return Vector(P(s, x, z))
+    """Cockpit design coordinates (x, s, z) -> world, moved forward by COCKPIT_DS."""
+    return Vector(P(s + COCKPIT_DS, x, z))
 
 
 def panel_frame(u, v, d=0.0):
@@ -182,7 +187,7 @@ def build(ctx):
     coll = get_collection("Cockpit", root)
     objs = {}
     # ---------------------------------------------------------------- panel
-    panel_body = _obj("Cockpit_Panel", _box_mesh(0.88, 0.14, 0.36), coll,
+    panel_body = _obj("Cockpit_Panel", _box_mesh(0.64, 0.14, 0.36), coll,
                       M.get("cockpit_panel"), loc=panel_frame(0, -0.03, -0.075),
                       rot=(PANEL_TILT, 0, 0), bevel=0.006)
     # PCD screen with emissive display page
@@ -229,16 +234,16 @@ def build(ctx):
                        (2, 6, 7, 3), (3, 7, 4, 0)]))
     _obj("PCD_Bezel", _merge(bz), coll, M.get("cockpit"))
     # glare shield (hood over the display)
-    gs = _obj("Glareshield", _box_mesh(0.86, 0.22, 0.03), coll, M.get("cockpit"),
+    gs = _obj("Glareshield", _box_mesh(0.56, 0.22, 0.03), coll, M.get("cockpit"),
               loc=panel_frame(0, 0.135, 0.075), rot=(math.radians(10), 0, 0), bevel=0.01)
     # lower switch panel
-    lp = _obj("Cockpit_LowerPanel", _box_mesh(0.80, 0.10, 0.10), coll,
+    lp = _obj("Cockpit_LowerPanel", _box_mesh(0.78, 0.10, 0.10), coll,
               M.get("cockpit_panel"), loc=panel_frame(0, -0.215, -0.04),
               rot=(PANEL_TILT, 0, 0), bevel=0.004)
     # side consoles
     for side, tag in ((1, "L"), (-1, "R")):
-        _obj(f"Console_{tag}", _box_mesh(0.17, 1.05, 0.30), coll, M.get("cockpit_panel"),
-             loc=W(side * 0.385, 3.78, CONSOLE_Z - 0.15), bevel=0.006)
+        _obj(f"Console_{tag}", _box_mesh(0.17, 0.92, 0.30), coll, M.get("cockpit_panel"),
+             loc=W(side * 0.385, 3.845, CONSOLE_Z - 0.15), bevel=0.006)
     # rudder pedals (each a separate object with pivot)
     for side, tag in ((1, "L"), (-1, "R")):
         v1, f1 = _box_mesh(0.09, 0.02, 0.16, 0, 0, 0.0)
@@ -271,6 +276,7 @@ def build(ctx):
     # ---------------------------------------------------------- seat
     seat = build_seat(coll)
     objs.update(seat)
+    build_aft_deck(coll)
     # ---------------------------------------------------------- switches
     switches = []
     for name, spec, kind, label in SWITCHES:
@@ -334,6 +340,32 @@ def led_material():
     nt.links.new(mul.outputs[0], b.inputs["Emission Strength"])
     _LED = mat
     return mat
+
+
+def build_aft_deck(coll):
+    """Deck behind the seat under the long aft canopy (photo c34: dark grey, just above the sill,
+    running back to the canopy's rear frame) with an equipment box on it.  World stations: it
+    belongs to the airframe, not to the cockpit design layout."""
+    from .canopy import SILL_W
+    from .fuselage import fore_upper_z, cockpit_half_width
+    s0, s1, n = 3.66, 4.93, 14
+    rings = []
+    for i in range(n + 1):
+        s = s0 + (s1 - s0) * i / n
+        w = min(cockpit_half_width(s), SILL_W(s)) - 0.006
+        z = fore_upper_z(s, min(SILL_W(s), 0.85)) + 0.02
+        rings.append([P(s, -w, z), P(s, w, z), P(s, w, z - 0.03), P(s, -w, z - 0.03)])
+    v, f = loft_rings(rings, True, True, True)
+    deck = mesh_object("Cockpit_AftDeck", v, f, coll, M.get("cockpit"), smooth=False)
+    bm = bmesh.new()
+    bm.from_mesh(deck.data)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(deck.data)
+    bm.free()
+    zb = fore_upper_z(4.30, min(SILL_W(4.30), 0.85)) + 0.02
+    box = _obj("Cockpit_AftBox", _box_mesh(0.34, 0.30, 0.09), coll, M.get("cockpit_panel"),
+               loc=Vector(P(4.30, 0.0, zb + 0.045)), bevel=0.01)
+    return [deck, box]
 
 
 def build_seat(coll):

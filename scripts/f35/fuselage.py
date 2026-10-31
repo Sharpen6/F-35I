@@ -749,11 +749,25 @@ def build_nozzle_well_cutter(collection):
     return ob
 
 
+COCKPIT_FOOT = [(1.98, 0.04), (2.10, 0.16), (2.40, 0.31), (2.80, 0.41),     # (s, half-width)
+                (3.20, 0.46), (3.60, 0.48), (4.00, 0.48), (4.40, 0.46),
+                (4.75, 0.42), (4.92, 0.34)]
+
+
+def cockpit_half_width(s):
+    """Half-width of the cockpit opening at station s (linear in COCKPIT_FOOT)."""
+    f = COCKPIT_FOOT
+    if s <= f[0][0]:
+        return f[0][1]
+    for (s0, w0), (s1, w1) in zip(f, f[1:]):
+        if s <= s1:
+            return w0 + (w1 - w0) * (s - s0) / (s1 - s0)
+    return f[-1][1]
+
+
 def build_cockpit_cutter(collection):
     """Cockpit tub cutter: canopy footprint extruded down to the floor."""
-    foot = [(1.98, 0.04), (2.10, 0.16), (2.40, 0.31), (2.80, 0.41),
-            (3.20, 0.46), (3.60, 0.48), (4.00, 0.48), (4.40, 0.46),
-            (4.75, 0.42), (4.92, 0.34)]
+    foot = COCKPIT_FOOT
     top = 1.8
     pts = [(s, w) for s, w in foot] + [(s, -w) for s, w in reversed(foot)]
     ring_top = [P(s, w, top) for s, w in pts]

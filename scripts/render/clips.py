@@ -174,7 +174,7 @@ def clip_gear_retract(fps):
 def clip_canopy_open(fps):
     """Canopy opens on its front hinge while the pilot turns to look out."""
     set_visibility()
-    camera((3.4, -1.2, 2.5), (0.0, -4.3, 0.95), 30)
+    camera((3.4, -1.75, 2.5), (0.0, -4.85, 0.95), 30)
     n = int(7.0 * fps)
     path("canopy", [(1, 0.0), (int(0.5 * fps), 0.0), (int(5.0 * fps), 1.0), (n, 1.0)])
     path("head_yaw", [(1, 0.0), (int(4.0 * fps), 0.0), (int(5.0 * fps), 55.0), (n, 55.0)])
@@ -185,7 +185,7 @@ def clip_canopy_open(fps):
 def clip_pilot_look(fps):
     """Pilot head: left, right, up, down, tilt (degrees, + yaw = left); canopy open."""
     set_visibility()
-    camera((2.7, -5.5, 1.45), (0.0, -3.9, 1.05), 36)
+    camera((2.7, -6.05, 1.45), (0.0, -4.45, 1.05), 36)
     key("canopy", 1.0, 1)
     s = fps
     seq = [(0.0, 0, 0, 0), (0.6, 0, 0, 0), (1.4, 75, 5, 0), (2.4, 75, 5, 0), (3.4, -75, 5, 0),

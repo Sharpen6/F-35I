@@ -79,7 +79,7 @@ COMPONENTS = {
                           label="Nose radome / AN/APG-81 radar"),
     "cockpit":       dict(hp=160, side=0, detach=False, objects=["Canopy_Glass", "Canopy_Frame"],
                           systems=["pilot", "canopy"], drag=0.0040, q_limit=0.55,
-                          box=((0.0, 3.85, 0.85), (0.50, 1.25, 0.55), 0.0), label="Cockpit and canopy"),
+                          box=((0.0, 3.40, 0.85), (0.50, 1.25, 0.55), 0.0), label="Cockpit and canopy"),
     "fwd_fuselage":  dict(hp=420, side=0, detach=False, objects=["Fuselage_Fwd", "EOTS_Window", "EOTS_Fairing"],
                           systems=["eots", "das", "avionics", "nose_gear"], drag=0.0020, structure=0.35,
                           label="Forward fuselage (avionics, EOTS, DAS)"),
@@ -112,7 +112,7 @@ COMPONENTS = {
     "gun":           dict(hp=90, side=1, detach=False, objects=["GunDoor"], systems=["gun"],
                           box=((1.30, 5.45, 0.66), (0.14, 0.45, 0.14), 0.0), label="GAU-22/A gun"),
     "pilot":         dict(hp=100, side=0, detach=False, objects=[], systems=["pilot"],
-                          box=((0.0, 3.90, 0.85), (0.30, 0.45, 0.45), 0.0), label="Pilot"),
+                          box=((0.0, 3.35, 0.85), (0.30, 0.45, 0.45), 0.0), label="Pilot"),
     "nose_gear":     dict(hp=150, side=0, detach=False, objects=[], systems=["nose_gear"],
                           label="Nose landing gear"),
 }

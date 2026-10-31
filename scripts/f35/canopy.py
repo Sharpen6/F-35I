@@ -19,6 +19,13 @@ SILL_W = Pchip([1.84, 1.95, 2.10, 2.40, 2.80, 3.20, 3.60, 4.00, 4.40, 4.70, 4.97
 S_FRONT, S_GLASS_END, S_REAR = 1.84, 4.60, 4.97
 HINGE_S, HINGE_Z = 1.90, 0.60
 OPEN_ANGLE = 40.0                 # photos show ~30-40 deg
+# Canopy bow: the dark arch inside the one-piece transparency, just ahead of the pilot's helmet.
+# Photos c09 / c34: about 8-9 cm wide, a third of the way back, leaning forward at the top
+# (station at the crest and at the sill).
+BOW_CREST, BOW_SILL, BOW_W = 2.84, 3.01, 0.085
+# Frame band round the lower edge of the transparency (photo c34: light grey, about 9 cm tall,
+# carrying the "DO NOT CUT CANOPY WITHIN 3 INCHES OF CANOPY FRAME" stencil); it lifts with the canopy.
+BAND_H = 0.09
 
 
 def section(s, n=40, inset=0.0, th0=-math.pi / 2, th1=math.pi / 2):
@@ -35,6 +42,64 @@ def section(s, n=40, inset=0.0, th0=-math.pi / 2, th1=math.pi / 2):
         z = zs + (zt - zs) * u
         pts.append(P(s, x, z))
     return pts
+
+
+def surface_point(s, th, inset=0.0):
+    """Point of the canopy surface at station s and section angle th (-pi/2 sill .. 0 crest ..
+    pi/2 other sill), moved `inset` inwards; also returns the height fraction u (0 sill, 1 crest)."""
+    w = max(1e-4, SILL_W(s) - inset)
+    zs = fore_upper_z(s, min(SILL_W(s), 0.85)) - 0.005 + inset * 0.5
+    zt = CREST(s) - inset
+    st, ct = math.sin(th), math.cos(th)
+    u = abs(ct) ** (2 / 1.9)
+    x = w * math.copysign(math.sqrt(max(0.0, 1.0 - u ** 1.35)), st)
+    return P(s, x, zs + (zt - zs) * u), u
+
+
+def build_bow(coll, n=48):
+    """The canopy bow: a dark band lining the inside of the transparency from sill to sill."""
+    rings = []
+    for i in range(n + 1):
+        th = -math.pi / 2 + math.pi * i / n
+        u = abs(math.cos(th)) ** (2 / 1.9)
+        sc = BOW_SILL + (BOW_CREST - BOW_SILL) * u
+        s0, s1 = sc - BOW_W / 2, sc + BOW_W / 2
+        rings.append([surface_point(s0, th, 0.004)[0], surface_point(s1, th, 0.004)[0],
+                      surface_point(s1, th, 0.030)[0], surface_point(s0, th, 0.030)[0]])
+    v, f = loft_rings(rings, True, True, True)
+    ob = mesh_object("Canopy_Bow", v, f, coll, M.get("canopy_bow"))
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(ob.data)
+    bm.free()
+    return ob
+
+
+def build_band(coll, side, s0=1.95, step=0.05):
+    """Frame band outside the glass along one sill, from the front tip to the rear frame."""
+    rings = []
+    s = s0
+    sts = []
+    while s < S_GLASS_END - 1e-6:
+        sts.append(s)
+        s += step
+    sts.append(S_GLASS_END)
+    for s in sts:
+        zs = fore_upper_z(s, min(SILL_W(s), 0.85)) - 0.005
+        ub = min(0.9, BAND_H / max(1e-3, CREST(s) - zs))
+        ths = [side * math.acos(min(1.0, (ub * k / 2) ** 0.95)) for k in range(3)]
+        outer = [surface_point(s, th, -0.020)[0] for th in ths]
+        inner = [surface_point(s, th, -0.013)[0] for th in reversed(ths)]
+        rings.append(outer + inner)
+    v, f = loft_rings(rings, True, True, True)
+    ob = mesh_object(f"Canopy_Band_{'L' if side > 0 else 'R'}", v, f, coll, M.get("skin"))
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(ob.data)
+    bm.free()
+    return ob
 
 
 def build(ctx):
@@ -90,7 +155,9 @@ def build(ctx):
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         bm.to_mesh(ob.data)
         bm.free()
-    for ob in [arch] + rails:
+    bow = build_bow(coll)
+    bands = [build_band(coll, side) for side in (1, -1)]
+    for ob in [arch, bow] + bands + rails:
         ob.parent = glass
     p0 = P(HINGE_S, 0.4, HINGE_Z)
     p1 = P(HINGE_S, -0.4, HINGE_Z)
