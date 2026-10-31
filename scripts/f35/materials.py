@@ -3,6 +3,9 @@ import bpy
 
 _CACHE = {}
 
+# named damage zones of large meshes (see destruct.py)
+DAMAGE_ZONES = ("nose", "fwd", "center", "aft", "outer")
+
 
 def _bsdf(mat):
     nt = mat.node_tree
@@ -49,7 +52,7 @@ def skin_material():
     nt = mat.node_tree
     nodes, links = nt.nodes, nt.links
     b = nodes["Principled BSDF"]
-    base = (0.205, 0.215, 0.225)
+    base = (0.118, 0.121, 0.125)       # FS 36170 class grey (linear)
     tc = nodes.new("ShaderNodeTexCoord")
     noise = nodes.new("ShaderNodeTexNoise")
     noise.inputs["Scale"].default_value = 2.2
@@ -62,14 +65,60 @@ def skin_material():
     ramp.color_ramp.elements[1].position = 0.70
     ramp.color_ramp.elements[1].color = (base[0] * 1.10, base[1] * 1.10, base[2] * 1.10, 1)
     links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
-    links.new(ramp.outputs["Color"], b.inputs["Base Color"])
     # roughness variation (Have Glass coatings have a soft metallic sheen)
     rr = nodes.new("ShaderNodeMapRange")
-    rr.inputs["To Min"].default_value = 0.38
-    rr.inputs["To Max"].default_value = 0.55
+    rr.inputs["To Min"].default_value = 0.42
+    rr.inputs["To Max"].default_value = 0.60
     links.new(noise.outputs["Fac"], rr.inputs["Value"])
-    links.new(rr.outputs["Result"], b.inputs["Roughness"])
-    b.inputs["Metallic"].default_value = 0.35
+    # battle damage (0..1) spreads soot / burns.  Sources (the largest wins):
+    #   object property 'damage'                      - whole object
+    #   geometry weight 'zone_<z>' x object 'dmg_<z>'  - one zone of a big mesh
+    dmg = nodes.new("ShaderNodeAttribute")
+    dmg.attribute_type = 'OBJECT'
+    dmg.attribute_name = "damage"
+    acc = dmg.outputs["Fac"]
+    for z in DAMAGE_ZONES:
+        zw = nodes.new("ShaderNodeAttribute")
+        zw.attribute_type = 'GEOMETRY'
+        zw.attribute_name = "zone_" + z
+        zd = nodes.new("ShaderNodeAttribute")
+        zd.attribute_type = 'OBJECT'
+        zd.attribute_name = "dmg_" + z
+        mul = nodes.new("ShaderNodeMath")
+        mul.operation = 'MULTIPLY'
+        links.new(zw.outputs["Fac"], mul.inputs[0])
+        links.new(zd.outputs["Fac"], mul.inputs[1])
+        mx = nodes.new("ShaderNodeMath")
+        mx.operation = 'MAXIMUM'
+        links.new(acc, mx.inputs[0])
+        links.new(mul.outputs[0], mx.inputs[1])
+        acc = mx.outputs[0]
+    n3 = nodes.new("ShaderNodeTexNoise")
+    n3.inputs["Scale"].default_value = 1.6
+    n3.inputs["Detail"].default_value = 10.0
+    n3.inputs["Roughness"].default_value = 0.7
+    links.new(tc.outputs["Object"], n3.inputs["Vector"])
+    thr = nodes.new("ShaderNodeMath")          # noise - (1 - damage)
+    thr.operation = 'ADD'
+    links.new(n3.outputs["Fac"], thr.inputs[0])
+    links.new(acc, thr.inputs[1])
+    msk = nodes.new("ShaderNodeMapRange")       # 1.0 .. 1.12 -> 0 .. 1
+    msk.inputs["From Min"].default_value = 1.0
+    msk.inputs["From Max"].default_value = 1.12
+    links.new(thr.outputs[0], msk.inputs["Value"])
+    soot = nodes.new("ShaderNodeMix")
+    soot.data_type = 'RGBA'
+    soot.inputs["B"].default_value = (0.012, 0.011, 0.010, 1.0)
+    links.new(msk.outputs["Result"], soot.inputs["Factor"])
+    links.new(ramp.outputs["Color"], soot.inputs["A"])
+    links.new(soot.outputs["Result"], b.inputs["Base Color"])
+    rmix = nodes.new("ShaderNodeMix")
+    rmix.data_type = 'FLOAT'
+    rmix.inputs["B"].default_value = 0.95
+    links.new(msk.outputs["Result"], rmix.inputs["Factor"])
+    links.new(rr.outputs["Result"], rmix.inputs["A"])
+    links.new(rmix.outputs["Result"], b.inputs["Roughness"])
+    b.inputs["Metallic"].default_value = 0.22
     b.inputs["Specular IOR Level"].default_value = 0.45
     # fine grain bump
     n2 = nodes.new("ShaderNodeTexNoise")
@@ -130,8 +179,8 @@ def _make(name):
         return switchable(name, *SWITCHABLE[name])
     table = {
         # aircraft exterior
-        "edge":      dict(color=(0.16, 0.17, 0.18), rough=0.45, metal=0.3),
-        "panel":     dict(color=(0.19, 0.20, 0.21), rough=0.50, metal=0.3),
+        "edge":      dict(color=(0.098, 0.100, 0.104), rough=0.70, metal=0.1),
+        "panel":     dict(color=(0.125, 0.128, 0.132), rough=0.52, metal=0.2),
         "radome":    dict(color=(0.215, 0.225, 0.235), rough=0.45, metal=0.2),
         "canopy":    dict(color=(0.55, 0.42, 0.18), rough=0.03, metal=0.0,
                           transmission=1.0, ior=1.5, alpha=1.0),

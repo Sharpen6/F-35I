@@ -239,6 +239,7 @@ def build_nose(coll, bones):
                                    segments=16))
         lens = cylinder(f"NG_LampLens{k}", base + look * 0.05, base + look * 0.056, 0.040, None, coll,
                         M.get("landing_light"), segments=16)
+        lens["light"] = "landing"
         strut_objs.append(lens)
         lamps.append(lens)
     # lower (sliding) strut, fork, axle, torque links -> steer group

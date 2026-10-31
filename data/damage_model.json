@@ -1,0 +1,1295 @@
+{
+ "aircraft": "F-35I Adir (F-35A derivative)",
+ "units": "SI; aircraft axes x = left, s = aft of the nose tip, z = up (Blender: y = s - 7.835)",
+ "spec": {
+  "length_m": 15.67,
+  "span_m": 10.7,
+  "height_m": 4.38,
+  "wing_area_m2": 42.7,
+  "empty_kg": 13290.0,
+  "internal_fuel_kg": 8278.0,
+  "max_takeoff_kg": 31751.0,
+  "ref_stores_kg": 2191.0,
+  "ref_fuel_fraction": 0.6,
+  "thrust_dry_kN": 125.0,
+  "thrust_ab_kN": 191.0,
+  "tsfc_dry_kg_per_Nh": 0.0898,
+  "tsfc_ab_kg_per_Nh": 0.204,
+  "mach_limit": 1.6,
+  "vmax_kcas": 700.0,
+  "g_max": 9.0,
+  "g_min": -3.0,
+  "ceiling_m": 15240.0,
+  "aoa_max_deg": 50.0,
+  "cl_alpha_per_rad": 3.6,
+  "cl_max": 1.55,
+  "cd0_sub": 0.028,
+  "k_induced_sub": 0.15,
+  "clp": -0.32,
+  "cl_beta": -0.1,
+  "cy_beta": -0.95,
+  "cn_beta_body": -0.08,
+  "beta_max_deg": 8.0,
+  "trim_reserve": 0.6
+ },
+ "calibration": {
+  "cd0_peak": 0.07129573606982378
+ },
+ "components": {
+  "radome": {
+   "hp": 120,
+   "side": 0,
+   "detach": true,
+   "objects": [
+    "Fuselage_Nose"
+   ],
+   "mass": 55.0,
+   "arm": 0.0,
+   "systems": [
+    "radar"
+   ],
+   "drag": 0.003,
+   "mach_limit": 1.2,
+   "label": "Nose radome / AN/APG-81 radar",
+   "hitbox": {
+    "centre": [
+     0.0031,
+     0.609,
+     -0.0076
+    ],
+    "half": [
+     0.5023,
+     0.619,
+     0.4495
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 6.0
+   }
+  },
+  "cockpit": {
+   "hp": 160,
+   "side": 0,
+   "detach": false,
+   "objects": [
+    "Canopy_Glass",
+    "Canopy_Frame"
+   ],
+   "systems": [
+    "pilot",
+    "canopy"
+   ],
+   "drag": 0.004,
+   "q_limit": 0.55,
+   "label": "Cockpit and canopy",
+   "hitbox": {
+    "centre": [
+     0.0,
+     3.85,
+     0.85
+    ],
+    "half": [
+     0.5,
+     1.25,
+     0.55
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "fwd_fuselage": {
+   "hp": 420,
+   "side": 0,
+   "detach": false,
+   "objects": [
+    "Fuselage_Fwd",
+    "EOTS_Window",
+    "EOTS_Fairing"
+   ],
+   "systems": [
+    "eots",
+    "das",
+    "avionics",
+    "nose_gear"
+   ],
+   "drag": 0.002,
+   "structure": 0.35,
+   "label": "Forward fuselage (avionics, EOTS, DAS)",
+   "hitbox": {
+    "centre": [
+     0.0,
+     3.2208,
+     0.2551
+    ],
+    "half": [
+     1.75,
+     1.9808,
+     1.0042
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "inlet_L": {
+   "hp": 260,
+   "side": 1,
+   "detach": false,
+   "objects": [],
+   "airflow": 0.5,
+   "drag": 0.0025,
+   "label": "Left inlet and duct",
+   "hitbox": {
+    "centre": [
+     1.2,
+     6.1,
+     0.02
+    ],
+    "half": [
+     0.5,
+     1.85,
+     0.45
+    ],
+    "yaw_deg": -9.0,
+    "roll_deg": 0.0
+   }
+  },
+  "inlet_R": {
+   "hp": 260,
+   "side": -1,
+   "detach": false,
+   "objects": [],
+   "airflow": 0.5,
+   "drag": 0.0025,
+   "label": "Right inlet and duct",
+   "hitbox": {
+    "centre": [
+     -1.2,
+     6.1,
+     0.02
+    ],
+    "half": [
+     0.5,
+     1.85,
+     0.45
+    ],
+    "yaw_deg": 9.0,
+    "roll_deg": 0.0
+   }
+  },
+  "center_fuselage": {
+   "hp": 700,
+   "side": 0,
+   "detach": false,
+   "objects": [
+    "Fuselage_Center"
+   ],
+   "fuel": [
+    "fuselage",
+    4200.0
+   ],
+   "structure": 1.0,
+   "drag": 0.002,
+   "label": "Centre fuselage (main fuel tanks, wing carry-through)",
+   "hitbox": {
+    "centre": [
+     0.0,
+     7.86,
+     0.1654
+    ],
+    "half": [
+     1.8556,
+     2.67,
+     1.1046
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "fuel_feed": {
+   "hp": 180,
+   "side": 0,
+   "detach": false,
+   "objects": [],
+   "systems": [
+    "fuel_feed"
+   ],
+   "label": "Fuel feed / boost pumps",
+   "hitbox": {
+    "centre": [
+     0.0,
+     8.3,
+     0.55
+    ],
+    "half": [
+     0.45,
+     0.7,
+     0.3
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "weapon_bay_L": {
+   "hp": 220,
+   "side": 1,
+   "detach": false,
+   "objects": [
+    "BayDoor_Inner_L",
+    "BayDoor_Outer_L",
+    "GBU31_L",
+    "AIM120_L"
+   ],
+   "systems": [
+    "weapons_L"
+   ],
+   "drag": 0.0015,
+   "label": "Left weapon bay",
+   "hitbox": {
+    "centre": [
+     0.61,
+     8.65,
+     -0.66
+    ],
+    "half": [
+     0.48,
+     2.1,
+     0.34
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "weapon_bay_R": {
+   "hp": 220,
+   "side": -1,
+   "detach": false,
+   "objects": [
+    "BayDoor_Inner_R",
+    "BayDoor_Outer_R",
+    "GBU31_R",
+    "AIM120_R"
+   ],
+   "systems": [
+    "weapons_R"
+   ],
+   "drag": 0.0015,
+   "label": "Right weapon bay",
+   "hitbox": {
+    "centre": [
+     -0.61,
+     8.65,
+     -0.66
+    ],
+    "half": [
+     0.48,
+     2.1,
+     0.34
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "engine": {
+   "hp": 520,
+   "side": 0,
+   "detach": false,
+   "objects": [
+    "Nozzle"
+   ],
+   "thrust_core": true,
+   "label": "F135 engine",
+   "hitbox": {
+    "centre": [
+     0.0,
+     10.6,
+     0.12
+    ],
+    "half": [
+     0.64,
+     2.6,
+     0.64
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "nozzle": {
+   "hp": 200,
+   "side": 0,
+   "detach": false,
+   "objects": [
+    "Nozzle"
+   ],
+   "thrust_nozzle": true,
+   "label": "Afterburner and nozzle",
+   "hitbox": {
+    "centre": [
+     -0.003,
+     13.535,
+     0.1233
+    ],
+    "half": [
+     0.5811,
+     0.445,
+     0.5811
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": -3.0
+   }
+  },
+  "ipp": {
+   "hp": 150,
+   "side": 0,
+   "detach": false,
+   "objects": [],
+   "systems": [
+    "electrical",
+    "cooling"
+   ],
+   "label": "Power and thermal management (IPP, 270 V DC for the EHAs, cooling)",
+   "hitbox": {
+    "centre": [
+     0.45,
+     12.1,
+     -0.35
+    ],
+    "half": [
+     0.3,
+     0.45,
+     0.25
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "aft_fuselage": {
+   "hp": 450,
+   "side": 0,
+   "detach": false,
+   "objects": [
+    "Fuselage_Aft"
+   ],
+   "structure": 0.6,
+   "fuel": [
+    "aft",
+    900.0
+   ],
+   "drag": 0.0015,
+   "label": "Aft fuselage / tail booms",
+   "hitbox": {
+    "centre": [
+     0.0,
+     12.455,
+     0.0337
+    ],
+    "half": [
+     1.87,
+     1.855,
+     1.0231
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "gun": {
+   "hp": 90,
+   "side": 1,
+   "detach": false,
+   "objects": [
+    "GunDoor"
+   ],
+   "systems": [
+    "gun"
+   ],
+   "label": "GAU-22/A gun",
+   "hitbox": {
+    "centre": [
+     1.3,
+     5.45,
+     0.66
+    ],
+    "half": [
+     0.0669,
+     0.36,
+     0.0669
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": -11.0
+   }
+  },
+  "pilot": {
+   "hp": 100,
+   "side": 0,
+   "detach": false,
+   "objects": [],
+   "systems": [
+    "pilot"
+   ],
+   "label": "Pilot",
+   "hitbox": {
+    "centre": [
+     -0.0045,
+     3.4622,
+     0.7436
+    ],
+    "half": [
+     0.3932,
+     0.6886,
+     0.5472
+    ],
+    "yaw_deg": 6.0,
+    "roll_deg": 6.0
+   }
+  },
+  "nose_gear": {
+   "hp": 150,
+   "side": 0,
+   "detach": false,
+   "objects": [],
+   "systems": [
+    "nose_gear"
+   ],
+   "label": "Nose landing gear",
+   "hitbox": {
+    "centre": [
+     0.0,
+     4.4025,
+     -0.908
+    ],
+    "half": [
+     0.18,
+     0.6375,
+     0.8617
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "wing_root_L": {
+   "hp": 460,
+   "side": 1,
+   "detach": true,
+   "objects": [
+    "Wing_L"
+   ],
+   "mass": 420.0,
+   "arm": 2.5,
+   "lift": [
+    "root",
+    1
+   ],
+   "fuel": [
+    "wing_L",
+    1589.0
+   ],
+   "structure": 1.0,
+   "drag": 0.002,
+   "mach_limit": 1.0,
+   "label": "Inner left wing (wing box, fuel)",
+   "hitbox": {
+    "centre": [
+     2.9294,
+     9.63,
+     0.26
+    ],
+    "half": [
+     1.4394,
+     2.94,
+     0.1624
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "wing_outer_L": {
+   "hp": 260,
+   "side": 1,
+   "detach": true,
+   "parent": "wing_root_L",
+   "objects": [
+    "WingOuter_L",
+    "LEFOuter_L"
+   ],
+   "mass": 190.0,
+   "arm": 4.35,
+   "lift": [
+    "outer",
+    1
+   ],
+   "drag": 0.001,
+   "mach_limit": 1.2,
+   "label": "Outer left wing panel",
+   "hitbox": {
+    "centre": [
+     4.7214,
+     10.2844,
+     0.2714
+    ],
+    "half": [
+     0.7007,
+     1.52,
+     0.0698
+    ],
+    "yaw_deg": -11.0,
+    "roll_deg": 1.0
+   }
+  },
+  "lef_L": {
+   "hp": 120,
+   "side": 1,
+   "detach": true,
+   "parent": "wing_root_L",
+   "objects": [
+    "LEF_L"
+   ],
+   "mass": 45.0,
+   "arm": 3.0,
+   "roll": [
+    "lef",
+    1
+   ],
+   "clmax": 0.06,
+   "mach_limit": 1.4,
+   "label": "Left leading-edge flap",
+   "hitbox": {
+    "centre": [
+     3.7715,
+     9.2937,
+     0.236
+    ],
+    "half": [
+     1.7857,
+     0.3178,
+     0.1049
+    ],
+    "yaw_deg": 33.0,
+    "roll_deg": -1.0
+   }
+  },
+  "flaperon_L": {
+   "hp": 130,
+   "side": 1,
+   "detach": true,
+   "parent": "wing_root_L",
+   "objects": [
+    "Flaperon_L"
+   ],
+   "mass": 65.0,
+   "arm": 2.9,
+   "roll": [
+    "flaperon",
+    1
+   ],
+   "clmax": 0.08,
+   "mach_limit": 1.4,
+   "label": "Left flaperon",
+   "hitbox": {
+    "centre": [
+     3.115,
+     11.9083,
+     0.26
+    ],
+    "half": [
+     1.1549,
+     0.5649,
+     0.0685
+    ],
+    "yaw_deg": -1.0,
+    "roll_deg": 0.0
+   }
+  },
+  "stab_L": {
+   "hp": 220,
+   "side": 1,
+   "detach": true,
+   "objects": [
+    "Stabilator_L"
+   ],
+   "mass": 150.0,
+   "arm": 2.4,
+   "roll": [
+    "stab",
+    1
+   ],
+   "pitch": 0.5,
+   "drag": 0.001,
+   "mach_limit": 1.2,
+   "label": "Left stabilator",
+   "hitbox": {
+    "centre": [
+     2.115,
+     14.1943,
+     0.22
+    ],
+    "half": [
+     1.325,
+     1.5043,
+     0.0761
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "fin_L": {
+   "hp": 220,
+   "side": 1,
+   "detach": true,
+   "objects": [
+    "Fin_L",
+    "Rudder_L"
+   ],
+   "mass": 115.0,
+   "arm": 1.7,
+   "roll": [
+    "rudder",
+    1
+   ],
+   "yaw": 0.5,
+   "drag": 0.001,
+   "mach_limit": 1.3,
+   "label": "Left vertical tail and rudder",
+   "hitbox": {
+    "centre": [
+     1.7919,
+     13.0545,
+     1.3719
+    ],
+    "half": [
+     0.0698,
+     1.8555,
+     1.3175
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": -20.0
+   }
+  },
+  "main_gear_L": {
+   "hp": 160,
+   "side": 1,
+   "detach": false,
+   "objects": [
+    "MainGearDoor_L"
+   ],
+   "systems": [
+    "main_gear_L"
+   ],
+   "label": "Left main gear",
+   "hitbox": {
+    "centre": [
+     1.9001,
+     10.0869,
+     -0.8298
+    ],
+    "half": [
+     0.3141,
+     0.6882,
+     0.9959
+    ],
+    "yaw_deg": 2.0,
+    "roll_deg": 29.0
+   }
+  },
+  "wing_root_R": {
+   "hp": 460,
+   "side": -1,
+   "detach": true,
+   "objects": [
+    "Wing_R"
+   ],
+   "mass": 420.0,
+   "arm": 2.5,
+   "lift": [
+    "root",
+    -1
+   ],
+   "fuel": [
+    "wing_R",
+    1589.0
+   ],
+   "structure": 1.0,
+   "drag": 0.002,
+   "mach_limit": 1.0,
+   "label": "Inner right wing (wing box, fuel)",
+   "hitbox": {
+    "centre": [
+     -2.9248,
+     9.63,
+     0.26
+    ],
+    "half": [
+     1.4348,
+     2.94,
+     0.1624
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "wing_outer_R": {
+   "hp": 260,
+   "side": -1,
+   "detach": true,
+   "parent": "wing_root_R",
+   "objects": [
+    "WingOuter_R",
+    "LEFOuter_R"
+   ],
+   "mass": 190.0,
+   "arm": 4.35,
+   "lift": [
+    "outer",
+    -1
+   ],
+   "drag": 0.001,
+   "mach_limit": 1.2,
+   "label": "Outer right wing panel",
+   "hitbox": {
+    "centre": [
+     -4.721,
+     10.3051,
+     0.26
+    ],
+    "half": [
+     0.7021,
+     1.5139,
+     0.0694
+    ],
+    "yaw_deg": 10.0,
+    "roll_deg": 0.0
+   }
+  },
+  "lef_R": {
+   "hp": 120,
+   "side": -1,
+   "detach": true,
+   "parent": "wing_root_R",
+   "objects": [
+    "LEF_R"
+   ],
+   "mass": 45.0,
+   "arm": 3.0,
+   "roll": [
+    "lef",
+    -1
+   ],
+   "clmax": 0.06,
+   "mach_limit": 1.4,
+   "label": "Right leading-edge flap",
+   "hitbox": {
+    "centre": [
+     -3.7715,
+     9.2937,
+     0.236
+    ],
+    "half": [
+     1.7857,
+     0.3178,
+     0.1049
+    ],
+    "yaw_deg": -33.0,
+    "roll_deg": 1.0
+   }
+  },
+  "flaperon_R": {
+   "hp": 130,
+   "side": -1,
+   "detach": true,
+   "parent": "wing_root_R",
+   "objects": [
+    "Flaperon_R"
+   ],
+   "mass": 65.0,
+   "arm": 2.9,
+   "roll": [
+    "flaperon",
+    -1
+   ],
+   "clmax": 0.08,
+   "mach_limit": 1.4,
+   "label": "Right flaperon",
+   "hitbox": {
+    "centre": [
+     -3.115,
+     11.9083,
+     0.26
+    ],
+    "half": [
+     1.1549,
+     0.5649,
+     0.0685
+    ],
+    "yaw_deg": 1.0,
+    "roll_deg": 0.0
+   }
+  },
+  "stab_R": {
+   "hp": 220,
+   "side": -1,
+   "detach": true,
+   "objects": [
+    "Stabilator_R"
+   ],
+   "mass": 150.0,
+   "arm": 2.4,
+   "roll": [
+    "stab",
+    -1
+   ],
+   "pitch": 0.5,
+   "drag": 0.001,
+   "mach_limit": 1.2,
+   "label": "Right stabilator",
+   "hitbox": {
+    "centre": [
+     -2.115,
+     14.1943,
+     0.22
+    ],
+    "half": [
+     1.325,
+     1.5043,
+     0.0761
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 0.0
+   }
+  },
+  "fin_R": {
+   "hp": 220,
+   "side": -1,
+   "detach": true,
+   "objects": [
+    "Fin_R",
+    "Rudder_R"
+   ],
+   "mass": 115.0,
+   "arm": 1.7,
+   "roll": [
+    "rudder",
+    -1
+   ],
+   "yaw": 0.5,
+   "drag": 0.001,
+   "mach_limit": 1.3,
+   "label": "Right vertical tail and rudder",
+   "hitbox": {
+    "centre": [
+     -1.7919,
+     13.0545,
+     1.3719
+    ],
+    "half": [
+     0.0698,
+     1.8555,
+     1.3175
+    ],
+    "yaw_deg": 0.0,
+    "roll_deg": 20.0
+   }
+  },
+  "main_gear_R": {
+   "hp": 160,
+   "side": -1,
+   "detach": false,
+   "objects": [
+    "MainGearDoor_R"
+   ],
+   "systems": [
+    "main_gear_R"
+   ],
+   "label": "Right main gear",
+   "hitbox": {
+    "centre": [
+     -1.9001,
+     10.0869,
+     -0.8298
+    ],
+    "half": [
+     0.3141,
+     0.6882,
+     0.9959
+    ],
+    "yaw_deg": -2.0,
+    "roll_deg": -29.0
+   }
+  }
+ },
+ "lift_split": {
+  "outer_share": 0.2437,
+  "outer_arm": 4.682,
+  "root_arm": 2.838,
+  "panel_area_m2": 11.846,
+  "outer_area_m2": 2.722
+ },
+ "ground_attitude": {
+  "main_gear_L": {
+   "roll_deg": 12.68,
+   "pitch_deg": 4.56,
+   "angle_deg": 13.5,
+   "axis_point": [
+    -0.0263,
+    -3.585,
+    -1.7597
+   ],
+   "axis_dir": [
+    -0.34078,
+    0.94014,
+    1e-05
+   ],
+   "touch_point_xsz": [
+    0.859,
+    11.78,
+    -0.944
+   ]
+  },
+  "main_gear_R": {
+   "roll_deg": -12.97,
+   "pitch_deg": 4.61,
+   "angle_deg": 13.79,
+   "axis_point": [
+    -0.0263,
+    -3.585,
+    -1.7597
+   ],
+   "axis_dir": [
+    -0.33743,
+    -0.94135,
+    -1e-05
+   ],
+   "touch_point_xsz": [
+    -0.859,
+    11.78,
+    -0.944
+   ]
+  },
+  "nose_gear": {
+   "roll_deg": -0.0,
+   "pitch_deg": -7.73,
+   "angle_deg": 7.73,
+   "axis_point": [
+    2.1315,
+    2.435,
+    -1.7596
+   ],
+   "axis_dir": [
+    1.0,
+    -0.0,
+    0.0
+   ],
+   "touch_point_xsz": [
+    -0.039,
+    2.142,
+    -0.657
+   ]
+  }
+ },
+ "blender": {
+  "radome": {
+   "objects": [
+    "Fuselage_Nose"
+   ],
+   "hitbox_object": "HB_radome",
+   "health_property": "F35I_Rig[\"health_radome\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_radome\"]",
+   "debris_empty": "Debris_radome"
+  },
+  "cockpit": {
+   "objects": [
+    "Canopy_Glass",
+    "Canopy_Frame"
+   ],
+   "hitbox_object": "HB_cockpit",
+   "health_property": "F35I_Rig[\"health_cockpit\"]"
+  },
+  "fwd_fuselage": {
+   "objects": [
+    "Fuselage_Fwd",
+    "EOTS_Window",
+    "EOTS_Fairing"
+   ],
+   "hitbox_object": "HB_fwd_fuselage",
+   "health_property": "F35I_Rig[\"health_fwd_fuselage\"]"
+  },
+  "inlet_L": {
+   "objects": [],
+   "hitbox_object": "HB_inlet_L",
+   "health_property": "F35I_Rig[\"health_inlet_L\"]"
+  },
+  "inlet_R": {
+   "objects": [],
+   "hitbox_object": "HB_inlet_R",
+   "health_property": "F35I_Rig[\"health_inlet_R\"]"
+  },
+  "center_fuselage": {
+   "objects": [
+    "Fuselage_Center"
+   ],
+   "hitbox_object": "HB_center_fuselage",
+   "health_property": "F35I_Rig[\"health_center_fuselage\"]"
+  },
+  "fuel_feed": {
+   "objects": [],
+   "hitbox_object": "HB_fuel_feed",
+   "health_property": "F35I_Rig[\"health_fuel_feed\"]"
+  },
+  "weapon_bay_L": {
+   "objects": [
+    "BayDoor_Inner_L",
+    "BayDoor_Outer_L",
+    "GBU31_L",
+    "AIM120_L"
+   ],
+   "hitbox_object": "HB_weapon_bay_L",
+   "health_property": "F35I_Rig[\"health_weapon_bay_L\"]"
+  },
+  "weapon_bay_R": {
+   "objects": [
+    "BayDoor_Inner_R",
+    "BayDoor_Outer_R",
+    "GBU31_R",
+    "AIM120_R"
+   ],
+   "hitbox_object": "HB_weapon_bay_R",
+   "health_property": "F35I_Rig[\"health_weapon_bay_R\"]"
+  },
+  "engine": {
+   "objects": [
+    "Nozzle"
+   ],
+   "hitbox_object": "HB_engine",
+   "health_property": "F35I_Rig[\"health_engine\"]"
+  },
+  "nozzle": {
+   "objects": [
+    "Nozzle"
+   ],
+   "hitbox_object": "HB_nozzle",
+   "health_property": "F35I_Rig[\"health_nozzle\"]"
+  },
+  "ipp": {
+   "objects": [],
+   "hitbox_object": "HB_ipp",
+   "health_property": "F35I_Rig[\"health_ipp\"]"
+  },
+  "aft_fuselage": {
+   "objects": [
+    "Fuselage_Aft"
+   ],
+   "hitbox_object": "HB_aft_fuselage",
+   "health_property": "F35I_Rig[\"health_aft_fuselage\"]"
+  },
+  "gun": {
+   "objects": [
+    "GunDoor"
+   ],
+   "hitbox_object": "HB_gun",
+   "health_property": "F35I_Rig[\"health_gun\"]"
+  },
+  "pilot": {
+   "objects": [],
+   "hitbox_object": "HB_pilot",
+   "health_property": "F35I_Rig[\"health_pilot\"]"
+  },
+  "nose_gear": {
+   "objects": [],
+   "hitbox_object": "HB_nose_gear",
+   "health_property": "F35I_Rig[\"health_nose_gear\"]"
+  },
+  "wing_root_L": {
+   "objects": [
+    "Wing_L"
+   ],
+   "hitbox_object": "HB_wing_root_L",
+   "health_property": "F35I_Rig[\"health_wing_root_L\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_wing_root_L\"]",
+   "debris_empty": "Debris_wing_root_L"
+  },
+  "wing_outer_L": {
+   "objects": [
+    "WingOuter_L",
+    "LEFOuter_L"
+   ],
+   "hitbox_object": "HB_wing_outer_L",
+   "health_property": "F35I_Rig[\"health_wing_outer_L\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_wing_outer_L\"]",
+   "debris_empty": "Debris_wing_outer_L"
+  },
+  "lef_L": {
+   "objects": [
+    "LEF_L"
+   ],
+   "hitbox_object": "HB_lef_L",
+   "health_property": "F35I_Rig[\"health_lef_L\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_lef_L\"]",
+   "debris_empty": "Debris_lef_L"
+  },
+  "flaperon_L": {
+   "objects": [
+    "Flaperon_L"
+   ],
+   "hitbox_object": "HB_flaperon_L",
+   "health_property": "F35I_Rig[\"health_flaperon_L\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_flaperon_L\"]",
+   "debris_empty": "Debris_flaperon_L"
+  },
+  "stab_L": {
+   "objects": [
+    "Stabilator_L"
+   ],
+   "hitbox_object": "HB_stab_L",
+   "health_property": "F35I_Rig[\"health_stab_L\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_stab_L\"]",
+   "debris_empty": "Debris_stab_L"
+  },
+  "fin_L": {
+   "objects": [
+    "Fin_L",
+    "Rudder_L"
+   ],
+   "hitbox_object": "HB_fin_L",
+   "health_property": "F35I_Rig[\"health_fin_L\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_fin_L\"]",
+   "debris_empty": "Debris_fin_L"
+  },
+  "main_gear_L": {
+   "objects": [
+    "MainGearDoor_L"
+   ],
+   "hitbox_object": "HB_main_gear_L",
+   "health_property": "F35I_Rig[\"health_main_gear_L\"]"
+  },
+  "wing_root_R": {
+   "objects": [
+    "Wing_R"
+   ],
+   "hitbox_object": "HB_wing_root_R",
+   "health_property": "F35I_Rig[\"health_wing_root_R\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_wing_root_R\"]",
+   "debris_empty": "Debris_wing_root_R"
+  },
+  "wing_outer_R": {
+   "objects": [
+    "WingOuter_R",
+    "LEFOuter_R"
+   ],
+   "hitbox_object": "HB_wing_outer_R",
+   "health_property": "F35I_Rig[\"health_wing_outer_R\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_wing_outer_R\"]",
+   "debris_empty": "Debris_wing_outer_R"
+  },
+  "lef_R": {
+   "objects": [
+    "LEF_R"
+   ],
+   "hitbox_object": "HB_lef_R",
+   "health_property": "F35I_Rig[\"health_lef_R\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_lef_R\"]",
+   "debris_empty": "Debris_lef_R"
+  },
+  "flaperon_R": {
+   "objects": [
+    "Flaperon_R"
+   ],
+   "hitbox_object": "HB_flaperon_R",
+   "health_property": "F35I_Rig[\"health_flaperon_R\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_flaperon_R\"]",
+   "debris_empty": "Debris_flaperon_R"
+  },
+  "stab_R": {
+   "objects": [
+    "Stabilator_R"
+   ],
+   "hitbox_object": "HB_stab_R",
+   "health_property": "F35I_Rig[\"health_stab_R\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_stab_R\"]",
+   "debris_empty": "Debris_stab_R"
+  },
+  "fin_R": {
+   "objects": [
+    "Fin_R",
+    "Rudder_R"
+   ],
+   "hitbox_object": "HB_fin_R",
+   "health_property": "F35I_Rig[\"health_fin_R\"]",
+   "break_frame_property": "F35I_Rig[\"break_frame_fin_R\"]",
+   "debris_empty": "Debris_fin_R"
+  },
+  "main_gear_R": {
+   "objects": [
+    "MainGearDoor_R"
+   ],
+   "hitbox_object": "HB_main_gear_R",
+   "health_property": "F35I_Rig[\"health_main_gear_R\"]"
+  }
+ },
+ "intact_attributes": {
+  "thrust_dry_kN_SL": 125.0,
+  "thrust_ab_kN_SL": 191.0,
+  "thrust_percent": 100,
+  "afterburner_available": true,
+  "thrust_to_weight": 0.953,
+  "g_limit": 9.0,
+  "mach_placard": 1.6,
+  "max_mach_11km": 1.6,
+  "max_mach_11km_limited_by": "Mach limit",
+  "max_mach_SL": 1.058,
+  "max_mach_SL_limited_by": "q / KCAS limit",
+  "max_mach_dry_11km": 1.068,
+  "max_speed_kmh_11km": 1700,
+  "max_speed_kmh_SL": 1296,
+  "cl_max": 1.55,
+  "stall_speed_kt_SL": 136.7,
+  "flight_condition": "M0.80 at 6.0 km",
+  "required_CL": 0.222,
+  "asymmetric_Cl": 0.0,
+  "roll_control_budget_Cl": 0.025,
+  "roll_control_used": 0.0,
+  "sideslip_deg": 0.0,
+  "tilt_towards": "none",
+  "stalled": false,
+  "controllable": true,
+  "tilt_bank_deg": 0.0,
+  "roll_off_rate_deg_s": 0.0,
+  "max_roll_rate_deg_s": 211.8,
+  "v_min_control_kt_SL": 140,
+  "cn_beta_per_rad": 0.14,
+  "aoa_limit_deg": 50.0,
+  "directionally_stable": true,
+  "departure_risk": "low",
+  "pitch_authority": 1.0,
+  "roll_authority": 1.0,
+  "fuel_kg": 4967,
+  "fuel_lost_with_parts_kg": 0,
+  "fuel_leak_kg_min": 0.0,
+  "fuel_burn_kg_min": 47.8,
+  "fuel_lateral_imbalance_kg": 0,
+  "structure_lost_kg": 0,
+  "mass_kg": 20448,
+  "endurance_min": 93.5,
+  "systems": {
+   "avionics": true,
+   "canopy": true,
+   "cooling": true,
+   "das": true,
+   "electrical": true,
+   "eots": true,
+   "fuel_feed": true,
+   "gun": true,
+   "main_gear_L": true,
+   "main_gear_R": true,
+   "nose_gear": true,
+   "pilot": true,
+   "radar": true,
+   "weapons_L": true,
+   "weapons_R": true,
+   "afterburner": true,
+   "engine_running": true,
+   "flight_controls_power": "IPP / 270 V DC",
+   "fire": false
+  },
+  "ground_attitude": {
+   "roll_deg": 0.0,
+   "pitch_deg": 0.0
+  },
+  "missing_parts": []
+ }
+}

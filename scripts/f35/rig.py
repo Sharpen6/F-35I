@@ -311,14 +311,18 @@ def build(ctx):
         role = ob.get("light")
         if not role:
             continue
-        ob["on"] = 0.0
+        if role != "afterburner":
+            ob["on"] = 0.0
         if role == "landing":
-            _driver(ob, '["on"]', None, f"batt*sw*{SS}(0.9, 1.0, gear)", arm, ["batt"],
+            _driver(ob, '["on"]', None, f"batt*sw*{SS}(0.9, 1.0, gear)", arm, ["batt", "gear"],
                     [("sw", arm, '["sw_LDG_LT"]')])
         elif role == "nav":
             _driver(ob, '["on"]', None, "batt*sw", arm, ["batt"], [("sw", arm, '["sw_POS_LT"]')])
         elif role == "formation":
             _driver(ob, '["on"]', None, "batt*sw", arm, ["batt"], [("sw", arm, '["sw_FORM_LT"]')])
+        elif role == "afterburner":
+            _driver(ob, '["ab"]', None, "clamp((thr - 0.75)*4, 0, 1)", arm)
+            continue
         elif role == "beacon":
             # anti-collision strobe: 1 Hz flash using the frame number (24 fps)
             _driver(ob, '["on"]', None, "batt*sw*(fmod(frame, 24) < 3)", arm, ["batt"],

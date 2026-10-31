@@ -29,6 +29,9 @@ CAMS = {
     "tail":   ((-6.0, 12.0, 2.5), (0.0, 5.5, 0.6), 50),
     "gear":   ((-6.0, -3.0, -1.0), (0.0, 0.5, -1.0), 30),
     "gearside": ((-11.0, 1.5, -0.9), (0.0, 1.5, -0.9), 35),
+    "noseL":  ((7.0, -7.0, 0.8), (0.0, -4.6, 0.1), 35),
+    "finL":   ((9.0, 8.0, 3.5), (1.6, 5.4, 1.6), 40),
+    "topL":   ((6.0, 4.0, 14.0), (2.0, 2.0, 0.0), 40),
     "gearfront": ((0.0, -14.0, -1.0), (0.0, 0.0, -0.9), 45),
     "belly":  ((0.0, 1.0, -14.0), (0.0, 1.0, 0.0), 50),
     "mainwell": ((-5.5, -2.5, -2.4), (-1.6, 2.0, -0.6), 35),
@@ -57,6 +60,12 @@ def render(out_dir, views, res=(1280, 720), engine='WORKBENCH', samples=32):
         sh.show_shadows = False
         sh.show_specular_highlight = True
         sc.display.render_aa = '8'
+    elif engine == 'EEVEE':
+        sc.render.engine = 'BLENDER_EEVEE'
+        try:
+            sc.eevee.taa_render_samples = samples
+        except Exception:
+            pass
     else:
         sc.render.engine = 'CYCLES'
         sc.cycles.samples = samples
@@ -108,5 +117,5 @@ if __name__ == "__main__":
         for ob in bpy.data.objects:
             if ob.name.startswith(pre):
                 ob.hide_render = True
-    for p in render(out_dir, views, engine=eng):
+    for p in render(out_dir, views, engine=eng, samples=int(os.environ.get("PREVIEW_SAMPLES", "32"))):
         print("PREVIEW", p)

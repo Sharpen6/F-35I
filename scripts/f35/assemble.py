@@ -47,12 +47,15 @@ def build_all(parts):
     if "markings" in parts:
         from . import markings
         markings.build(ctx)
+    if "damage" in parts:            # fracture breakable parts before the rig parents them
+        from . import destruct
+        destruct.prepare(ctx)
     if "rig" in parts:
         from . import rig
         rig.build(ctx)
-    if "damage" in parts:
+    if "damage" in parts and "rig" in parts:
         from . import destruct
-        destruct.build(ctx)
+        info["damage"] = destruct.build(ctx)
     if "scene" in parts:
         from . import scene
         scene.build(ctx)
