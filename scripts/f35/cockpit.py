@@ -16,8 +16,8 @@ from .textures import pcd_image
 from . import materials as M
 
 PANEL_TILT = math.radians(23.0)       # PCD face tilted back from vertical
-PANEL_C = (0.0, 2.92, 0.70)           # (x, s, z) centre of the PCD face
-EYE = (0.0, 3.76, 1.07)
+PANEL_C = (0.0, 3.06, 0.70)           # (x, s, z) centre of the PCD face
+EYE = (0.0, 3.90, 1.13)
 
 
 # --------------------------------------------------------------------------
@@ -184,7 +184,7 @@ def build(ctx):
     # ---------------------------------------------------------------- panel
     panel_body = _obj("Cockpit_Panel", _box_mesh(0.88, 0.14, 0.36), coll,
                       M.get("cockpit_panel"), loc=panel_frame(0, -0.03, -0.075),
-                      rot=(-PANEL_TILT, 0, 0), bevel=0.006)
+                      rot=(PANEL_TILT, 0, 0), bevel=0.006)
     # PCD screen with emissive display page
     img = pcd_image()
     scr_mat = bpy.data.materials.new("F35_PCD_Screen")
@@ -230,11 +230,11 @@ def build(ctx):
     _obj("PCD_Bezel", _merge(bz), coll, M.get("cockpit"))
     # glare shield (hood over the display)
     gs = _obj("Glareshield", _box_mesh(0.86, 0.22, 0.03), coll, M.get("cockpit"),
-              loc=panel_frame(0, 0.135, 0.075), rot=(math.radians(-10), 0, 0), bevel=0.01)
+              loc=panel_frame(0, 0.135, 0.075), rot=(math.radians(10), 0, 0), bevel=0.01)
     # lower switch panel
-    lp = _obj("Cockpit_LowerPanel", _box_mesh(0.80, 0.10, 0.13), coll,
-              M.get("cockpit_panel"), loc=panel_frame(0, -0.23, -0.04),
-              rot=(-PANEL_TILT, 0, 0), bevel=0.004)
+    lp = _obj("Cockpit_LowerPanel", _box_mesh(0.80, 0.10, 0.10), coll,
+              M.get("cockpit_panel"), loc=panel_frame(0, -0.215, -0.04),
+              rot=(PANEL_TILT, 0, 0), bevel=0.004)
     # side consoles
     for side, tag in ((1, "L"), (-1, "R")):
         _obj(f"Console_{tag}", _box_mesh(0.17, 1.05, 0.30), coll, M.get("cockpit_panel"),
@@ -246,16 +246,16 @@ def build(ctx):
         rotm = Matrix.Rotation(math.radians(90), 4, 'X')
         av = [rotm @ vv + Vector((0, 0, 0.07)) for vv in arm[0]]
         ped = _obj(f"Pedal_{tag}", _merge([(v1, f1), (av, arm[1])]), coll,
-                   M.get("switch"), loc=W(side * 0.14, 2.66, 0.20))
+                   M.get("switch"), loc=W(side * 0.14, 2.86, 0.22))
         objs[f"Pedal_{tag}"] = ped
     # ---------------------------------------------------------- throttle
     thr_base = _obj("Throttle_Base", _box_mesh(0.07, 0.28, 0.02), coll, M.get("cockpit"),
-                    loc=W(0.37, 3.62, CONSOLE_Z + 0.01))
+                    loc=W(0.37, 3.60, CONSOLE_Z + 0.01))
     lever = _cyl_mesh(0.010, 0.13)
     grip = _box_mesh(0.045, 0.085, 0.06, 0.012, -0.01, 0.15)
     btns = _box_mesh(0.012, 0.02, 0.012, -0.012, -0.045, 0.165)
     thr = _obj("Throttle", _merge([lever, grip, btns]), coll, M.get("cockpit"),
-               loc=W(0.37, 3.66, CONSOLE_Z + 0.02), bevel=0.004)
+               loc=W(0.37, 3.64, CONSOLE_Z + 0.02), bevel=0.004)
     objs["Throttle"] = thr
     # ---------------------------------------------------------- side-stick
     boot = _cyl_mesh(0.035, 0.04, seg=18, r_top=0.022)
@@ -340,7 +340,7 @@ def build_seat(coll):
     """Martin-Baker US16E style ejection seat (simplified)."""
     objs = {}
     parts = []
-    s_pan_f, s_pan_b, z_pan = 3.74, 4.16, 0.40
+    s_pan_f, s_pan_b, z_pan = 3.55, 3.97, 0.40
     # seat pan (bucket bottom)
     parts.append(_box_mesh(0.44, s_pan_b - s_pan_f, 0.10, 0, 0, 0))
     pan_loc = W(0, (s_pan_f + s_pan_b) / 2, z_pan - 0.05)
@@ -348,21 +348,21 @@ def build_seat(coll):
     # back (reclined ~18 deg)
     rec = math.radians(18)
     back = _obj("Seat_Back", _box_mesh(0.46, 0.10, 0.82), coll, M.get("seat"),
-                loc=W(0, 4.30, 0.80), rot=(rec, 0, 0), bevel=0.012)
+                loc=W(0, 4.12, 0.80), rot=(-rec, 0, 0), bevel=0.012)
     # headbox with drogue container
-    head = _obj("Seat_Headbox", _box_mesh(0.30, 0.20, 0.26), coll, M.get("seat"),
-                loc=W(0, 4.47, 1.18), rot=(rec, 0, 0), bevel=0.02)
+    head = _obj("Seat_Headbox", _box_mesh(0.30, 0.18, 0.24), coll, M.get("seat"),
+                loc=W(0, 4.33, 1.16), rot=(-rec, 0, 0), bevel=0.02)
     # side rails / guide rails
     for side in (1, -1):
         _obj(f"Seat_Rail_{'L' if side > 0 else 'R'}", _box_mesh(0.035, 0.07, 1.05), coll,
-             M.get("seat"), loc=W(side * 0.235, 4.33, 0.82), rot=(rec, 0, 0), bevel=0.006)
+             M.get("seat"), loc=W(side * 0.235, 4.15, 0.82), rot=(-rec, 0, 0), bevel=0.006)
         _obj(f"Seat_Side_{'L' if side > 0 else 'R'}", _box_mesh(0.03, 0.40, 0.17), coll,
-             M.get("seat"), loc=W(side * 0.235, 3.97, 0.46), bevel=0.006)
+             M.get("seat"), loc=W(side * 0.235, 3.78, 0.46), bevel=0.006)
     # cushions
     _obj("Seat_Cushion", _box_mesh(0.40, 0.38, 0.05), coll, M.get("seat_cushion"),
-         loc=W(0, 3.95, z_pan + 0.025), bevel=0.015)
+         loc=W(0, 3.76, z_pan + 0.025), bevel=0.015)
     _obj("Seat_BackCushion", _box_mesh(0.38, 0.05, 0.62), coll, M.get("seat_cushion"),
-         loc=W(0, 4.215, 0.80), rot=(rec, 0, 0), bevel=0.015)
+         loc=W(0, 4.035, 0.80), rot=(-rec, 0, 0), bevel=0.015)
     # ejection handle (yellow/black loop) at the front of the seat pan
     loop = _cyl_mesh(0.009, 0.16, seg=10)
     rotm = Matrix.Rotation(math.radians(90), 4, 'Y')
@@ -371,6 +371,6 @@ def build_seat(coll):
     l2v = [v + Vector((-0.08, 0, -0.06)) for v in l2[0]]
     l3v = [v + Vector((0.08, 0, -0.06)) for v in l2[0]]
     ej = _obj("Seat_EjectHandle", _merge([(lv, loop[1]), (l2v, l2[1]), (l3v, l2[1])]), coll,
-              M.get("yellow_black"), loc=W(0, 3.73, 0.43))
+              M.get("yellow_black"), loc=W(0, 3.54, 0.43))
     objs["Seat_EjectHandle"] = ej
     return objs

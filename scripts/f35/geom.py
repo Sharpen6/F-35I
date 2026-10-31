@@ -15,7 +15,7 @@ from mathutils import Vector
 
 L_TOTAL = 15.67          # overall length (m)
 Y0 = L_TOTAL * 0.5       # nose sits at y = -Y0
-GROUND_Z = -1.82         # ground plane (gear down, static)
+GROUND_Z = -1.76         # ground plane (gear down, static; tyre bottoms)
 
 
 def P(s, x, z):

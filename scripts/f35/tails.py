@@ -5,15 +5,15 @@ from .geom import Pchip, get_collection, Y0
 from .surfaces import Frame, lifting_surface, split_surface, set_hinge
 from . import materials as M
 
-FIN_CANT = math.radians(22.0)      # outward cant from vertical
-FIN_ROOT = (1.44, 0.60)            # (half width, z) of the fin root line
-FIN_SPAN = 2.16                    # along the canted plane
-FIN_LE = (11.54, 13.52)            # root / tip leading edge station
-FIN_TE = (13.97, 14.90)            # root / tip trailing edge station
-RUD_HINGE = (13.48, 14.45)         # rudder hinge station at root / tip
+FIN_CANT = math.radians(20.0)      # outward cant from vertical (measured 20.2-20.3)
+FIN_ROOT = (1.42, 0.35)            # (half width, z) of the fin root line (buried)
+FIN_SPAN = 2.395                   # along the canted plane -> tip (2.24, 2.60)
+FIN_LE = (11.40, 13.48)            # root / tip leading edge station
+FIN_TE = (13.90, 14.90)            # root / tip trailing edge station
+RUD_HINGE = (13.42, 14.45)         # rudder hinge station at root / tip
 
 STAB_ROOT = (0.80, 0.22)
-STAB_TIP_HW = 3.66
+STAB_TIP_HW = 3.43                 # official span 6.86 m (3-view is ~5 % oversize)
 _STAB_LE = Pchip([0.80, 1.30, 1.95, 2.20, 2.90, 3.66],
                  [12.70, 12.80, 12.92, 13.15, 13.62, 14.14])
 _STAB_TE = Pchip([0.80, 1.00, 2.30, 3.66], [15.64, 15.69, 15.37, 15.03])
@@ -60,7 +60,7 @@ def build(ctx):
                                M.get("skin"), n_chord=40)
         p0 = fr.world(0.0, STAB_PIVOT_S, 0.0)
         p1 = fr.world(1.0, STAB_PIVOT_S, 0.0)
-        set_hinge(stab, p0, p1, "stabilator", (-25.0, 25.0), {"side": side})
+        set_hinge(stab, p0, p1, "stabilator", (-21.0, 21.0), {"side": side})
         objs[f"Stabilator_{tag}"] = stab
     ctx["objects"].update(objs)
     return objs

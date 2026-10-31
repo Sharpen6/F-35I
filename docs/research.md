@@ -1,0 +1,429 @@
+# F-35I "Adir" / F-35A: public reference data for the Blender model
+
+**Scope.** These notes use only openly published material: manufacturer and air-force fact sheets, press articles, a university student report, and hobby and modelling references. No classified, export-controlled or otherwise sensitive data was looked for or used. Externally the F-35I is an F-35A (CTOL) airframe; its Israeli-unique systems are internal. All F-35A geometry therefore applies.
+
+**Source tags** (used throughout):
+
+| Tag | Meaning |
+|---|---|
+| **[O]** | Official figure (Lockheed Martin, USAF, Pratt & Whitney, MINDEF Singapore) |
+| **[M]** | Measured by me on the project's 3-view drawing (see below) |
+| **[S]** | Virginia Tech AOE student design report. Unofficial; derived from drawings |
+| **[P]** | Estimated from public photos; limited by perspective |
+| **[F]** | Forum, hobby or press claim; unconfirmed |
+
+**About the 3-view.** The drawing is Wikimedia Commons "Lockheed Martin F-35I Adir 3-view drawing". The project notes give its licence as CC BY-SA 4.0. I measured a local copy, the one used by `scripts/review_compare.py`, because Commons was not reachable from this environment.
+- Scale: 708 px = 15.67 m, which is 45.18 px/m.
+- One pixel is about ±0.02 m, but the outlines are artwork, not survey data.
+- The wingspan on the drawing checks within 0.6 % of the official value.
+
+**Axes.**
+- **X**: metres aft of the nose tip, with L = 15.67 m. LM's 51.4 ft is 15.67 m.
+- **Y**: lateral distance from the centreline.
+- **Z**: height above the nose-tip waterline (WL 0).
+- The 3-view is drawn gear up.
+
+## 1. Overall dimensions
+
+| Item | Value | Tag |
+|---|---|---|
+| Length | 15.7 m (51.4 ft) | O |
+| Wingspan | 10.7 m (35 ft). The 3-view gives 10.73 m | O / M |
+| Height, gear down (ground to fin tip) | 4.38 m (14.4 ft) | O |
+| Wing area | 42.7 m² (460 ft²) | O |
+| **Horizontal-tail (stabilator) span** | **6.86 m (22.5 ft)**, so the half-span is 3.43 m | O |
+| Aspect ratio | 2.66 | Wikipedia |
+| Wing taper ratio | 0.243 | S |
+| Wing root / tip chord | 6.46 m / 1.57 m. Tip chord on the 3-view is about 1.5–1.6 m | S / M |
+| Mean aerodynamic chord (MAC) | 4.51 m | S |
+| Wing sweep: LE / quarter-chord / TE | 34.13° / 24.16° / −13.0°. The trailing edge sweeps forward | S |
+| Wing sweep on the 3-view | Main-panel LE 34.1° from X ≈ 8.0 m. LERX blend about 63° over X ≈ 7.1–8.0 m. TE about −14° | M |
+| Stabilator sweep | LE ≈ 34.3°, TE ≈ −14°. The edges are parallel to the wing edges (planform alignment) | M |
+| **Vertical-tail cant** | **20.2° (left) / 20.3° (right)**, outboard from vertical | M |
+| Vertical-tail sweep, side projection | LE ≈ 42°, TE ≈ 28°, both swept back. In the canted plane this is about 40° / 26° | M |
+| Vertical-tail chords and taper | Root ≈ 2.4 m, tip ≈ 1.46 m, taper ≈ 0.6. S gives taper 0.59 | M / S |
+| Tail areas | Horizontal 11.96 m². Vertical 7.95 m² (apparently both fins together) | S |
+| Wing dihedral | About 0° (±0.5°; limited by resolution) | M |
+| Stabilator dihedral | About 0° to +2° | M |
+| Wheel track | 4.34 m (14.24 ft). A rear-quarter photo, scaled by the fin-tip spacing, gives at least about 4.1 m | S / P |
+| Wheelbase | 6.02 m (19.75 ft) | S |
+
+- **Non-shape context [O]:**
+  - empty weight 13,290 kg (29,300 lb)
+  - internal fuel 8,278 kg (18,250 lb)
+  - internal-plus-external payload 8,160 kg (18,000 lb)
+  - maximum take-off weight in the 70,000 lb class
+  - Mach 1.6 and 9 g
+- **Other variants [O]:**
+  - F-35B: tail span 6.65 m, height 4.36 m.
+  - F-35C: span 13.1 m, wing area 62.1 m², tail span 8.02 m, height 4.48 m.
+
+> **Caution: stabilator span on the 3-view.** The drawing's stabilators are too large compared with the official figure:
+> - top view: 7.28 m tip to tip
+> - front view: 7.13 m tip to tip
+> - official span: 6.86 m
+>
+> That is about 4–6 % oversize. Every other check on the drawing agrees with official figures. If the model is registered to the drawing, keep the official 6.86 m span and accept a small silhouette mismatch at the stabilator tips.
+
+## 2. Stations, cross-sections and positions
+
+### Longitudinal stations
+
+| Feature | X (m) | X/L | Notes |
+|---|---|---|---|
+| Nose tip | 0 | 0.000 | WL 0 |
+| Radome aft joint | ≈ 1.1–1.3 | ≈ 0.07–0.08 | P (side photo of 926). The joint is not drawn on the 3-view |
+| EOTS chin fairing (faceted window) | ≈ 1.5–2.0 | 0.10–0.13 | M. Fairing bottom at Z ≈ −0.61 m |
+| Canopy frame front (windscreen base) | 1.83 | 0.117 | M. Glazing begins at 1.9–2.0 m |
+| Canopy internal bow frame | About ⅓ of the canopy length aft of its front | — | P |
+| Canopy top (highest point) | 3.1–4.1 | 0.20–0.26 | M. Z = +1.36 m |
+| Canopy glazing max width | 1.05–1.08 m at X ≈ 3.2–3.7 | — | M (top view) |
+| Canopy glazing rear / frame rear | 4.52–4.67 / 4.67 | 0.29–0.30 | M |
+| **Inlet lip** (cowl front in plan view) | **4.25** | **0.27** | M. Top and side views agree. Outer half-width at the lip is 1.47 m |
+| LERX begins to flare | ≈ 7.1 | 0.45 | M |
+| Main-panel wing LE begins (34°) | ≈ 8.0 | 0.51 | M. S places the wing apex at 7.655 m |
+| Wing tip LE | ≈ 10.0 | 0.64 | M. S polygon: 9.81 m |
+| Wing tip TE | ≈ 11.5 | 0.74 | M. S polygon: 11.41 m |
+| **Vertical-tail root LE** | **11.5** | **0.735** | M. Fin/body junction at Z ≈ +0.35 m, Y ≈ ±1.42 m |
+| Wing root TE (at the body side) | 12.3–12.6 | 0.78–0.80 | M: 12.57 m at half-width 1.89 m. S: 12.28 m |
+| Stabilator root LE | 12.6–12.7 | 0.80–0.81 | M |
+| Vertical-tail tip LE | 13.45 | 0.86 | M. Tip at Z ≈ +2.60 m, Y ≈ ±2.24 m |
+| Vertical-tail root TE | ≈ 13.95 | 0.89 | M |
+| Rudder hinge line | 13.5 at the root to 14.45 at the tip | 0.86–0.92 | M. Full-span rudder; chord about 0.4 m, parallel to the TE |
+| **Nozzle exit** | **≈ 14.0–14.05** | **0.89–0.90** | M. Top and side views agree |
+| Stabilator tip LE | ≈ 14.1 | 0.90 | M |
+| Vertical-tail tip TE | 14.9 | 0.95 | M |
+| Stabilator tip TE | ≈ 15.0 | 0.955 | M |
+| Stabilator root TE corner (aft-most point) | 15.67 | 1.00 | M. At half-width ≈ 1.0–1.4 m |
+
+### Top-view outline half-width [M]
+
+| X (m) | 0.53 | 1.24 | 2.30 | 3.36 | 4.07 | 4.25 | 4.6 | 5–7 | 7.26 | 7.97 | 9.92 | 10.1–11.5 | 12.39 | 12.57 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Half-width (m) | 0.28 | 0.50 | 0.63 | 0.75 | 0.85 | 1.47 (lip) | 1.65 | 1.69–1.78 | 1.87 | 2.34 | 5.23 | 5.37 (tip) | 2.08 | 1.89 |
+
+**Maximum body width: about 3.4–3.56 m**, across the inlets at X ≈ 5–7 m [M].
+
+### Side-view silhouette [M]
+
+Gear up. Z is measured from the nose-tip waterline.
+
+| X (m) | 0.40 | 0.80 | 1.20 | 1.59 | 2.00 | 2.39 | 2.79 | 3.6 | 4.4 | 5.2 | 6.0 | 7.2 | 8.8 | 10.0 | 11.2 | 12.0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Top Z | +0.19 | +0.34 | +0.45 | +0.56 | +0.76 | +1.01 | +1.25 | +1.36 | +1.32 | +1.25 | +1.23 | +1.14 | +1.10 | +1.07 | +1.03 | +1.01 |
+| Bottom Z | −0.21 | −0.37 | −0.48 | −0.59 | −0.54 | −0.56 | −0.59 | −0.61 | −0.65 | −0.68 | −0.81 | −0.83 | −0.85 | −0.85 | −1.03 | −0.92 |
+
+- **Maximum fuselage depth, excluding the fins: about 2.0 m.**
+  - Canopy top to belly at X ≈ 4 m: 1.99 m.
+  - Mid-body: 1.93–1.99 m.
+  - Aft belly bulge at X ≈ 11.2 m: 2.06 m.
+- Wing plane: Z ≈ +0.25 m.
+- Stabilator: roughly at the wing-plane height.
+- Overall height with gear up: 3.65 m.
+- Fin tips: 4.47 m apart, 2.37 m above the wing plane.
+- **Derived ground line:** about Z = −1.78 m with gear down. This is the 4.38 m official height minus the 2.60 m fin-tip height, and assumes the jet sits level.
+
+## 3. Movable parts and mechanisms
+
+### Flight-control surfaces
+
+| Surface | Description | Tag |
+|---|---|---|
+| Leading-edge flap (LEF) | One full-span flap per wing, driven by Moog geared rotary actuators with asymmetry brakes | O |
+| Flaperon | One per wing on the inboard trailing edge. The F-35A has no separate aileron; the F-35C adds ailerons and wing fold | O |
+| Rudder | One full-span rudder per canted fin. Hinge line about 0.4 m ahead of the TE | O / M |
+| Stabilator | One all-moving surface per side | O |
+
+- **Actuation:** the primary surfaces use electro-hydrostatic actuators (EHAs).
+- **Deflection limits have not been published.** For rigging placeholders only, F-16 values from a forum are:
+
+  | F-16 surface | Deflection |
+  |---|---|
+  | Stabilator | ±21° |
+  | Rudder | ±30° |
+  | Flaperon | 23° up / 21° down |
+  | LEF | −2° / +25° |
+
+- A public Lockheed/MathWorks flight-control talk (Nixon) plots the rudder over −30° to +20°. These are chart axis ranges, not limits.
+- **Angle of attack:** 50° was flown in flight test.
+- **Speed brake:** there is no dedicated surface. In-flight braking is "an all-around deflection of various control surfaces" (Air & Space Forces). Hobby sources describe the rudders toeing in, the trailing-edge surfaces going up and the LEFs going down [F].
+
+### Weapons bays
+
+There are two internal bays, each with two doors (four doors in total).
+
+| Door | Hinge and features | Tag |
+|---|---|---|
+| Inboard | Narrow, hinged at the keel. Carries the door-mounted AIM-120 station | press |
+| Outboard | Wider, hinged at the bay's outer edge, next to the main-gear bay | press / F |
+
+- **Door motion:** the doors swing down to roughly vertical, about 90° [F]. An open–release–close cycle takes under 2 s [press].
+- **Loads:** the outboard station takes up to 2,500 lb on the F-35A/C. The Sidekick adapter (stations 4 and 8) adds a third AMRAAM per bay [press].
+- **Bay length:** more than about 4.1 m [F estimate].
+
+### Landing gear
+
+- **Layout:** tricycle, with single-wheel nose and main gear [P].
+- **Retraction:**
+  - Nose leg: reported to retract forward, inferred from press reports of nose-gear collapses [F].
+  - Main gear: the retraction geometry is not described in public text. For the F-35C, the drag braces roll around the strut and there is a shrink strut.
+- **Suppliers:** Goodrich, now Collins, makes the gear; Honeywell makes the wheels and brakes [press].
+- **Tyres** (DLA NSN listings for the F-35):
+
+  | Tyre | Size | Approx. dimensions |
+  |---|---|---|
+  | Main | 34×11.0R17, 26 PR | ≈ 864 × 279 mm |
+  | Nose | 23.5×7.5R10, 22 PR | ≈ 597 × 191 mm |
+  | STOVL main (separate listing) | 34×10.5R16 | — |
+
+- **Finish:** gear legs and bay interiors are white [P].
+- **Door counts:** not found in public text. Use walkaround photos (see Sources).
+
+### Canopy
+
+- One-piece transparency in an integral frame with an internal bow. There is no separate windscreen.
+- Hinged at the front and opens upward.
+- **Opening angle is not published.** Photos suggest roughly 30–40° [P].
+- A pyrotechnic Transparency Removal System cuts through the canopy before ejection; the canopy is not jettisoned.
+- The canopy has a light gold tint.
+- Frame stencil: "WARNING – DO NOT CUT CANOPY WITHIN 3 INCHES OF CANOPY FRAME".
+
+### Gun, doors and other external features
+
+- **Gun:** GAU-22/A, four-barrel 25 mm.
+
+  | Property | Value |
+  |---|---|
+  | Rate of fire | 3,300 rounds/min |
+  | Rounds carried | 181–182 |
+  | Weight | ≈ 104 kg |
+  | Length | ≈ 2.1 m (GAU-12 family) |
+
+  It is internal, near the left wing root. The gun port has a door that opens only for firing.
+- **Air refuelling:** the F-35A uses a boom receptacle under a door on the dorsal spine, aft of the canopy. The position comes from photos.
+  - The 3-view shows a group of doors on the centreline at X ≈ 6.5–8.2 m, which is consistent with that position.
+  - The F-35B and F-35C use a retractable probe instead.
+- **No dorsal auxiliary-inlet doors and no lift-fan door** on the F-35A/I. Those exist only on the F-35B.
+- **Other features on the 3-view top view:**
+  - Upper-shoulder vents and doors at X ≈ 5.2–7.8 m. Their identity is not documented in text.
+  - Red (left) and green (right) navigation lights on the wingtips.
+- **Tailhook:** the F-35A has an emergency arresting hook.
+- **Drag chute:** a pod between the vertical tails, used by Norway and some other European operators. It is not listed for Israel.
+- **Sensors:**
+  - EOTS sits behind a faceted sapphire window under the nose.
+  - There are six DAS apertures distributed around the airframe.
+
+## 4. Cockpit
+
+- **Panoramic cockpit display:**
+  - one 20 × 8 in (≈ 50 × 20 cm) touchscreen, made of two 10 × 8 in halves
+  - can be divided into windows (2 × 10×8 or 4 × 5×8)
+  - original supplier L3 (now L3Harris); an Elbit America replacement unit has been reported
+- **No head-up display (HUD).** The helmet takes its place.
+- **Controls:**
+  - active side-stick on the right console
+  - active throttle on the left console, with no cut-off detent
+  - about 20 hard switches in total [press]
+- Locations of the gear handle, master arm and jettison controls are not given in text. Use cockpit and walkaround photos.
+- **Ejection seat: Martin-Baker US16E.**
+  - twin catapult tubes
+  - underseat rocket
+  - firing handle at the front of the seat bucket
+  - IGQ 6000 parachute in the headbox
+  - canopy cut by the Transparency Removal System rather than jettisoned
+  - 0/0 to 600 KEAS
+  - occupant mass 46.7–111.1 kg
+  - seat-height adjustment ≈ 188 mm
+- **Helmet: HMDS Gen III** (Collins Elbit Vision Systems).
+  - biocular 30° × 40° field of view
+  - symbology projected on the visor
+  - built-in night camera
+  - about 2 kg (4.5 lb, as reported)
+
+## 5. F-35I Adir specifics
+
+### Differences from the F-35A
+
+- Israeli-unique C4I and EW systems are internal. Israeli weapons integration has been reported (SPICE 1000, Python-5).
+- **No confirmed external shape difference** appears in public photos. Only the markings differ.
+- IAI is a production supplier of F-35A outer wings. This is not specific to the F-35I.
+- **External fuel tanks:** a contract with Elbit/Cyclone was signed on 14 May 2026 (over $34M). The tank shape and capacity are not public.
+
+### Units
+
+All are based at Nevatim.
+
+| Squadron | Name | Status | Markings |
+|---|---|---|---|
+| 140 | "Golden Eagle" | First F-35I unit. First jets arrived 12 Dec 2016 | Large outline eagle-head art on the fins (adopted 2021). Outline eagle badge on the intake side, with mission marks |
+| 116 | "Lions of the South" | Re-formed 16 Jan 2020 | Lion's-head tail art |
+| 117 | "First Jet" | Third unit, reported as the training squadron from 2021 | Two-tone grey tail art plus an intake badge |
+
+Reported jet allocations (April 2021):
+- 116 Squadron: 905, 909, 928, 930, 932, 933, 935, 937, 939, 941, 943
+- 140 Squadron: 901, 902, 904, 907, 908, 911, 913, 916–919, 921, 925–927
+
+### Serials
+
+- Three-digit IAF numbers in the **9xx** series.
+- The early jets match the Lockheed MSN (AS-01 = 901, AS-11 = 911), but not always: the test jet AS-15 is **924**, based at the Flight Test Center, Tel Nof.
+- The jets also have US FMS serials, for example 901 = 14-5112, and 939/941/943 = 18-5436/7/8.
+
+### Markings placement
+
+Positions are taken from the 3-view and from photos of 901, 905 and 926.
+
+| Marking | Position and size |
+|---|---|
+| Nose number | Light-grey numerals, sometimes with a thin darker shadow. On the upper nose side between the radome joint and the windscreen, above the chine. About 0.1–0.15 m tall [P] |
+| Fuselage roundel | Below the canopy. On the 3-view it is centred at X ≈ 2.66 m, Z ≈ 0, about 0.5 m across. Photos give about 0.45 m [P] |
+| Wing roundels (3-view) | Upper surface of both wings, centred at X ≈ 10.4 m, Y ≈ ±3.0 m, about 1.0 m across [M] |
+| Stencils | Rescue arrow with "RESCUE … master latch" text below the canopy rear; ejection-seat warning triangles; the canopy-cut warning on the frame |
+
+### Roundel style
+
+- The IAF roundel is a blue Star of David on a white disc, with no border.
+- The F-35I uses a **low-visibility** version: a light-grey disc with a dark-grey star.
+- Early jets were photographed in delivery without roundels; the roundels were applied after arrival.
+
+### Paint
+
+| Area | Callout | Source |
+|---|---|---|
+| Overall | FS 36170, satin. SAM also states that all F-35s are FS 595C-36170 | Isradecal; SAM |
+| RAM-treated panels and edges | FS 36134, matt | Isradecal |
+
+- The "Have Glass" coating gives a slight metallic sheen depending on the light.
+- Modellers often use FS 36270 or 36231 for the lighter-looking RAM panels.
+
+Approximate sRGB values (sources disagree, so treat these as guides only):
+
+| FS 595 colour | sRGB |
+|---|---|
+| 36170 | #5C5C5B (w3schools) to #6D6C6B (Wikipedia list). The MRP-280 chip is #686765 |
+| 36270 | #858691 |
+| 36231 | #7E7E87 |
+| 36118 | #5B5E6A |
+| 36134 | Not found |
+
+## 6. Signature features
+
+- **Nozzle:** the F135 axisymmetric convergent–divergent nozzle has two overlapping sets of **15 flaps** (15 + 15).
+  - The outer "tail feathers" are tiled and end in chevrons, which gives a **sawtooth exit edge**.
+  - The inner surfaces are white or tan.
+  - On the 3-view, the exit is at X ≈ 14.0 m. The nozzle tapers from about 1.2 m wide at X ≈ 13.5 m to about 0.85 m of dark nozzle at the exit [M].
+  - The F135 engine is 5.59 m long, with a 1.09 m inlet diameter and 1.17 m maximum diameter [O].
+- **DSI (diverterless supersonic inlet):** each inlet has a 3-D compression bump with a forward-swept cowl lip and no boundary-layer splitter plate. It was first flown on an F-16 testbed on 11 Dec 1996.
+- **Canted twin tails:** about 20° outboard, with full-span rudders.
+- **Chined nose:** a sharp chine runs from the nose tip back along the fuselage side into the LERX and the inlet top. The faceted EOTS window sits underneath.
+- **Planform alignment:** the wing and stabilator LE/TE angles match (about 34° and −14°).
+- **Sawtooth edges** on the bay doors, gear doors and access panels.
+
+## Sources
+
+**Official dimensions and data**
+- LM F-35 Fast Facts (Dec 2013): https://www.slideshare.net/slideshow/f-35-fast-facts-december2013/30162920
+- LM F-35A product card: https://www.lockheedmartin.com/content/dam/lockheed-martin/aero/f35/documents/fg15-1280_001_f-35a_pc_final.pdf
+- MINDEF Singapore fact sheet: https://www.mindef.gov.sg/web/portal/mindef/news-and-events/latest-releases/article-detail/2024/February/28feb24_fs
+- 388th FW F-35A fact sheet: https://www.388fw.acc.af.mil/Portals/103/F35A_LightningII_ACC%20Fact%20Sheet.pdf
+- https://en.wikipedia.org/wiki/F-35
+- Wikipedia F-35 page (IPFS mirror, with the specifications box): https://ipfs.ssi.eecc.de/ipns/en.wikipedia-on-ipfs.org/wiki/Lockheed_Martin_F-35_Lightning_II
+
+**Student reports (unofficial)**
+- https://archive.aoe.vt.edu/mason/Mason_f/F35ASpr11.pdf
+- https://archive.aoe.vt.edu/mason/Mason_f/F35unknownS03.pdf
+- https://archive.aoe.vt.edu/mason/Mason_f/F35EvanS03.pdf
+
+**3-view**
+- Wikimedia Commons, "Lockheed Martin F-35I Adir 3-view drawing" (local copy; Commons blocked by this environment's proxy)
+
+**Control surfaces and flight control**
+- https://moog.com/content/dam/moog/literature/Aircraft/military_aftermarket/2025/Moog-F35-Brochure.pdf
+- https://www.airandspaceforces.com/1023seven
+- https://la.mathworks.com/content/dam/mathworks/mathworks-dot-com/solutions/aerospace-defense/miadc/presentations/10_F35_Flight_Control_DevelopmentDaveNixon.pdf
+- https://www.f-16.net/forum/viewtopic.php?p=44061
+- https://combatace.com/forums/topic/28811-f-35a-lightning-ii/?page=6
+- https://sldinfo.com/2012/11/the-f-35-and-high-angle-of-attack-flight-testing/
+
+**Weapons bays**
+- https://www.f-16.net/forum/viewtopic.php?p=158513
+- https://www.f-16.net/forum/viewtopic.php?p=78758
+- https://grendelreport.blogspot.com/2012/09/f-35-bay-presents-challenges-to-weapons.html
+- https://www.wionews.com/photos/why-the-f-35-internal-weapons-bays-open-so-quickly-1787440984317
+- https://www.twz.com/adapter-for-f-35-internal-carriage-of-six-aim-120-missiles-is-progressing.md
+
+**Landing gear and tyres**
+- https://strasam.org/en/defense/aerospace-industry/the-chronic-problem-of-f-35-aircraft-why-do-nose-landing-gear-collapse-2936
+- https://www.pprune.org/9490117-post9687.html
+- https://flightglobal.com/goodrich-ships-landing-nose-gear-for-f-35-/60975.article
+- https://www.gknaerospace.com/news-insights/news/honeywell-gkn-aerospace-signs-license-and-parts-supply-agreement-for-f-35-wheels-and-brakes/
+- https://www.wbparts.com/rfq/2620-01-619-8205.html
+- https://wbparts.com/rfq/2620-01-619-8190.html
+- https://www.wbparts.com/rfq/2620-01-619-8197.html
+- https://www.luke.af.mil/News/Article-Display/Article/641096/wheels-in-sky-keep-turning/
+- https://www.f-16.net/forum/viewtopic.php?p=449663
+
+**Canopy, gun, refuelling, hook, drag chute and sensors**
+- https://www.edwards.af.mil/News/AFMC-News/Article/2174727/second-vendor-f-35-canopy-testing-complete/
+- https://theaviationist.com/2025/05/03/hill-afbs-f-35s-receive-improved-canopies/
+- https://en.wikipedia.org/wiki/GAU-12_Equalizer
+- https://breakingdefense.com/2015/08/show-and-tell-f-35-test-fires-gau-22-gun/
+- https://www.af.mil/News/Article-Display/Article/610801/ground-testing-for-f-35-gun-conducted-at-edwards-afb
+- https://www.edwards.af.mil/News/Article/394532/f-35a-completes-first-night-refueling-mission
+- https://www.pprune.org/9619911-post10037.html
+- https://www.edwards.af.mil/News/Display/Article/828341/jsf-tailhook-testing-begins-at-edwards/
+- https://www.f35.com/f35/news-and-features/the-f35a-drag-chute-system.html
+- https://news.lockheedmartin.com/2009-11-30-Lockheed-Martin-Delivers-First-Production-F-35-Electro-Optical-Targeting-System
+- https://www.codeonemagazine.com/article.html?item_id=35
+
+**Cockpit, seat and helmet**
+- https://www.militaryaerospace.com/sensors/article/14276510/panoramic-display-f-35-cockpit-avionics
+- https://www.defenseindustrydaily.com/l3-wins-f35-jsf-panoramic-cockpit-display-contract-worth-up-to-200m-01518/
+- https://sldinfo.com/whitepapers/an-overview-of-the-f-35-cockpit-what-5th-generation-aircraft-are-all-about/
+- https://www.jsf.mil/cockpit
+- https://theaviationist.com/2020/07/28/enjoy-this-new-walkaround-tour-of-the-u-s-air-force-f-35a-lightning-ii/
+- https://martin-baker.com/wp-content/uploads/2023/06/US16E-2026-Data-Sheet.pdf
+- https://ejectionsite.com/mbmkus16e.html
+- https://www.redimec.com.ar/contenido/productos/pdf/1426684093_1.pdf
+- https://www.aviationtoday.com/2015/09/04/f-35-gen-iii-helmet-a-generational-leap-in-technology/
+- https://www.businessinsider.in/i-wore-the-helmet-of-americas-most-expensive-war-machine-and-theres-nothing-quite-like-it/amp_articleshow/54533877.cms
+
+**F-35I, squadrons, serials and markings**
+- https://www.wikiwand.com/en/articles/F-35I_Adir
+- https://en.wikipedia.org/wiki/List_of_Israeli_Air_Force_aircraft_squadrons
+- https://en.wikipedia.org/wiki/116_Squadron_(Israel)
+- https://en.wikipedia.org/wiki/140_Squadron_(Israel)
+- https://theaviationist.com/2020/01/19/the-israeli-air-force-has-inaugurated-its-second-f-35i-adir-squadron
+- https://www.infolotnicze.pl/?p=62128
+- https://scramble.nl/military-news/israeli-air-force-squadron-updates
+- https://www.scramble.nl/military-news/israeli-adirs
+- https://www.scramble.nl/military-news/first-israeli-air-force-adir-delivered-to-the-flight-testing-centre
+- https://www.airfighters.com/photosearch.php?con=AS-01
+- https://www.airhistory.net/photo/561516/911
+- https://hobbymasterarchive.org/HA4432/
+- https://theaviationist.com/2016/12/10/here-are-the-photos-of-the-first-two-f-35a-stealth-jets-en-route-to-give-israel-the-edge-in-the-middle-east/
+- https://www.keymilitary.com/article/israel-receives-f-35s
+- https://crwflags.com/fotw/flags/il%5Eairfo.html
+- https://theaviationist.com/2026/05/14/israel-signs-deal-for-f-35i-fuel-tanks/
+- https://www.twz.com/air/israels-f-35s-are-getting-external-fuel-tanks
+- https://nationalsecurityjournal.org/does-israel-have-a-secret-extended-range-f-35i-adir-stealth-fighter/
+
+**Paint and colours**
+- Isradecal F-35I instructions: https://isradecal.com/_files/ugd/ddb4b4_ba84724c1add4daa9882e4818bb8d8e2.pdf
+- https://www.themodellingnews.com/2024/01/preview-mengs-148th-scale-f-35i-adir.html
+- https://pocketmags.com/es/scale-aircraft-modelling-magazine/november-2017/articles/adir-part-2
+- https://www.themodellingnews.com/2018/03/ptiv-painting-weathering-guide-lockheed.html
+- https://scalemodellingnow.com/aircraft-tamiya-lockheed-martin-f35a-lightning-ii-dc/4
+- https://www.f-16.net/forum/viewtopic.php?p=495786
+- https://www.tamiya.com/english/products/61124/index.html
+- https://w3schools.com/colors/colors_fs595.asp
+- https://www.scalemates.com/colors/color.php?id=12675
+- https://www.myperfectcolor.com/paint/29397-us-government-fed-std-595c-36118
+- Wikipedia "Federal Standard 595 camouflage colours" (IPFS mirror): https://ipfs.aleph.im/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/wiki/Federal_Standard_595_camouflage_colours.html
+
+**Nozzle and inlet**
+- https://aviationweek.com/aerospace/program-management/closer-look-stealth-part-5-nozzles-exhausts
+- https://pdf.aeroexpo.online/pdf/pratt-whitney/f-35c/170325-4929.html
+- https://en.wikipedia.org/wiki/Diverterless_supersonic_inlet
+- https://www.globalsecurity.org/military/systems/aircraft/dsi.htm
+- https://planeandpilotmag.com/bonus-oshkosh-gallery-8/

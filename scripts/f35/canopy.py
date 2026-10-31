@@ -16,7 +16,7 @@ SILL_W = Pchip([1.84, 1.95, 2.10, 2.40, 2.80, 3.20, 3.60, 4.00, 4.40, 4.70, 4.97
                [0.0, 0.085, 0.205, 0.355, 0.455, 0.505, 0.525, 0.525, 0.51, 0.48, 0.44])
 S_FRONT, S_GLASS_END, S_REAR = 1.84, 4.60, 4.97
 HINGE_S, HINGE_Z = 1.90, 0.60
-OPEN_ANGLE = 60.0
+OPEN_ANGLE = 40.0                 # photos show ~30-40 deg
 
 
 def fore_upper_z(s, x):

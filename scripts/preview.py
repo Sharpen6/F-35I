@@ -24,8 +24,15 @@ CAMS = {
     "cockpit": ((-1.6, -6.4, 2.2), (0.0, -4.0, 0.6), 35),
     "cockpit_in": ((0.0, -4.05, 1.12), (0.0, -5.0, 0.62), 22),
     "cockpit_top": ((0.9, -3.2, 2.6), (0.0, -4.0, 0.5), 30),
+    "pilot_side": ((3.2, -3.9, 0.9), (0.0, -3.9, 0.75), 35),
+    "pilot_front": ((0.0, -5.6, 1.45), (0.0, -3.9, 0.85), 40),
     "tail":   ((-6.0, 12.0, 2.5), (0.0, 5.5, 0.6), 50),
     "gear":   ((-6.0, -3.0, -1.0), (0.0, 0.5, -1.0), 30),
+    "gearside": ((-11.0, 1.5, -0.9), (0.0, 1.5, -0.9), 35),
+    "gearfront": ((0.0, -14.0, -1.0), (0.0, 0.0, -0.9), 45),
+    "belly":  ((0.0, 1.0, -14.0), (0.0, 1.0, 0.0), 50),
+    "mainwell": ((-5.5, -2.5, -2.4), (-1.6, 2.0, -0.6), 35),
+    "nosewell": ((-3.2, -7.5, -2.0), (0.0, -3.6, -0.7), 35),
     "inletF": ((-1.2, -14.0, 0.1), (-1.2, -3.0, 0.1), 120),
     "inletS": ((-12.0, -3.2, 0.1), (0.0, -3.2, 0.1), 80),
     "inletT": ((-1.2, -3.2, 12.0), (-1.2, -3.2, 0.0), 80),
@@ -89,6 +96,14 @@ if __name__ == "__main__":
         import build_f35i
         build_f35i.build(parts=src.split(',') if src != 'build' else None)
     eng = os.environ.get("PREVIEW_ENGINE", "WORKBENCH")
+    pose = os.environ.get("PREVIEW_POSE", "")
+    rig = bpy.data.objects.get("F35I_Rig")
+    if pose and rig is not None:
+        for kv in pose.split(","):
+            k, v = kv.split("=")
+            rig[k] = float(v)
+        rig.hide_render = True
+        bpy.context.view_layer.update()
     for pre in [p for p in os.environ.get("PREVIEW_HIDE", "").split(",") if p]:
         for ob in bpy.data.objects:
             if ob.name.startswith(pre):

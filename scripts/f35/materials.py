@@ -91,9 +91,43 @@ def get(name):
     return m
 
 
+SWITCHABLE = {
+    # name: (base colour, emission colour, strength when on)
+    "landing_light": ((0.85, 0.85, 0.82), (1.0, 0.96, 0.88), 60.0),
+    "nav_red":       ((0.45, 0.02, 0.02), (1.0, 0.03, 0.02), 25.0),
+    "nav_green":     ((0.02, 0.40, 0.08), (0.05, 1.0, 0.25), 25.0),
+    "nav_white":     ((0.80, 0.80, 0.80), (1.0, 1.0, 0.97), 20.0),
+    "formation":     ((0.20, 0.22, 0.12), (0.55, 1.0, 0.35), 6.0),
+    "beacon":        ((0.40, 0.02, 0.02), (1.0, 0.08, 0.04), 40.0),
+}
+
+
+def switchable(name, base, emit, strength):
+    """Emission = object property 'on' (0..1) x strength, so the rig can
+    switch every light individually."""
+    mat = _new("F35_" + name)
+    nt = mat.node_tree
+    b = _bsdf(mat)
+    b.inputs["Base Color"].default_value = (*base, 1.0)
+    b.inputs["Roughness"].default_value = 0.08
+    b.inputs["Emission Color"].default_value = (*emit, 1.0)
+    attr = nt.nodes.new("ShaderNodeAttribute")
+    attr.attribute_type = 'OBJECT'
+    attr.attribute_name = "on"
+    mul = nt.nodes.new("ShaderNodeMath")
+    mul.operation = 'MULTIPLY'
+    mul.inputs[1].default_value = strength
+    nt.links.new(attr.outputs["Fac"], mul.inputs[0])
+    nt.links.new(mul.outputs[0], b.inputs["Emission Strength"])
+    mat.diffuse_color = (*base, 1.0)
+    return mat
+
+
 def _make(name):
     if name == "skin":
         return skin_material()
+    if name in SWITCHABLE:
+        return switchable(name, *SWITCHABLE[name])
     table = {
         # aircraft exterior
         "edge":      dict(color=(0.16, 0.17, 0.18), rough=0.45, metal=0.3),
