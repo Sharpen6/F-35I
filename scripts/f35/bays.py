@@ -5,7 +5,9 @@
   open "straight down" (~90-95 deg).  A GBU-31 class JDAM hangs from the
   main station in each bay.
 * nose-gear well with two long side doors hinged on the bottom corners;
-  they hang down beside the leg while the gear is down
+  they hang down beside the leg while the gear is down.  The well has its
+  own dark lining, frames, hydraulic lines and boxes; each door carries
+  two hinge arms on its inner face
 * main-gear wells in the lower body side, the wing-root fillet and the
   wing root.  Three doors per side: the aft outboard door (hinged at its
   outboard edge under the wing root, above the wheel) follows the fillet,
@@ -56,6 +58,32 @@ NOSE_DOOR_LEAN = 25.0              # open doors hang with their free edge this f
                                    # (head-on photos c22, c29, c50: the doors close in towards the strut and
                                    # stay inside the hinge width; 25 deg keeps the free edges 0.21 m off the
                                    # centre line, clear of the trailing arm and tow lug at |x| <= 0.18)
+# Equipment in the open nose-gear well (c20, c22, c29 and ref_04 of 926: between the open doors the well
+# is dark and busy -- frames, hydraulic lines, boxes -- and each door's inner face carries hinge arms and
+# gussets).  It stays out of the stowed leg (|x| <= 0.19; the tyre top 2.5 cm under the roof between
+# s 2.95 and 3.55, the folded brace on the centre line from s 3.78 to 4.40) and above the closed doors.
+NOSE_FRAMES = (2.80, 3.20, 3.60, 4.00, 4.40)    # transverse frame stations
+NOSE_FRAME = (0.04, 0.03)          # frame depth off the wall / roof, flange thickness (along s)
+NOSE_FRAME_ROOF = 0.20             # the roof flanges stop this far off the centre line (|x|)
+NOSE_LINE_GAP = 0.022              # hydraulic line centres off the side walls (inside the frame depth)
+# hydraulic lines along the side walls, ~1.5 cm across: (side, z, radius, material, turns down the aft wall)
+NOSE_LINES = ((1, -0.06, 0.0075, "chrome", False), (1, -0.11, 0.0075, "chrome", False),
+              (1, -0.17, 0.009, "hose", True), (-1, -0.05, 0.0075, "chrome", False),
+              (-1, -0.21, 0.0075, "chrome", True))
+NOSE_LINE_DROP = (0.20, -0.47)     # ... the turned lines run inboard along the aft wall to this |x|, then
+                                   # down to this z beside the trunnion ends (seen head-on, c22, c29)
+NOSE_ROOF_LINE = (0.27, 0.028, 0.0075)          # (x, z, r) of a line along the roof (left)
+# (side, s0, s1, z0, z1, depth off the wall, material); side 0 = on the roof, centred
+NOSE_BOXES = ((1, 4.05, 4.32, -0.33, -0.21, 0.07, "bay"),          # valve block, left wall aft
+              (-1, 2.50, 2.72, -0.17, -0.07, 0.06, "intake_dark"),  # connector box, right wall forward
+              (0, 2.52, 2.72, -0.05, 0.045, 0.12, "gear"))          # uplock box, roof ahead of the stowed tyre
+# hinge arms on each door: (station, root inset from the hinge line, length across the door).  Near the
+# door's ends, between the frames: the straight hinge axis runs above the curved skin (~6 cm at the aft
+# arm, 0.13 m at mid-length), so a root closer to the hinge line would swing out through the skin as the
+# door opens.  The aft arm is shorter: on the hanging door it stays > 8 cm off the housing and the
+# actuator boss as they swing past.
+NOSE_DOOR_ARMS = ((2.62, 0.05, 0.25), (4.24, 0.10, 0.18))
+NOSE_ARM = (0.065, 0.022, 0.02)    # height off the inner face at the root / at the tip, plate thickness
 MAIN_WELL_S = (8.20, 10.72)        # the stowed wheel reaches s 8.34
 # (x, z) cross-section of the main-gear well (left side; mirrored for right).
 # Its lower edge runs outside the skin from the belly corner to under the
@@ -137,6 +165,13 @@ def nose_plan():
     front[-1] = (x0, NOSE_WELL_S[0])
     aft = [(x1, nose_aft(x1)), (0.0, nose_aft(0.0)), (-x1, nose_aft(x1))]
     return front + aft
+
+
+def nose_wall_x(s):
+    """|x| of the nose-gear well's side wall at station s (the cutter outline, front corner to aft corner)."""
+    (x0, x1), s0 = NOSE_WELL_X, NOSE_WELL_S[0]
+    t = min(1.0, max(0.0, (s - s0) / (nose_aft(x1) - s0)))
+    return x0 + (x1 - x0) * t
 
 
 def _plan_prism(name, coll, plan_xs, z0, z1, mat):
@@ -557,7 +592,8 @@ def build(ctx):
         if side < 0:
             poly = list(reversed(poly))
         cutters.append(_prism(f"Cav_MainGear_{tag}", helpers, poly, *MAIN_WELL_S, bay_mat))
-    cutters.append(_plan_prism("Cav_NoseGear", helpers, nose_plan(), *NOSE_WELL_Z, bay_mat))
+    # the nose-gear well takes its own darker lining; the doors' inner faces stay 'bay'
+    cutters.append(_plan_prism("Cav_NoseGear", helpers, nose_plan(), *NOSE_WELL_Z, M.get("nose_well")))
     cutters.append(_cavity("Cav_Gun", helpers, 1.225, 1.375, 5.06, 5.80, 0.38, 1.2, M.get("intake_dark")))
     cutters.append(_cavity("Cav_Refuel", helpers, -0.13, 0.13, 5.53, 6.00, 1.05, 1.6, bay_mat))
     for cut in cutters:
@@ -593,6 +629,10 @@ def build(ctx):
     objs["GunDoor"] = gun
     objs["GunFairing"] = fairing
     objs["RefuelDoor"] = refuel
+    # ------------------------------------------- nose-gear well equipment
+    objs.update(build_nose_well(coll, bvh))
+    for side, tag in ((1, "L"), (-1, "R")):
+        objs.update(nose_door_arms(coll, bvh, objs[f"NoseGearDoor_{tag}"], side))
     # ---------------------------------------------------- bay interiors
     gear_mat = M.get("gear")
     for side, tag in ((1, "L"), (-1, "R")):
@@ -644,6 +684,116 @@ def _box(name, coll, xc, w, s0, s1, z0, z1, mat):
     ob = mesh_object(name, v, f, coll, mat, smooth=False)
     _fix(ob)
     return ob
+
+
+def _tube(name, coll, pts, r, mat, seg=10):
+    """Pipe through the points: straight runs with mitred corners."""
+    pts = [Vector(p) for p in pts]
+    d = [(b - a).normalized() for a, b in zip(pts, pts[1:])]
+    frames = [d[0].orthogonal().normalized()]
+    for a, b in zip(d, d[1:]):
+        frames.append(a.rotation_difference(b) @ frames[-1])
+    rings = []
+    for i, p in enumerate(pts):
+        j = max(i - 1, 0)                        # the run arriving at this point
+        din, u = d[j], frames[j]
+        t = (din + d[min(i, len(d) - 1)]).normalized()
+        w = din.cross(u)
+        ring = []
+        for k in range(seg):
+            a = 2 * math.pi * k / seg
+            q = (u * math.cos(a) + w * math.sin(a)) * r
+            ring.append(p + q - din * (q.dot(t) / din.dot(t)))
+        rings.append(ring)
+    v, f = loft_rings(rings, True, True, True)
+    ob = mesh_object(name, v, f, coll, mat, smooth=True, sharp_angle=40)
+    _fix(ob)
+    return ob
+
+
+def build_nose_well(coll, bvh):
+    """Equipment in the nose-gear well (see NOSE_FRAMES .. NOSE_BOXES): transverse frames on the side walls
+    with stubs under the roof, hydraulic lines along the walls (two turn down the aft wall to the trunnion
+    ends), a line along the roof and three boxes.  bvh: the closed skin, for the walls' lower edges."""
+    objs = {}
+    mats = {n: M.get(n) for n in ("nose_well", "bay", "gear", "chrome", "hose", "intake_dark")}
+    zr = NOSE_WELL_Z[1]
+    depth, thick = NOSE_FRAME
+    for k, s in enumerate(NOSE_FRAMES):
+        xw = nose_wall_x(s)
+        zb = _skin_point(bvh, xw, s).z + 0.03     # just above the wall's lower edge (and the closed door)
+        for side, tag in ((1, "L"), (-1, "R")):
+            poly = [(xw + 0.005, zb), (xw + 0.005, zr + 0.005), (NOSE_FRAME_ROOF, zr + 0.005),
+                    (NOSE_FRAME_ROOF, zr - depth), (xw - depth, zr - depth), (xw - depth, zb)]
+            poly = [(side * x, z) for x, z in poly]
+            ob = _prism(f"NoseWell_Frame{k}_{tag}", coll, poly if side > 0 else poly[::-1],
+                        s - thick / 2, s + thick / 2, mats["nose_well"])
+            objs[ob.name] = ob
+    # hydraulic lines: along a side wall from the front wall to the aft corner; the turned ones carry on
+    # along the aft wall and down to the trunnion ends
+    gap = NOSE_LINE_GAP
+    sc = NOSE_WELL_S[1]
+    for _ in range(4):                           # aft corner of the line runs (side wall meets aft wall)
+        sc = nose_aft(nose_wall_x(sc) - gap) - gap
+    s0 = nose_front(nose_wall_x(NOSE_WELL_S[0]) - gap)
+    xd, zd = NOSE_LINE_DROP
+    for k, (side, z, r, mat, turn) in enumerate(NOSE_LINES):
+        pts = [P(s0 + r + 0.002, side * (nose_wall_x(s0) - gap), z)]
+        if turn:
+            sd = nose_aft(xd) - gap
+            pts += [P(sc, side * (nose_wall_x(sc) - gap), z), P(sd, side * xd, z), P(sd, side * xd, zd)]
+        else:
+            pts.append(P(sc + gap - r - 0.003, side * (nose_wall_x(sc) - gap), z))
+        ob = _tube(f"NoseWell_Line{k}", coll, pts, r, mats[mat])
+        objs[ob.name] = ob
+    x, z, r = NOSE_ROOF_LINE
+    ob = _tube(f"NoseWell_Line{len(NOSE_LINES)}", coll,
+               [P(nose_front(x) + r + 0.002, x, z), P(nose_aft(x) - r - 0.002, x, z)], r, mats["chrome"])
+    objs[ob.name] = ob
+    for k, (side, sa, sb, z0, z1, dep, mat) in enumerate(NOSE_BOXES):
+        if side == 0:
+            ob = _box(f"NoseWell_Box{k}", coll, 0.0, dep, sa, sb, z0, z1, mats[mat])
+        else:                                    # back face into the (converging) wall all along
+            xo, xi = nose_wall_x(sa) + 0.004, nose_wall_x(sb) - dep
+            ob = _box(f"NoseWell_Box{k}", coll, side * 0.5 * (xo + xi), xo - xi, sa, sb, z0, z1, mats[mat])
+        objs[ob.name] = ob
+    return objs
+
+
+def nose_door_arms(coll, bvh, door, side):
+    """Hinge arms on a nose-gear door's inner face (see NOSE_DOOR_ARMS, NOSE_ARM): a tapered plate standing
+    on the door across it, tallest at the hinge end, with a hinge pin there (c22, c29: bright arms and
+    gussets on the doors' inner faces; c20: a white fitting at the hinge end).  Parented to the door, so
+    they swing with it; closed, they lie along the door's inner face next to the well wall."""
+    h_root, h_tip, th = NOSE_ARM
+    tag = "L" if side > 0 else "R"
+    objs = {}
+    n = 7
+    for k, (s, inset, length) in enumerate(NOSE_DOOR_ARMS):
+        xs = [nose_half_width(s) - inset - length * i / (n - 1) for i in range(n)]
+        pts = [_skin_point(bvh, side * x, s) for x in xs]
+        bot, top = [], []
+        for i, p in enumerate(pts):
+            tg = pts[min(i + 1, n - 1)] - pts[max(i - 1, 0)]
+            nrm = Vector((-tg.z, 0.0, tg.x)).normalized()
+            if nrm.z < 0:
+                nrm = -nrm                       # into the well (the door's inner side)
+            f = i / (n - 1)
+            h = h_tip + (h_root - h_tip) * (1.0 - f) ** 1.5
+            bot.append(p + nrm * 0.006)          # inside the door (outer face 2 mm proud, 18 mm thick)
+            top.append(p + nrm * (0.016 + h))
+        faces = [(i, i + 1, n + i + 1, n + i) for i in range(n - 1)]
+        arm = mesh_object(f"NoseGearDoorArm_{tag}{k}", bot + top, faces, coll, M.get("gear"), smooth=False)
+        add_solidify(arm, th, 0.0)
+        c = top[0] - (top[0] - bot[0]).normalized() * 0.014
+        pin = cylinder(f"NoseGearDoorArm_{tag}{k}_Pin", c - Vector((0, 0.035, 0)), c + Vector((0, 0.035, 0)),
+                       0.016, None, coll, M.get("chrome"), segments=10)
+        for ob in (arm, pin):
+            mw = ob.matrix_world.copy()
+            ob.parent = door
+            ob.matrix_world = mw
+            objs[ob.name] = ob
+    return objs
 
 
 def _body_of_revolution(name, coll, centre, prof, mat, seg=28):

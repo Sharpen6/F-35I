@@ -36,13 +36,25 @@ NG_TRAIL = 0.10                    # axle aft of the piston axis (single trailin
 NG_SLIDE = 0.16                    # oleo closes this much as the leg retracts (no more than the chrome shows)
 NG_STOW_C = (0.0, 3.40, -0.30)     # sets the stowed leg's direction; the wheel lands at s ~3.25, clear of the roof
 # Heights above the axle along the strut (photos c29, c48, c51, c53, in tyre diameters): the boxy
-# steering housing with the lamps ends ~0.66 m above the axle, a neck and a ring with the torque-link
+# steering housing with the lamp ends ~0.66 m above the axle, a neck and a ring with the torque-link
 # lug below it, then only ~0.17 m of chrome above the yoke.
 NG_HOUSING_H = (0.66, 0.95)
 NG_COLLAR_H = (0.58, 0.66)
 NG_B = (0.0, 3.80, -0.025)         # drag-brace airframe pivot, on a lug just under the well roof
 NG_BRACE_UPPER = 0.65              # upper link's share: the knee stays under the roof as the brace folds
-NG_E = (0.0, 5.00, -0.15)          # actuator airframe pivot
+NG_LOCK_X = 0.075                  # a second (lock) link pair rides beside the brace on its left, the lock
+                                   # spring on its right (c20: a coil spring and links along the brace)
+# Retraction actuator, in the well where it shows (c22 head-on: a cylinder runs down from the right side of
+# the well to the top of the leg housing): a clevis under the roof right of the centre line, and a boss
+# on the strut's right side just above the housing.  It shortens by ~0.44 m as the leg swings forward;
+# |x| >= 0.15 keeps it clear of the stowed housing (|x| <= 0.12) and of the brace.
+NG_E = (-0.30, 3.45, -0.045)       # actuator airframe pivot
+NG_ACT_F = (-0.17, 1.03)           # actuator lug on the strut: x, height above the axle
+# One landing / taxi lamp at the top of the housing front (c20, c22, c29, ref_04 of 926): a round lamp
+# with a chrome reflector in a square white bezel, ~0.14-0.16 m wide (c20: 54 px against the 197 px
+# tyre diameter; c29: 54 px against the 75 px tyre width), the reflector ~0.12 m across
+NG_LAMP_BEZEL = 0.16               # bezel side
+NG_LAMP_R = 0.06                   # reflector radius
 # main gear (left; right is mirrored).  Head-on and side photos (c29, c50,
 # c53) show near-vertical legs that disappear into the wing root just outboard
 # of the inlet cowl, so the trunnion sits in the wing-root end of the well,
@@ -133,6 +145,52 @@ def bar(name, p0, p1, w, t, nrm, coll, mat, bevel=0.0):
     _recalc(ob)
     if bevel:
         add_modifier_bevel(ob, bevel, 2, 30)
+    return ob
+
+
+def _bezel(name, coll, mat, face, nrm, e_x, side, r_hole, depth, seg=32):
+    """Square frame, side x side, with a round hole of radius r_hole: its front face centred on `face`
+    and facing nrm, `depth` deep behind it.  e_x sets the square's orientation."""
+    nrm = Vector(nrm).normalized()
+    ex = (Vector(e_x) - nrm * nrm.dot(Vector(e_x))).normalized()
+    ey = nrm.cross(ex)
+    verts = []
+    for off in (0.0, -depth):
+        c = Vector(face) + nrm * off
+        dirs = [(math.cos(2 * math.pi * k / seg), math.sin(2 * math.pi * k / seg)) for k in range(seg)]
+        verts += [c + (ex * ca + ey * sa) * (side / 2 / max(abs(ca), abs(sa))) for ca, sa in dirs]
+        verts += [c + (ex * ca + ey * sa) * r_hole for ca, sa in dirs]
+    faces = []                                  # blocks: front square, front hole, back square, back hole
+    for k in range(seg):
+        k1 = (k + 1) % seg
+        faces += [(k, k1, seg + k1, seg + k), (2 * seg + k, 3 * seg + k, 3 * seg + k1, 2 * seg + k1),
+                  (k, 2 * seg + k, 2 * seg + k1, k1), (seg + k, seg + k1, 3 * seg + k1, 3 * seg + k)]
+    ob = mesh_object(name, verts, faces, coll, mat, smooth=True, sharp_angle=40)
+    _recalc(ob)
+    return ob
+
+
+def _coil(name, coll, mat, p0, p1, r, wire, turns, seg=8, per_turn=14):
+    """Coil spring from p0 to p1: a helix of radius r swept by a wire of radius `wire`."""
+    p0, p1 = Vector(p0), Vector(p1)
+    ax = (p1 - p0).normalized()
+    u = ax.orthogonal().normalized()
+    w = ax.cross(u)
+    n = int(turns * per_turn) + 1
+    path = [p0 + (p1 - p0) * (i / (n - 1)) + (u * math.cos(2 * math.pi * turns * i / (n - 1))
+                                              + w * math.sin(2 * math.pi * turns * i / (n - 1))) * r
+            for i in range(n)]
+    rings = []
+    for i, c in enumerate(path):
+        t = (path[min(i + 1, n - 1)] - path[max(i - 1, 0)]).normalized()
+        a = (c - p0) - ax * ax.dot(c - p0)       # radial direction from the helix axis
+        e1 = (a - t * t.dot(a)).normalized()
+        e2 = t.cross(e1)
+        rings.append([c + (e1 * math.cos(2 * math.pi * k / seg) + e2 * math.sin(2 * math.pi * k / seg)) * wire
+                      for k in range(seg)])
+    v, f = loft_rings(rings, True, True, True)
+    ob = mesh_object(name, v, f, coll, mat, smooth=True)
+    _recalc(ob)
     return ob
 
 
@@ -275,10 +333,11 @@ def _bone(spec_list, name, head, tail, parent, objects=(), roll_axis=None, **kw)
 
 def build_nose(coll, bones):
     """Nose leg as in the photos (c20, c29, c48, c50, c51, c53, ref_04, ref_05): a boxy white steering
-    housing with the lamps on its front low on the leg, a neck and a collar ring under it, a short
-    chrome piston, a compact yoke and one curved trailing arm down the aircraft's LEFT side to a
-    cantilevered axle; the right face of the wheel is clear, and the torque links run from the
-    collar ring to the yoke behind the strut with the knee pointing well aft."""
+    housing low on the leg with the lamp in a square bezel at the top of its front, a neck and a collar
+    ring under it, a short chrome piston, a compact yoke and one curved trailing arm down the aircraft's
+    LEFT side to a cantilevered axle; the right face of the wheel is clear, and the torque links run from
+    the collar ring to the yoke behind the strut with the knee pointing well aft.  In the well: the drag
+    brace with a lock link pair and spring beside it, and the retraction actuator on the right."""
     T = W(NG_T)
     C = W(NG_C)
     X = Vector((1, 0, 0))
@@ -302,18 +361,19 @@ def build_nose(coll, bones):
     # boxy steering housing (~0.24 m wide), its lower end ~0.66 m above the axle
     strut_objs.append(bar("NG_SteerHousing", at(h1) - fwd_perp * 0.01, at(h0) - fwd_perp * 0.01, 0.24, 0.17,
                           fwd_perp, coll, gear, bevel=0.02))
-    # taxi + landing lights on the front of the housing
-    lamps = []
-    for k, h in enumerate((h0 + 0.21, h0 + 0.09)):
-        base = at(h) + fwd_perp * 0.075
-        look = (fwd_perp * 0.9 - u * 0.15 * (k + 1)).normalized()
-        strut_objs.append(cylinder(f"NG_LampBody{k}", base, base + look * 0.04, 0.045, 0.047, coll, gear,
-                                   segments=16))
-        lens = cylinder(f"NG_LampLens{k}", base + look * 0.04, base + look * 0.046, 0.042, None, coll,
-                        M.get("landing_light"), segments=16)
-        lens["light"] = "landing"
-        strut_objs.append(lens)
-        lamps.append(lens)
+    # landing / taxi lamp at the top of the housing front: a square white bezel round a chrome reflector,
+    # the lamp itself at the reflector's centre (the start-up sequence lights it: light = "landing")
+    face = at(h1 - 0.012 - NG_LAMP_BEZEL / 2) + fwd_perp * (0.075 + 0.03)      # bezel front face centre
+    strut_objs.append(_bezel("NG_LampBezel", coll, gear, face, fwd_perp, X, NG_LAMP_BEZEL, NG_LAMP_R + 0.003,
+                             0.036))
+    strut_objs.append(lathe("NG_LampReflector", coll, chrome, face, fwd_perp,
+                            [(0.0, -0.033), (0.024, -0.031), (0.042, -0.022), (NG_LAMP_R, -0.004)],
+                            seg=32, closed=False))
+    lens = cylinder("NG_LampLens", face - fwd_perp * 0.031, face - fwd_perp * 0.012, 0.026, 0.021, coll,
+                    M.get("landing_light"), segments=20)
+    lens["light"] = "landing"
+    strut_objs.append(lens)
+    lamps = [lens]
     # neck and the collar ring that carries the upper torque link
     strut_objs.append(cylinder("NG_Neck", at(h0 + 0.01), at(c1 - 0.005), 0.084, None, coll, gear, segments=24))
     strut_objs.append(cylinder("NG_Collar", at(c1), at(c0), 0.104, None, coll, gear, segments=28))
@@ -369,21 +429,38 @@ def build_nose(coll, bones):
     br_u = bar("NG_DragBrace_U", Bw, K, 0.07, 0.05, X, coll, gear, bevel=0.008)
     br_l = bar("NG_DragBrace_L", K, Dw, 0.06, 0.045, X, coll, gear, bevel=0.008)
     mount = bar("NG_BraceMount", W((0.0, NG_B[1], NOSE_WELL_Z[1] - 0.005)), Bw, 0.09, 0.07, X, coll, gear, bevel=0.006)
-    hinge_pins = [cylinder("NG_BracePinB", Bw - X * 0.06, Bw + X * 0.06, 0.025, None, coll, chrome, segments=10),
-                  cylinder("NG_BracePinK", K - X * 0.05, K + X * 0.05, 0.022, None, coll, chrome, segments=10)]
-    strut_objs.append(cylinder("NG_BraceLug", Dw - X * 0.05, Dw + X * 0.05, 0.03, None, coll, gear,
+    # the pins run out to the lock links on the left
+    pin_l = NG_LOCK_X + 0.015
+    hinge_pins = [cylinder("NG_BracePinB", Bw - X * 0.06, Bw + X * pin_l, 0.025, None, coll, chrome, segments=10),
+                  cylinder("NG_BracePinK", K - X * 0.05, K + X * pin_l, 0.022, None, coll, chrome, segments=10)]
+    strut_objs.append(cylinder("NG_BraceLug", Dw - X * 0.05, Dw + X * pin_l, 0.03, None, coll, gear,
                                segments=10))
-    # retraction actuator: E (airframe) <-> F (strut, aft side)
+    # lock links: a lighter link pair on the same pins, each half moving with its brace link; the lock
+    # spring along the upper link on the right, on two small posts
+    lx = X * NG_LOCK_X
+    lock_u = bar("NG_LockLink_U", Bw + lx, K + lx, 0.045, 0.014, X, coll, gear, bevel=0.004)
+    lock_l = bar("NG_LockLink_L", K + lx, Dw + lx, 0.04, 0.014, X, coll, gear, bevel=0.004)
+    sp0, sp1 = Bw.lerp(K, 0.18) - lx, Bw.lerp(K, 0.82) - lx
+    spring = [_coil("NG_LockSpring", coll, chrome, sp0, sp1, 0.022, 0.0045, 11),
+              cylinder("NG_LockSpringPost0", sp0 + X * 0.05, sp0 - X * 0.012, 0.012, None, coll, gear, segments=8),
+              cylinder("NG_LockSpringPost1", sp1 + X * 0.05, sp1 - X * 0.012, 0.012, None, coll, gear, segments=8)]
+    # retraction actuator: E (airframe clevis under the roof) <-> F (boss on the strut).  The barrel and the
+    # rod overlap 7 cm at full extension (gear down) and neither reaches the far pivot when stowed.
     Ew = W(NG_E)
-    Fw = T + u * 0.30 - fwd_perp * 0.07
+    Fw = at(NG_ACT_F[1]) + X * NG_ACT_F[0]
     act_len = (Fw - Ew).length
+    act_min = (rot_about(Fw, T, R) - Ew).length
+    barrel_len = rod_len = 0.5 * (act_len + 0.07)
+    if barrel_len > act_min - 0.04:
+        raise RuntimeError(f"nose-gear actuator: {act_len:.3f} m extended, {act_min:.3f} m stowed: too much stroke")
     dirEF = (Fw - Ew).normalized()
-    barrel_len = 0.50
-    rod_len = 0.52
     barrel = cylinder("NG_ActBarrel", Ew, Ew + dirEF * barrel_len, 0.042, None, coll, gear, segments=14)
     rod = cylinder("NG_ActRod", Fw, Fw - dirEF * rod_len, 0.022, None, coll, chrome, segments=12)
-    strut_objs.append(cylinder("NG_ActLug", Fw - X * 0.04, Fw + X * 0.04, 0.03, None, coll, gear,
+    strut_objs.append(cylinder("NG_ActLug", at(NG_ACT_F[1]) - X * 0.06, Fw - X * 0.025, 0.03, None, coll, gear,
                                segments=10))
+    act_mount = [bar("NG_ActMount", W((NG_E[0], NG_E[1], NOSE_WELL_Z[1] + 0.005)), Ew, 0.08, 0.06, X, coll, gear,
+                     bevel=0.006),
+                 cylinder("NG_ActPinE", Ew - X * 0.045, Ew + X * 0.045, 0.02, None, coll, chrome, segments=10)]
     # ------------------------------------------------------------- bones
     _bone(bones, "NG_Strut", T, T + axis * 0.3, "Root", strut_objs + hinge_pins[:0],
           drive="gear_leg", angle=math.degrees(ang), unit="nose")
@@ -392,10 +469,10 @@ def build_nose(coll, bones):
     _bone(bones, "NG_BraceTgt", Dw, Dw + X * 0.08, "NG_Strut")
     _bone(bones, "NG_BracePole", K + n * 0.8, K + n * 0.8 + X * 0.08, "Root")
     _bone(bones, "NG_BraceMount", Bw, Bw + X * 0.06, "Root", [mount])
-    _bone(bones, "NG_BraceUp", Bw, K, "Root", [br_u, hinge_pins[0]], roll_axis=n)
-    _bone(bones, "NG_BraceLo", K, Dw, "NG_BraceUp", [br_l, hinge_pins[1]], roll_axis=n,
+    _bone(bones, "NG_BraceUp", Bw, K, "Root", [br_u, hinge_pins[0], lock_u] + spring, roll_axis=n)
+    _bone(bones, "NG_BraceLo", K, Dw, "NG_BraceUp", [br_l, hinge_pins[1], lock_l], roll_axis=n,
           ik=("NG_BraceTgt", "NG_BracePole", 2))
-    _bone(bones, "NG_ActE", Ew, Ew + X * 0.06, "Root")
+    _bone(bones, "NG_ActE", Ew, Ew + X * 0.06, "Root", act_mount)
     _bone(bones, "NG_ActF", Fw, Fw + X * 0.06, "NG_Strut")
     _bone(bones, "NG_ActBarrel", Ew, Ew + dirEF * barrel_len, "Root", [barrel], track="NG_ActF")
     _bone(bones, "NG_ActRod", Fw, Fw - dirEF * rod_len, "NG_Strut", [rod], track="NG_ActE")

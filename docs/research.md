@@ -172,7 +172,9 @@ There are two internal bays, each with two doors (four doors in total).
   - Measured in tyre diameters (nose 0.597 m, main 0.864 m), the lower edges of the open doors sit 0.88–1.0 m above the nose-wheel centre and 0.90–0.96 m above the main-wheel centre (c48, c51, c53). The camera solves were not precise enough for this 10 cm check.
   - The model now sits 13 cm above its main-wheel contact datum (8 cm higher than before): the nose door edge is 0.85 m above the wheel centre at the strut, the main door edge 0.91 m, and the fin tips 4.41 m above the ground against the published 4.38 m.
 - **Nose leg (model, from c20, c29, c48, c51, c53, ref_04, ref_05) [M][P]:**
-  - Under the doors: a boxy white steering housing with the two lamps on its front, then a neck and a collar ring, a short chrome piston (about 13 cm showing), the yoke and a single trailing arm on the left. The upper strut and the drag brace stay hidden in the well.
+  - Under the doors: a boxy white steering housing with one lamp on its front, then a neck and a collar ring, a short chrome piston (about 13 cm showing), the yoke and a single trailing arm on the left. The upper strut and the drag brace stay hidden in the well.
+  - The lamp sits at the top of the housing front: a round lamp in a chrome reflector about 0.12 m across, inside a square white bezel 0.14–0.16 m wide (c20: 54 px against the 197 px tyre diameter; c29: 54 px against the 75 px tyre width; c22 and ref_04 show one lamp, not two).
+  - Head-on (c22) the retraction actuator shows in the well: a cylinder from high on the aircraft's right side of the well down to the top of the housing. c20 shows a coil spring and links along the drag brace.
   - The drag brace runs from a lug under the well roof down to the strut just above the housing. Its upper link is the longer one (65 % of the length), so the brace folds nearly flat and its knee stays under the roof as the leg swings forward into the well.
 - **Suppliers:** Goodrich, now Collins, makes the gear; Honeywell makes the wheels and brakes [press].
 - **Tyres** (DLA NSN listings for the F-35):
@@ -189,6 +191,7 @@ There are two internal bays, each with two doors (four doors in total).
   - Two long doors stay open while the gear is down, one each side of the leg. The aircraft number is often painted on them.
   - In the model they run from about station 2.30 m (just behind the EOTS window) to 4.62 m (the strut). The hinge lines sit at |x| ≈ 0.50 m at the front and narrow to 0.33 m at the strut, so by the strut the doors are shallow enough to show the leg's white steering housing below them (c48, c51, c53).
   - The front edge is sawtoothed. The aft edge is raked, so the free edge is slightly longer than the hinge edge.
+  - Between the open doors the well reads darker than the chin skin and is busy with frames, lines and boxes, while the doors' inner faces stay light, with hinge arms and gussets (c20, c22, c29, ref_04).
   - Seen head-on (c22) the open doors close in towards the bottom; the model hangs them 25° inboard of vertical.
   - Back-projection through the c51 camera puts the hinge line higher at the front (z ≈ −0.16) than the model (−0.49). The model keeps the hinges on the bottom because the closed doors must fit the fuselage's lower skin.
 

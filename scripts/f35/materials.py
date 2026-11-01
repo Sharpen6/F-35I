@@ -473,6 +473,10 @@ def _make(name):
         # (photos of the exit: a whitish-tan serrated ring inside the dark flaps)
         "nozzle_in": dict(color=(0.07, 0.065, 0.06), rough=0.6, metal=0.3),
         "bay":       dict(color=(0.78, 0.79, 0.78), rough=0.55),
+        # nose-gear well walls and roof: in c20, c22, c29 and ref_04 the open well reads darker than the
+        # chin skin around it, while the doors' inner faces ('bay') stay light; occlusion by the
+        # equipment inside does the rest
+        "nose_well": dict(color=(0.40, 0.41, 0.40), rough=0.6),
         "gear":      dict(color=(0.82, 0.83, 0.82), rough=0.4, metal=0.1),
         "chrome":    dict(color=(0.8, 0.8, 0.82), rough=0.12, metal=1.0),
         "tyre":      dict(color=(0.02, 0.02, 0.02), rough=0.85),
