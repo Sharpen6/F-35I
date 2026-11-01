@@ -19,9 +19,9 @@
 export const SPECIES = [
   {
     id: 0, name: 'pine', label: 'Aleppo pine (Pinus halepensis)',
-    foliage: [66, 82, 44], wood: [92, 74, 58],
+    foliage: [72, 84, 54], wood: [92, 74, 58],
     height: [7, 14], crown: 0.62, crownBase: 0.38,
-    tint: 0.55, translucency: 0.25, shadow: 0.78, sway: 0.5, fluff: 0.75, specular: 0.0, far: 1.0,
+    tint: 0.65, translucency: 0.25, shadow: 0.78, sway: 0.5, fluff: 0.75, specular: 0.0, far: 1.0,
   },
   {
     id: 1, name: 'olive', label: 'olive (Olea europaea)',
@@ -31,15 +31,15 @@ export const SPECIES = [
   },
   {
     id: 2, name: 'citrus', label: 'citrus / avocado orchard tree',
-    foliage: [38, 64, 28], wood: [80, 66, 52],
+    foliage: [50, 72, 38], wood: [80, 66, 52],
     height: [3.0, 4.6], crown: 1.05, crownBase: 0.1,
     tint: 0.6, translucency: 0.2, shadow: 0.9, sway: 0.25, fluff: 0.45, specular: 0.6, far: 0.6,
   },
   {
     id: 3, name: 'broadleaf', label: 'broadleaf tree (ficus, plane, carob, oak, tamarisk)',
-    foliage: [52, 78, 36], wood: [88, 76, 62],
+    foliage: [62, 80, 46], wood: [88, 76, 62],
     height: [5, 12], crown: 0.95, crownBase: 0.3,
-    tint: 0.5, translucency: 0.35, shadow: 0.85, sway: 0.45, fluff: 0.6, specular: 0.15, far: 1.0,
+    tint: 0.6, translucency: 0.35, shadow: 0.85, sway: 0.45, fluff: 0.6, specular: 0.15, far: 1.0,
   },
   {
     id: 4, name: 'datepalm', label: 'date palm (Phoenix dactylifera)',
@@ -49,7 +49,7 @@ export const SPECIES = [
   },
   {
     id: 5, name: 'cypress', label: 'Italian cypress (Cupressus sempervirens)',
-    foliage: [34, 52, 30], wood: [70, 58, 46],
+    foliage: [42, 56, 38], wood: [70, 58, 46],
     height: [8, 17], crown: 0.2, crownBase: 0.04,
     tint: 0.35, translucency: 0.1, shadow: 0.9, sway: 0.3, fluff: 0.35, specular: 0.0, far: 1.0,
   },

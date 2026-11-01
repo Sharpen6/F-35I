@@ -18,7 +18,8 @@
 // aerial perspective and logarithmic depth as the terrain. Quality: setQuality(), the table
 // below. Off: ?vegetation=0 or the menu option (settings.vegetation).
 //
-// Instance record (20 bytes): float32 x, y (ground - 0.25 m), z; u8 species | variant << 4,
+// Instance record (20 bytes): float32 x, y (ground - 0.25 m), z; u8 species | variant << 4 |
+// imagery weight of the colour (0..7) << 5,
 // height / 0.125 m, crown width factor * 128, rotation; u8 imagery colour R, G, B, rank.
 
 import * as THREE from 'three';
@@ -58,7 +59,7 @@ export class Scatter {
     this.env = env;
     this.terrain = terrain;
     this.app = app;
-    this.attribution = 'Vegetation: procedural trees placed from ESA WorldCover 2021 and Sentinel-2 imagery';
+    this.attribution = 'Vegetation: procedural trees and shrubs placed from the terrain\'s ESA WorldCover 2021 land cover and Sentinel-2 imagery (CC BY 4.0, as above); no third-party models or textures';
     // needs the real terrain (heights texture, tiles); ?stubs=1 has none
     this.available = !!(terrain && terrain.textures && terrain.textures.hCore && terrain.baseUrl);
     const setting = app && app.settings ? app.settings.vegetation : undefined;
@@ -85,8 +86,8 @@ export class Scatter {
     this._nearDirty = true;
     this._meshScale = 1;
     this._frame = 0;
-    this.stats = { cells: 0, cellsPending: 0, instances: 0, capacity: 0, highWater: 0, near: 0, nearTris: 0, bakeMs: 0, atlasMB: 0, workerMs: 0, tileMs: 0, replies: 0, initMs: 0, startMs: 0 };
-    this.tuning = { tintGain: 0.72, wind: 1, brightness: 1, shadowStrength: 0.75 };
+    this.stats = { cells: 0, instances: 0, capacity: 0, highWater: 0, near: 0, nearTris: 0, bakeMs: 0, atlasMB: 0, workerMs: 0, tileMs: 0, replies: 0, initMs: 0, startMs: 0 };
+    this.tuning = { tintGain: 0.92, wind: 1, brightness: 1, shadowStrength: 0.75 };
   }
 
   // ------------------------------------------------------------------------------ module API
@@ -154,7 +155,7 @@ export class Scatter {
   statsJSON() {
     const s = this.stats;
     return {
-      enabled: this.enabled, ready: this.ready, quality: this.qualityName, cells: s.cells, pending: s.cellsPending,
+      enabled: this.enabled, ready: this.ready, quality: this.qualityName, cells: s.cells, pending: this._pendingCells(),
       instances: s.instances, highWater: s.highWater, capacity: s.capacity, near: s.near,
       nearTris: s.nearTris, bakeMs: Math.round(s.bakeMs), atlasMB: +s.atlasMB.toFixed(1), initMs: Math.round(s.initMs), startMs: Math.round(s.startMs),
       workerMs: Math.round(s.workerMs), tileMs: Math.round(s.tileMs), replies: s.replies, inflight: this._inflight, queued: this._queue.length,
@@ -221,6 +222,7 @@ export class Scatter {
     const U = this._uniforms = {
       uSpA: { value: SPECIES.map((s) => new THREE.Vector4(s.tint, s.translucency, s.sway, s.far)) },
       uSpB: { value: SPECIES.map((s) => new THREE.Vector4(s.fluff, s.specular, s.shadow, 0)) },
+      uSpC: { value: SPECIES.map((s) => new THREE.Vector3(...s.foliage.map((c) => Math.pow(c / 255, 2.2)))) },
       uVeg: { value: new THREE.Vector4(this.tuning.tintGain, this.tuning.wind, this.tuning.brightness, 0) },
       uLod: { value: new THREE.Vector4(this.Q.mesh, this.Q.band, this.Q.far, 0.22) },
       uMainCam: { value: new THREE.Vector3() },
@@ -421,10 +423,15 @@ export class Scatter {
     this._queue = this._queue.filter((c) => (c.inQueue = c.state === 'queued' && wanted.has(c.key)));
     this._queue.sort((a, b) => a.d - b.d);
     this._uploads.sort((a, b) => a.d - b.d);
-    let pending = 0;
-    for (const c of this.cells.values()) if (c.state !== 'ready') pending++;
+    this._wanted = wanted;
     this.stats.cells = this.cells.size;
-    this.stats.cellsPending = pending;
+  }
+
+  /** Wanted cells whose trees are not in yet. */
+  _pendingCells() {
+    let n = 0;
+    for (const key of this._wanted || []) if (this.cells.get(key)?.state !== 'ready') n++;
+    return n;
   }
 
   _cellDist(X, Z, cam) {

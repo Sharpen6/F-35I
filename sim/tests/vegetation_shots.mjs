@@ -4,12 +4,15 @@
 //
 //   node sim/tests/vegetation_shots.mjs [--port 8144] [--out DIR] [--size 960x540]
 //        [--quality medium] [--only telnof_chase,orchards_150] [--params "vegetation=0"]
-//        [--settle 6000] [--tag before]
+//        [--settle 6000] [--tag before] [--ab]
 //
 // Every scene is a start point (spawns.json or one defined here, placed at a height above the
 // ground) with a time of day and a camera; the scene is flown for a moment, the streaming is given
 // wall time (--settle) and a frame is drawn. Writes <out>/<tag><scene>.png and <out>/<tag>stats.json
-// (renderInfo, timing, the module's own stats, the GPU memory estimate per scene).
+// (renderInfo, timing, the module's own stats, the GPU memory estimate per scene). --ab draws each
+// scene three times with the trees and three times without (the same page, the same frame): the
+// module's own draw calls, triangles and time (median; SwiftShader's, so only a ratio), and saves
+// the frame without them (<tag><scene>_off.png).
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -35,6 +38,7 @@ const ONLY = arg('only', '') ? arg('only', '').split(',') : null;
 const PARAMS = arg('params', '');
 const SETTLE = +arg('settle', 6000);
 const TAG = arg('tag', '') ? `${arg('tag', '')}_` : '';
+const AB = argv.includes('--ab');
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,8 +52,8 @@ const SCENES = {
   telnof_cockpit: { spawn: 'telnof_36', time: 12, camera: 'cockpit', fly: 0.5 },
   telnof_morning: { spawn: 'telnof_36', time: 7, camera: 'chase', fly: 0.5 },
   // the citrus blocks west of Tel Nof, 150 m above them, flying north toward them
-  orchards_150: { spawn: { x: -24100, z: -2400, agl: 150, heading: 350, speed: 120 }, time: 10, camera: 'chase', fly: 1 },
-  orchards_150_cockpit: { spawn: { x: -24100, z: -2400, agl: 150, heading: 350, speed: 120 }, time: 10, camera: 'cockpit', fly: 1 },
+  orchards_150: { spawn: { x: -24100, z: -3200, agl: 150, heading: 350, speed: 120 }, time: 10, camera: 'chase', fly: 1 },
+  orchards_150_cockpit: { spawn: { x: -24100, z: -3200, agl: 150, heading: 350, speed: 120 }, time: 10, camera: 'cockpit', fly: 1 },
   // KKL forests: Ben Shemen (east of Lod) and the Jerusalem hills, 600 m above the ground
   benshemen_600: { spawn: { x: -9000, z: -15500, agl: 600, heading: 80, speed: 150 }, time: 9, camera: 'chase', fly: 1 },
   benshemen_600_cockpit: { spawn: { x: -9000, z: -15500, agl: 600, heading: 80, speed: 150 }, time: 9, camera: 'cockpit', fly: 1 },
@@ -62,7 +66,7 @@ const SCENES = {
   // low over Tel Aviv (street trees, palms, the Yarkon park)
   tlv_300: { spawn: { x: -22500, z: -33500, agl: 300, heading: 180, speed: 150 }, time: 10, camera: 'chase', fly: 1 },
   // date palms of Kalia / Almog by the north end of the Dead Sea, 250 m up
-  kalia_250: { spawn: { x: 41200, z: 3200, agl: 250, heading: 0, speed: 120 }, time: 10, camera: 'chase', fly: 1 },
+  kalia_250: { spawn: { x: 41800, z: 4400, agl: 250, heading: 95, speed: 120 }, time: 10, camera: 'chase', fly: 1 },
   // sunset over the Jerusalem hills (the spawn's time, 18:45)
   sunset_chase: { spawn: 'jerusalem_sunset', camera: 'chase', fly: 1 },
   sunset_cockpit: { spawn: 'jerusalem_sunset', camera: 'cockpit', fly: 1 },
@@ -155,8 +159,25 @@ async function main() {
     });
     const file = join(OUT, `${TAG}${name}.png`);
     await page.screenshot({ path: file });
-    results.push({ name, scene: sc, summary: st, renderInfo: info, lastRenderMs: timing.lastRenderMs, vegetation: mod });
+    let ab = null;
+    if (AB && mod) {
+      const three = () => {
+        const sim = window.__sim, r = [0, 1, 2].map(() => sim.render());
+        const ms = r.map((x) => x.ms).sort((a, b) => a - b)[1];
+        return { ms, calls: r[2].calls, triangles: r[2].triangles };
+      };
+      const fn = `(${three})()`;
+      const on = await page.evaluate(fn);
+      await page.evaluate(() => window.__sim.app.modules.find((x) => x && x.isScatter).setOption('vegetation', false));
+      const off = await page.evaluate(fn);
+      await page.screenshot({ path: join(OUT, `${TAG}${name}_off.png`) });
+      await page.evaluate(() => window.__sim.app.modules.find((x) => x && x.isScatter).setOption('vegetation', true));
+      await page.evaluate(() => window.__sim.settle(200));
+      ab = { on, off };
+    }
+    results.push({ name, scene: sc, summary: st, renderInfo: info, lastRenderMs: timing.lastRenderMs, vegetation: mod, ab });
     log(`${name}: ${info.calls} calls, ${(info.triangles / 1e6).toFixed(2)} M tris, ${timing.lastRenderMs} ms, agl ${st.agl_m} m, ${((Date.now() - t1) / 1000).toFixed(0)} s${mod ? `, veg ${JSON.stringify(mod)}` : ''}`);
+    if (ab) log(`${name}: with trees ${ab.on.calls} calls, ${(ab.on.triangles / 1e6).toFixed(2)} M tris, ${ab.on.ms} ms; without ${ab.off.calls} calls, ${(ab.off.triangles / 1e6).toFixed(2)} M tris, ${ab.off.ms} ms`);
   }
 
   try {

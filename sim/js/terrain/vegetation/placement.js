@@ -26,8 +26,9 @@
 // around them (airfield grass), and nothing on grey or bright pixels (roads, roofs).
 //
 // Output per tree: position (float32 x, y, z; y = ground - 0.25 m) and 8 bytes: species |
-// variant << 4, height / HEIGHT_STEP, crown width factor * 128, rotation * 256 / 2 pi,
-// imagery colour R, G, B (sRGB, the mean over the crown), rank (0..255, uniform: thinning).
+// variant << 4 | the imagery's weight in the colour (0..7) << 5, height / HEIGHT_STEP, crown
+// width factor * 128, rotation * 256 / 2 pi, colour R, G, B (sRGB: the imagery's mean over the
+// crown where it is green, else the species' own), rank (0..255, uniform: thinning).
 
 import { SPECIES, SP, HEIGHT_STEP } from './species.js';
 
@@ -378,6 +379,14 @@ export function generateCell(t, cx, cz, { shrubs = true } = {}) {
   return { count: n, pos: new Float32Array(out.pos), data: new Uint8Array(out.data) };
 }
 
+/** Grey (low saturation, not green) or bright imagery colour: no tree stands there. */
+function isGrey(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const s = mx > 0 ? (mx - mn) / mx : 0;
+  const eg = (2 * g - r - b) / 255, l = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return (s < 0.16 && eg < 0.03) || l > 0.72;
+}
+
 /** Writes one tree after the last checks (inside the cell, not on grey or water pixels). */
 function emit(t, out, x, z, species, height, rng, opts = {}) {
   const { cellX0, cellZ0, grey = true, wf = 0.82 + 0.4 * rng() } = opts;
@@ -390,12 +399,9 @@ function emit(t, out, x, z, species, height, rng, opts = {}) {
   const sp = SPECIES[species];
   const crownR = Math.max(1.2, 0.5 * sp.crown * height * wf);
   const [r, g, b] = colourAt(t, x, z, Math.min(12, crownR * 1.6));
-  if (grey) {
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    const s = mx > 0 ? (mx - mn) / mx : 0;
-    const eg = (2 * g - r - b) / 255, l = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-    if ((s < 0.16 && eg < 0.03) || l > 0.72) return false;      // asphalt, concrete, roofs, sand
-  }
+  // asphalt, concrete, roofs, sand: over the crown, and at the trunk itself (the one pixel: a
+  // narrow road disappears in the crown's mean)
+  if (grey && (isGrey(r, g, b) || isGrey(...colourAt(t, x, z, 0)))) return false;
   // the imagery's colour where it shows vegetation, else the species' own (lone trees in a
   // field must not take the field's colour)
   const e = (2 * g - r - b) / 255;
@@ -405,7 +411,7 @@ function emit(t, out, x, z, species, height, rng, opts = {}) {
   out.pos.push(x, y, z);
   const variant = rng() < 0.5 ? 0 : 1;
   out.data.push(
-    species | (variant << 4),
+    species | (variant << 4) | (Math.round(w * 7) << 5),
     clamp(Math.round(height / HEIGHT_STEP), 1, 255),
     clamp(Math.round(wf * 128), 1, 255),
     Math.floor(rng() * 256),
@@ -543,11 +549,26 @@ function shrubland(t, p, px, pz, rng, out, shrubs) {
   }
   if (!shrubs) return;
   const sh = clamp((exg - 0.04) / 0.1, 0, 1) * (hills ? 0.5 : 0.7);
-  const n = countOf(sh, rng);
-  for (let k = 0; k < n; k++) {
-    emit(t, out, px + rng() * LC_PX, pz + rng() * LC_PX, SP.shrub, heightFor(SP.shrub, rng, 0.4), rng);
-  }
+  shrubPatch(t, px, pz, sh, rng, out);
   if (!hills && rng() < 0.02) emit(t, out, px + rng() * LC_PX, pz + rng() * LC_PX, SP.broadleaf, heightFor(SP.broadleaf, rng, 0.3), rng);
+}
+
+/**
+ * Shrubs of one 10 m pixel, lambda per pixel on average: in patches (45 m noise; garrigue is
+ * never an even sprinkle) and in clumps of one to three, sizes from an 80 m vigour noise.
+ */
+function shrubPatch(t, px, pz, lambda, rng, out) {
+  const patch = smooth(0.25, 0.8, noise2(px, pz, 45, 21));
+  const n = countOf(lambda * (0.2 + 1.6 * patch) / 1.6, rng);
+  const vig = noise2(px, pz, 80, 23);
+  for (let k = 0; k < n; k++) {
+    const x = px + rng() * LC_PX, z = pz + rng() * LC_PX;
+    const m = 1 + Math.floor(rng() * rng() * 3.2);
+    for (let q = 0; q < m; q++) {
+      const a = rng() * 6.283, r = q ? 0.8 + 1.4 * rng() : 0;
+      emit(t, out, x + Math.cos(a) * r, z + Math.sin(a) * r, SP.shrub, heightFor(SP.shrub, rng, vig * (q ? 0.7 : 1)), rng);
+    }
+  }
 }
 
 /** Moves a point down or up the slope onto the nearest terrace contour (step dh metres). */
@@ -567,10 +588,7 @@ function onTerrace(t, x, z, dh) {
 function grassland(t, p, px, pz, rng, out, shrubs) {
   const exg = t.exg[p], elev = t.elev[p], slope = t.slope[p];
   const hills = elev > 150 || slope > 6;
-  if (shrubs) {
-    const n = countOf(clamp((exg - 0.035) / 0.1, 0, 1) * 0.3, rng);
-    for (let k = 0; k < n; k++) emit(t, out, px + rng() * LC_PX, pz + rng() * LC_PX, SP.shrub, heightFor(SP.shrub, rng, 0.3), rng);
-  }
+  if (shrubs) shrubPatch(t, px, pz, clamp((exg - 0.035) / 0.1, 0, 1) * 0.3, rng, out);
   if (rng() < (hills ? 0.005 : 0.0015) * (exg > 0.06 ? 2 : 1)) {
     const sp = hills && rng() < 0.5 ? SP.olive : SP.broadleaf;
     emit(t, out, px + rng() * LC_PX, pz + rng() * LC_PX, sp, heightFor(sp, rng, 0.4), rng);

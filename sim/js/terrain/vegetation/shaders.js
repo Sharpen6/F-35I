@@ -1,7 +1,7 @@
 // Vegetation shaders (three.js ShaderMaterial, GLSL ES 3.0).
 //
 // Instances (one record per tree, see Scatter.js): aPos = base position (world m, float32),
-// aD0 = species | variant << 4, height / 0.125 m, crown width factor * 128, rotation (u8),
+// aD0 = species | variant << 4 | imagery weight (0..7) << 5, height / 0.125 m, crown width factor * 128, rotation (u8),
 // aD1 = imagery colour under the tree (sRGB u8) and a rank 0..1 (thinning, randomness).
 //
 //   near meshes  per species / variant InstancedMesh, the procedural mesh scaled per tree,
@@ -47,6 +47,7 @@ const COMMON = /* glsl */ `
 #define VEG_FRAMES ${ELEV_FRAMES}
 uniform vec4 uSpA[VEG_NSP];   // tint amount, translucency, sway, far range factor
 uniform vec4 uSpB[VEG_NSP];   // fluff (ragged crown edge), specular, shadow density, unused
+uniform vec3 uSpC[VEG_NSP];   // the species' foliage colour (linear): the tint is a ratio to it
 uniform vec4 uVeg;            // x: tint gain, y: wind, z: brightness, w: unused
 uniform vec4 uLod;            // x: mesh range, y: mesh fade band, z: far range, w: far fade fraction
 uniform vec3 uMainCam;        // the view camera (the shadow pass has its own cameraPosition)
@@ -92,9 +93,12 @@ float vegCoverage(float part, vec2 uv, vec3 obj, float facing, float fluff, out 
   float cov = 1.0;
   if (part < 0.5) {
     // foliage clump: leafy noise, ragged where the surface turns away from the view
+    // (three scales: gaps between twigs, sprays and small branches, about 1 m: the lumps that
+    // still break a crown's outline at a few hundred metres)
+    float n0 = vegNoise(obj * 0.85 + 3.0);
     float n1 = vegNoise(obj * 2.3);
     float n2 = vegNoise(obj * 5.7 + 7.0);
-    float nz = 0.62 * n1 + 0.38 * n2;
+    float nz = 0.3 * n0 + 0.44 * n1 + 0.26 * n2;
     float edge = 1.0 - facing;
     cov = nz + 0.6 - edge * edge * fluff * 1.4;
     leafAO = 0.7 + 0.55 * nz;
@@ -180,11 +184,12 @@ void main() {
   vec3 rel = aPos - cameraPosition + p;
   rel.y -= atmoCurvatureDrop(rel.xz);
   vRel = rel;
-  // per tree: brightness and a little hue variation; the imagery's colour blends in
+  // per tree: brightness and a little hue variation; the imagery's colour blends in, as a ratio
+  // to the species' own colour (the crown keeps its light and dark sprays)
   float j = fract(rank * 13.7 + aD0.w * 3.1);
-  vec3 tint = pow(aD1.rgb, vec3(2.2)) * uVeg.x;
+  vec3 tint = clamp(pow(aD1.rgb, vec3(2.2)) * uVeg.x / max(uSpC[sp], vec3(1e-3)), 0.25, 3.0);
   float ta = uSpA[sp].x * (aVert.y > 0.5 && aVert.y < 1.5 ? 0.25 : 1.0);
-  vAlbedo = mix(aColor, tint, ta) * (0.86 + 0.28 * j) * vec3(1.0 + 0.06 * (j - 0.5), 1.0, 1.0 - 0.08 * (j - 0.5));
+  vAlbedo = aColor * mix(vec3(1.0), tint, ta) * (0.86 + 0.28 * j) * vec3(1.0 + 0.06 * (j - 0.5), 1.0, 1.0 - 0.08 * (j - 0.5));
   vUv = uv;
   vAO = aVert.x;
   vPart = aVert.y;
@@ -300,7 +305,7 @@ void cull() { gl_Position = vec4(0.0, 0.0, -2.0, 1.0); }
 void main() {
   float spv = floor(aD0.x * 255.0 + 0.5);
   int sp = int(mod(spv, 16.0));
-  int variant = int(spv / 16.0);
+  int variant = int(mod(floor(spv / 16.0), 2.0));
   float h = aD0.y * 255.0 * 0.125;
   float wf = aD0.z * 255.0 / 128.0;
   float rank = aD1.w;
@@ -350,9 +355,11 @@ void main() {
     P *= 1.0 - min(0.4 * S, 0.5 * length(P)) / max(length(P), 1e-3);
   #endif
   vP = vec4(m, far, S, dot(V, uSunDir));
-  vS = vec4(uSpA[sp].x, uSpA[sp].y, uSpB[sp].y, 0.0);
+  // the imagery's colour decides more with distance: far trees match the ground they stand on
+  float ta = uSpA[sp].x;
+  vS = vec4(mix(ta, max(ta, 0.9), smoothstep(250.0, 1500.0, d)), uSpA[sp].y, uSpB[sp].y, 0.0);
   float j = fract(rank * 13.7 + aD0.w * 3.1);
-  vTint = pow(aD1.rgb, vec3(2.2)) * uVeg.x;
+  vTint = clamp(pow(aD1.rgb, vec3(2.2)) * uVeg.x / max(uSpC[sp], vec3(1e-3)), 0.25, 3.0);
   vS.w = 0.86 + 0.28 * j;
   float hWc = aPos.y + 0.5 * h;
   vSunE = atmoSunIrradianceAt(cRel, hWc);
@@ -414,7 +421,7 @@ void main() {
       shadow = getShadow( directionalShadowMap[ 0 ], sh.shadowMapSize, sh.shadowIntensity, sh.shadowBias, sh.shadowRadius, vDirectionalShadowCoord[ 0 ] );
     }
   #endif
-  vec3 albedo = mix(A.rgb, vTint, vS.x) * vS.w;
+  vec3 albedo = A.rgb * mix(vec3(1.0), vTint, vS.x) * vS.w;
   vec3 rad = vegLight(albedo, dot(n, vLb), dot(n, vUb), vP.w, Nn.w, vS.y, vS.z, dot(n, normalize(vHb)), vSunE * shadow);
   gl_FragColor = vec4(rad * vT + vIns, alpha);
   #include <tonemapping_fragment>
@@ -459,7 +466,7 @@ void cull() { gl_Position = vec4(0.0, 0.0, -2.0, 1.0); }
 void main() {
   float spv = floor(aD0.x * 255.0 + 0.5);
   int sp = int(mod(spv, 16.0));
-  int variant = int(spv / 16.0);
+  int variant = int(mod(floor(spv / 16.0), 2.0));
   float h = aD0.y * 255.0 * 0.125;
   float wf = aD0.z * 255.0 / 128.0;
   float rank = aD1.w;
@@ -506,7 +513,10 @@ void main() {
   vec3 skyE = uAmbient;
   float ls = dot(sunE, vec3(0.2126, 0.7152, 0.0722)), la = dot(skyE, vec3(0.2126, 0.7152, 0.0722));
   float kLin = ls / max(ls + la, 1e-4);
-  vK = kLin * uShadow.y * fade * (0.75 + 0.25 * uSpB[sp].z);
+  // where the tree took the imagery's colour, the imagery shows it with its shadow already
+  // (a forest's ground is canopy and shade): lighter there than under a lone tree in a field
+  float wImg = floor(spv / 32.0) / 7.0;
+  vK = kLin * uShadow.y * fade * (0.75 + 0.25 * uSpB[sp].z) * (1.0 - 0.45 * wImg);
   vec3 tt;
   atmoAerialParts(G / max(gl, 1e-3), gl, hG, tt, vIns);
   vec4 mvPosition = vec4(mat3(viewMatrix) * Gv, 1.0);

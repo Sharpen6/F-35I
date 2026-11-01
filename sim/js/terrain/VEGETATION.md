@@ -20,14 +20,16 @@ settings (`settings.vegetation`). Quality follows the graphics quality (`setQual
   eucalyptus, broadleaf and cypress. Species come in stands (150 m noise), density follows the
   imagery's greenness and darkness, heights a 260 m vigour noise.
 * **Hills**: olive groves on the stone terraces (trees moved onto the contour lines, 2.2-3 m
-  steps), garrigue / maquis shrubs between them.
+  steps), garrigue / maquis shrubs between them, in patches (45 m noise) and clumps of one to
+  three, never an even sprinkle.
 * **Towns**: garden and street trees where the imagery is green between the houses (ficus,
   pine, cypress, citrus, date palms; Washingtonia fan palms near the coast).
 * **Farmland**: eucalyptus and cypress windbreaks along the narrow tree lines of the land cover,
   a lone tree now and then.
 * **Nothing** on runways (+80 m to the sides, +300 m past the ends), no shrubs or lone trees on
-  the airfields around them, nothing on water, bare ground, roads, roofs (grey or bright pixels)
-  or in the desert.
+  the airfields around them, nothing on water, bare ground, roads, roofs (grey or bright pixels,
+  over the crown and at the trunk's own pixel: a narrow road vanishes in a crown's mean) or in
+  the desert.
 
 ## Data and licences
 
@@ -61,13 +63,16 @@ Per 200 m cell (`generateCell`, 0.15-0.3 ms): the trees of every 10 m pixel by i
 (rules above). Deterministic: every random number comes from the cell's or the row's own
 seed, so a cell has the same trees whatever the order of requests. Each tree is 20 bytes:
 position (float32 x, y, z; y = ground - 0.25 m, the heights interpolated as the terrain draws
-its triangles), species | variant, height (0.125 m steps), crown width factor, rotation, the
-imagery's colour under the crown, and a rank (uniform 0..255) that thins the trees with the
-quality and with distance.
+its triangles), species | variant | the imagery's weight in its colour (3 bits), height
+(0.125 m steps), crown width factor, rotation, the colour under the crown, and a rank (uniform
+0..255) that thins the trees with the quality and with distance.
 
 The colour: where the imagery is green the tree takes the imagery's mean over its crown
-(blended with the species' own colour by the species' `tint`), else the species' colour (a lone
-tree in a ploughed field must not take the field's colour).
+(blended with the species' own colour by the species' `tint`, more so with distance: at 1.5 km
+a forest has the colour of the ground it stands on), else the species' colour (a lone tree in a
+ploughed field must not take the field's colour). The shaders apply it as a ratio to the
+species' colour, so a crown keeps its light and dark sprays. Where the colour came from the imagery, the
+imagery already shows the canopy's shade, so that tree's ground shadow is lighter.
 
 ## Species (`vegetation/species.js`, `vegetation/meshes.js`)
 
