@@ -46,8 +46,12 @@ def main():
     cam = review._camera("ShotCam")
     sc.camera = cam
     os.makedirs(review.OUT, exist_ok=True)
+    grounds = [ob for ob in bpy.data.objects if ob.name.startswith(("Ground", "Apron"))]
+    shown = {ob.name: ob.hide_render for ob in grounds}
     for v in [v for v in args.views.split(",") if v]:
         loc, tgt, lens = review.VIEWS[v]
+        for ob in grounds:                       # looking up from under the apron (as review.shots)
+            ob.hide_render = True if loc[2] < -1.7 else shown[ob.name]
         cam.location = loc
         cam.data.lens = lens
         cam.data.sensor_fit = 'AUTO'
