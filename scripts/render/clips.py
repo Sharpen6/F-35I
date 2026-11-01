@@ -16,6 +16,7 @@ Clips: afterburner, walkaround, startup, destruction, gear_retract, canopy_open,
 import argparse
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -256,13 +257,13 @@ def clip_walkaround(fps):
     """A slow walk round the parked jet at eye height: nose, left side, tail, right side (40 s)."""
     set_visibility()
     n = int(40 * fps)
-    cy, a, b, z = 0.8, 8.5, 13.0, -0.12
-    cam = camera((0.0, cy - b, z), (0.0, -5.0, -0.4), 30)
+    cy, a, b, z = 0.8, 11.0, 14.0, -0.12
+    cam = camera((0.0, cy - b, z), (0.0, -5.0, -0.4), 28)
     for f in range(1, n + 1):
         th = math.radians(25.0 + 360.0 * (f - 1) / n)
         x, y = a * math.sin(th), cy - b * math.cos(th)
         cam.location = (x, y, z)
-        look_at(cam, (0.35 * x, cy + 0.55 * (y - cy), -0.45))
+        look_at(cam, (0.2 * x, 0.35 * (y - cy), -0.55))
         cam.keyframe_insert("location", frame=f)
         cam.keyframe_insert("rotation_euler", frame=f)
     from f35.anim import fcurves
@@ -279,23 +280,221 @@ def clip_startup(fps):
     from f35 import anim
     set_visibility()
     key("canopy", 1.0, 1)
-    camera((-0.62, -3.45, 1.80), (0.06, -5.20, 0.66), 24)
+    camera((-1.22, -4.32, 1.48), (0.08, -5.02, 0.68), 24)      # right of the cockpit, pilot in profile
     end = anim.start_up(frame=int(0.8 * fps))
     return end + int(2.5 * fps), "cockpit start-up"
 
 
+def _burst_material():
+    """Volume ball for a hit: a brief orange fireball (object property 'fire') that turns into a
+    billowing dark smoke puff ('smoke'); 'w' drifts the 4D noise so the puff boils."""
+    mat = bpy.data.materials.get("FX_Burst")
+    if mat:
+        return mat
+    mat = bpy.data.materials.new("FX_Burst")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    N, L = nt.nodes, nt.links
+    for nd in list(N):
+        N.remove(nd)
+    out = N.new("ShaderNodeOutputMaterial")
+    vol = N.new("ShaderNodeVolumePrincipled")
+    vol.inputs["Color"].default_value = (0.05, 0.047, 0.045, 1)
+    vol.inputs["Anisotropy"].default_value = 0.25
+    vol.inputs["Emission Color"].default_value = (1.0, 0.40, 0.09, 1)
+
+    def attr(name):
+        a = N.new("ShaderNodeAttribute")
+        a.attribute_type = 'OBJECT'
+        a.attribute_name = name
+        return a.outputs["Fac"]
+
+    def op(kind, x, y=None):
+        m = N.new("ShaderNodeMath")
+        m.operation = kind
+        for i, v in enumerate((x, y)):
+            if v is None:
+                continue
+            if isinstance(v, (int, float)):
+                m.inputs[i].default_value = v
+            else:
+                L.new(v, m.inputs[i])
+        return m.outputs[0]
+
+    def ramp(x, lo, hi):                       # clamp((x - lo) / (hi - lo))
+        return op('MINIMUM', op('MAXIMUM', op('DIVIDE', op('SUBTRACT', x, lo), hi - lo), 0.0), 1.0)
+    tc = N.new("ShaderNodeTexCoord")
+    noise = N.new("ShaderNodeTexNoise")
+    noise.noise_dimensions = '4D'
+    noise.inputs["Scale"].default_value = 1.5
+    noise.inputs["Detail"].default_value = 5.0
+    noise.inputs["Roughness"].default_value = 0.62
+    L.new(tc.outputs["Object"], noise.inputs["Vector"])
+    L.new(attr("w"), noise.inputs["W"])
+    vl = N.new("ShaderNodeVectorMath")
+    vl.operation = 'LENGTH'
+    L.new(tc.outputs["Object"], vl.inputs[0])
+    inner = op('SUBTRACT', 1.0, vl.outputs["Value"])          # 1 at the centre, 0 at the shell
+    nz = noise.outputs["Fac"]
+    puff = op('MULTIPLY', ramp(inner, 0.0, 0.35), ramp(nz, 0.40, 0.62))
+    core = op('MULTIPLY', ramp(inner, 0.15, 0.6), ramp(nz, 0.44, 0.60))
+    L.new(op('MULTIPLY', op('MULTIPLY', puff, attr("smoke")), 2.4), vol.inputs["Density"])
+    L.new(op('MULTIPLY', op('MULTIPLY', core, attr("fire")), 14.0), vol.inputs["Emission Strength"])
+    L.new(vol.outputs["Volume"], out.inputs["Volume"])
+    for k, v in (("homogeneous_volume", False), ("volume_step_rate", 0.5)):
+        if hasattr(mat.cycles, k):
+            setattr(mat.cycles, k, v)
+    return mat
+
+
+def _linear_keys(idb):
+    from f35.anim import fcurves
+    ad = idb.animation_data
+    for fc in (fcurves(ad.action) if ad and ad.action else []):
+        for kp in fc.keyframe_points:
+            kp.interpolation = 'CONSTANT' if fc.data_path.startswith("hide_") else 'LINEAR'
+
+
+def burst(loc, frame, fps, size=1.0, tag="Burst"):
+    """Fireball + flash + rising smoke puff at `loc`, starting at `frame`."""
+    import bmesh
+    sc = bpy.context.scene
+    k = len([o for o in bpy.data.objects if o.name.startswith(tag + "_") and o.type == 'MESH'])
+    me = bpy.data.meshes.new(f"{tag}_{k}")
+    bm = bmesh.new()
+    bmesh.ops.create_icosphere(bm, subdivisions=3, radius=1.0)
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(_burst_material())
+    ob = bpy.data.objects.new(f"{tag}_{k}", me)
+    sc.collection.objects.link(ob)
+    ob.visible_shadow = False
+    loc = Vector(loc)
+
+    def s(t):
+        return frame + int(round(t * fps))
+    # hidden outside its life: Cycles aborts on a mesh volume scaled to (almost) nothing
+    for f, hide in ((frame - 1, True), (frame, False), (s(5.5) + 1, True)):
+        ob.hide_render = hide
+        ob.keyframe_insert("hide_render", frame=f)
+    #        time  scale  rise  fire  smoke
+    for t, sc_, dz, fire, smoke in ((0.0, 0.30, 0.0, 1.0, 0.10),
+                                    (0.15, 0.90, 0.10, 0.70, 0.80), (0.45, 1.15, 0.35, 0.0, 0.90),
+                                    (3.0, 2.2, 2.4, 0.0, 0.50), (5.5, 2.8, 4.2, 0.0, 0.0)):
+        f = s(t)
+        ob.scale = (sc_ * size,) * 3
+        ob.location = loc + Vector((0, 0, dz * size))
+        ob["fire"], ob["smoke"] = fire, smoke
+        for path in ("scale", "location", '["fire"]', '["smoke"]'):
+            ob.keyframe_insert(path, frame=f)
+    ob["w"] = 0.0
+    ob.keyframe_insert('["w"]', frame=frame)
+    ob["w"] = 2.2
+    ob.keyframe_insert('["w"]', frame=s(5.5))
+    _linear_keys(ob)
+    # a short flash lights the skin and the apron
+    ld = bpy.data.lights.new(f"{tag}_Flash_{k}", 'POINT')
+    ld.color = (1.0, 0.55, 0.2)
+    ld.shadow_soft_size = 0.5
+    lo = bpy.data.objects.new(ld.name, ld)
+    sc.collection.objects.link(lo)
+    lo.location = loc + Vector((0, 0, 0.3))
+    for f, e in ((frame - 1, 0.0), (frame, 700.0 * size), (s(0.15), 350.0 * size), (s(0.45), 0.0)):
+        ld.energy = e
+        ld.keyframe_insert("energy", frame=f)
+    _linear_keys(ld)
+    return ob
+
+
+def bake_debris(comp, f_break, f_end, settle=5):
+    """The debris of a broken-off part flies in the aircraft frame (drivers). Bake its world path
+    from the break to `f_end` and let it come to rest lying flat on the apron, so it stays put
+    when the jet itself moves later (e.g. settles on a collapsed gear leg)."""
+    from mathutils import Matrix
+    from f35.geom import GROUND_Z
+    sc = bpy.context.scene
+    emp = bpy.data.objects[f"Debris_{comp}"]
+    sc.frame_set(f_break + 1)
+    inv = emp.matrix_world.inverted()
+    zmin = min((inv @ k.matrix_world @ v.co).z for k in emp.children if k.type == 'MESH'
+               for v in k.data.vertices)
+    path = []
+    for f in range(f_break, f_end + 1):
+        sc.frame_set(f)
+        path.append(emp.matrix_world.copy())
+    zs = [m.translation.z for m in path]
+    land = next((i for i, z in enumerate(zs) if z <= min(zs) + 1e-4), len(path) - 1)
+    m_land = path[land]
+    xa = m_land.col[0].xyz
+    yaw = math.atan2(xa.y, xa.x)
+    rest = Matrix.Translation((m_land.translation.x, m_land.translation.y, GROUND_Z + 0.004 - zmin)) \
+        @ Matrix.Rotation(yaw, 4, 'Z')
+    for path_name in ("delta_location", "delta_rotation_euler"):
+        emp.driver_remove(path_name)
+    emp.delta_location = (0, 0, 0)
+    emp.delta_rotation_euler = (0, 0, 0)
+    emp.parent = None
+    emp.rotation_mode = 'QUATERNION'
+
+    def put(m, f):
+        emp.matrix_world = m
+        emp.keyframe_insert("location", frame=f)
+        emp.keyframe_insert("rotation_quaternion", frame=f)
+    put(path[0], f_break - 1)
+    for i, m in enumerate(path[:land + 1]):
+        put(m, f_break + i)
+    l0, q0 = m_land.translation, m_land.to_quaternion()
+    l1, q1 = rest.translation, rest.to_quaternion()
+    for j in range(1, settle + 1):
+        t = j / settle
+        t = t * t * (3 - 2 * t)
+        m = Matrix.Translation(l0.lerp(l1, t)) @ q0.slerp(q1, t).to_matrix().to_4x4()
+        put(m, f_break + land + j)
+    # keep the pieces on the apron for the rest of the clip (they normally vanish after a while),
+    # and only scorch them lightly (a destroyed part is fully sooted by default)
+    for k in emp.children:
+        ad = k.animation_data
+        for fc in (ad.drivers if ad else []):
+            if fc.data_path == "delta_scale" and "frame < bf +" in fc.driver.expression:
+                fc.driver.expression = re.sub(r"\*\(frame < bf \+ \d+\)", "", fc.driver.expression)
+            elif fc.data_path == '["damage"]' or fc.data_path.startswith('["dmg_'):
+                fc.driver.expression = f"0.4*({fc.driver.expression})"
+    return {"landed_frame": f_break + land, "rest": tuple(round(v, 2) for v in rest.translation)}
+
+
 def clip_destruction(fps):
-    """Damage on the apron: a hit on the left wing scorches it and tears the outer panel off,
-    smoke pours from the stub; a second hit folds the left main gear and the jet settles."""
+    """Damage on the apron: a hit on the left wing tears the outer panel off (it tumbles onto the
+    apron, the stub's edge glows); a second hit folds the left main gear and the jet settles."""
     from f35 import destruct
     set_visibility()
-    camera((12.5, -9.0, 1.4), (1.8, 1.0, -0.6), 32)
+    arm = rig()
+    arm["debris_ground"] = 1.0
+    cam = camera((11.5, -9.5, 3.4), (1.6, -0.5, -0.7), 28)
+
     def T(t):
         return 1 + int(round(t * fps))
-    destruct.impact((7.0, 1.6, 0.6), (-1.0, 0.05, -0.12), hp=150, frame=T(1.0))
+    cam.keyframe_insert("location", frame=1)
+    cam.location = (10.4, -8.2, 3.0)
+    cam.keyframe_insert("location", frame=T(10.0))
+    log = lambda *a: print("DESTRUCTION", *a, flush=True)
+    h1 = destruct.impact((7.0, 1.6, 0.6), (-1.0, 0.05, -0.12), hp=150, frame=T(1.0))
+    log("hit 1", h1 and h1["components"])
     destruct.break_off("wing_outer_L", T(1.2))
-    destruct.impact((4.5, 3.6, -1.2), (-1.0, 0.0, 0.0), hp=150, frame=T(4.6))
+    if h1:
+        burst(h1["point_world"], T(1.0), fps, size=0.9)
+    destruct.impact((4.5, 1.9, -0.8), (-1.0, 0.0, 0.1), hp=120, frame=T(4.6))
+    log("hit 2")
+    wheel = bpy.data.objects.get("MG_Wheel_L_Tyre")
+    if wheel:
+        bb = [wheel.matrix_world @ Vector(c) for c in wheel.bound_box]
+        c = sum(bb, Vector()) / 8
+        burst((c.x + 0.2, c.y, c.z + 0.45), T(4.6), fps, size=0.8)
+    log("bursts")
+    log("debris", bake_debris("wing_outer_L", T(1.2), T(4.7)))
     destruct.collapse_gear("main_gear_L", T(4.8), duration=int(0.5 * fps))
+    log("gear")
+    bpy.context.scene.frame_set(1)
+    log("ready")
     return T(10.0), "destruction"
 
 
@@ -386,7 +585,10 @@ def render_clip(name, args):
     frames_dir = os.path.join(args.work, name + args.suffix)
     os.makedirs(frames_dir, exist_ok=True)
     todo = range(1, n + 1)
-    if args.test:
+    if args.frames:
+        args.test = True
+        todo = sorted({int(v) for v in args.frames.split(",") if 1 <= int(v) <= n})
+    elif args.test:
         todo = sorted({1, n // 3, n // 2, (2 * n) // 3, n})
     for f in todo:
         out = os.path.join(frames_dir, f"{f:04d}.png")
@@ -408,6 +610,8 @@ def render_clip(name, args):
 
 
 def main():
+    import faulthandler                 # a hard crash in a background render still leaves a trace
+    faulthandler.enable(all_threads=False)
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
     ap = argparse.ArgumentParser()
     ap.add_argument("clips", nargs="*")
@@ -422,6 +626,7 @@ def main():
     ap.add_argument("--hdri", default="4k", help="HDRI sizes to try for the background, e.g. 8k,4k ('' keeps 2k)")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--test", action="store_true", help="render 5 sample frames only")
+    ap.add_argument("--frames", default="", help="render only these frames, e.g. 25,30,60 (no video)")
     args = ap.parse_args(argv)
     args.res = tuple(int(v) for v in args.res.lower().split("x"))
     args.hdri = tuple(v for v in args.hdri.split(",") if v)

@@ -51,6 +51,41 @@ def principled(name, color, rough=0.5, metal=0.0, coat=0.0, emission=None,
     return mat
 
 
+def fabric(name, color, rough=0.82, sheen=0.35, fold=0.35, fold_scale=14.0):
+    """Cloth: rough diffuse with a soft sheen and a low-frequency bump for folds and seams."""
+    mat = principled(name, color, rough=rough)
+    nt = mat.node_tree
+    nodes, links = nt.nodes, nt.links
+    b = _bsdf(mat)
+    for k, v in (("Sheen Weight", sheen), ("Sheen Roughness", 0.45)):
+        if k in b.inputs:
+            b.inputs[k].default_value = v
+    if "Sheen Tint" in b.inputs:
+        b.inputs["Sheen Tint"].default_value = (1.0, 1.0, 1.0, 1.0)
+    tc = nodes.new("ShaderNodeTexCoord")
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = fold_scale
+    noise.inputs["Detail"].default_value = 3.0
+    noise.inputs["Roughness"].default_value = 0.55
+    noise.inputs["Distortion"].default_value = 0.6
+    links.new(tc.outputs["Object"], noise.inputs["Vector"])
+    fine = nodes.new("ShaderNodeTexNoise")              # weave / small creases
+    fine.inputs["Scale"].default_value = fold_scale * 9.0
+    fine.inputs["Detail"].default_value = 2.0
+    links.new(tc.outputs["Object"], fine.inputs["Vector"])
+    mix = nodes.new("ShaderNodeMath")
+    mix.operation = 'MULTIPLY_ADD'
+    mix.inputs[1].default_value = 0.15
+    links.new(fine.outputs["Fac"], mix.inputs[0])
+    links.new(noise.outputs["Fac"], mix.inputs[2])
+    bump = nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = fold
+    bump.inputs["Distance"].default_value = 0.004
+    links.new(mix.outputs[0], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    return mat
+
+
 def sooty(name, base, soot, rough=0.6, metal=0.0, stretch=(9.0, 1.2, 9.0), ramp=(0.32, 0.58)):
     """Base colour streaked with soot along the flow (+Y, object space):
     heat-stained nozzle parts (photos: pale ceramic flaps with brown streaks)."""
@@ -317,6 +352,15 @@ def get(name):
     return m
 
 
+FABRICS = {
+    "flightsuit": ((0.105, 0.110, 0.085), 0.85, 0.35, 0.45, 12.0),
+    "gsuit":      ((0.095, 0.100, 0.076), 0.85, 0.30, 0.55, 10.0),
+    "vest":       ((0.072, 0.080, 0.058), 0.80, 0.25, 0.35, 16.0),
+    "pouch":      ((0.060, 0.080, 0.042), 0.80, 0.25, 0.30, 20.0),
+    "glove":      ((0.055, 0.058, 0.045), 0.75, 0.30, 0.25, 30.0),
+}
+
+
 SWITCHABLE = {
     # name: (base colour, emission colour, strength when on)
     "landing_light": ((0.85, 0.85, 0.82), (1.0, 0.96, 0.88), 60.0),
@@ -357,6 +401,15 @@ def _make(name):
     if name == "intake":
         # duct lining: light grey behind the lip (s ~4.3-5.0), dark by s ~5.9
         return depth_fade("F35_intake", (0.52, 0.52, 0.50), (0.035, 0.035, 0.038), -2.85, -1.95)
+    if name in FABRICS:
+        return fabric("F35_" + name, *FABRICS[name])
+    if name == "pilot_skin":
+        mat = principled("F35_pilot_skin", (0.36, 0.20, 0.13), rough=0.48)
+        b = _bsdf(mat)
+        for k, v in (("Subsurface Weight", 0.25), ("Subsurface Scale", 0.004)):
+            if k in b.inputs:
+                b.inputs[k].default_value = v
+        return mat
     if name == "nozzle_ceramic":
         return sooty("F35_nozzle_ceramic", (0.56, 0.53, 0.48), (0.24, 0.21, 0.18), rough=0.7)
     table = {
@@ -410,15 +463,17 @@ def _make(name):
         "led_green": dict(color=(0.0, 0.2, 0.0), rough=0.3, emission=(0.1, 1.0, 0.2), emission_strength=6),
         "led_amber": dict(color=(0.2, 0.1, 0.0), rough=0.3, emission=(1.0, 0.55, 0.05), emission_strength=6),
         "led_red":   dict(color=(0.2, 0.0, 0.0), rough=0.3, emission=(1.0, 0.05, 0.02), emission_strength=6),
-        # pilot
-        "flightsuit": dict(color=(0.20, 0.21, 0.13), rough=0.85),
-        "gsuit":     dict(color=(0.16, 0.17, 0.10), rough=0.85),
-        "harness":   dict(color=(0.05, 0.05, 0.05), rough=0.7),
-        "helmet":    dict(color=(0.08, 0.085, 0.09), rough=0.35, coat=0.4),
-        "visor":     dict(color=(0.04, 0.03, 0.02), rough=0.02, metal=0.9),
-        "glove":     dict(color=(0.13, 0.11, 0.08), rough=0.7),
-        "boot":      dict(color=(0.03, 0.03, 0.03), rough=0.6),
-        "mask":      dict(color=(0.08, 0.08, 0.08), rough=0.5),
+        # pilot (IAF aircrew at Red Flag 2023: grey-sage suit and G-suit, olive vest with
+        # green pouches, dark grey HMDS helmet with a smoked visor, black mask and boots)
+        "harness":   dict(color=(0.030, 0.032, 0.026), rough=0.7),
+        "helmet":    dict(color=(0.045, 0.047, 0.050), rough=0.40, coat=0.25),
+        "visor":     dict(color=(0.020, 0.020, 0.021), rough=0.04, metal=0.7, coat=0.6),
+        "boot":      dict(color=(0.025, 0.025, 0.025), rough=0.55),
+        "mask":      dict(color=(0.035, 0.036, 0.034), rough=0.55),
+        "hose":      dict(color=(0.04, 0.042, 0.038), rough=0.6),
+        "koch":      dict(color=(0.55, 0.56, 0.57), rough=0.3, metal=0.9),
+        "kneeboard": dict(color=(0.04, 0.04, 0.042), rough=0.6),
+        "paper":     dict(color=(0.80, 0.80, 0.76), rough=0.9),
         "ground":    dict(color=(0.32, 0.32, 0.31), rough=0.8),
     }
     kw = table[name]

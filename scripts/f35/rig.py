@@ -252,8 +252,9 @@ def build(ctx):
         for side, ctrl in (("R", "Stick"), ("L", "Throttle")):
             pb = pilot.data.bones.get(f"IK_hand.{side}")
             if pb is not None and ctrl in eb:
+                z = pilot.matrix_world.to_3x3() @ pb.matrix_local.col[2].xyz    # keep the hand's roll
                 _edit_bone(eb, f"Hand_{side}", pilot.matrix_world @ pb.head_local,
-                           pilot.matrix_world @ pb.tail_local, ctrl)
+                           pilot.matrix_world @ pb.tail_local, ctrl, roll_axis=tuple(z))
     bpy.ops.object.mode_set(mode='OBJECT')
     pose = arm.pose.bones
     for pb in pose:
