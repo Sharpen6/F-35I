@@ -280,5 +280,10 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   `env.snapExposure`, `env.exposureBias`, `env.autoExposure`, `env.sunLight`, `env.hemiLight`,
   `env.sky`, `env.dispose`; `terrain.runways`, `terrain.stats`, `terrain.debug` (`lod`,
   `wireframe`, `runways`, `heightProbe`), `terrain.detailStrength`, `terrain.albedoGain`,
-  `terrain.group`, `terrain.dispose`; `coords.js` also exports `lonLatToEN`, `enToLonLat`,
+  `terrain.group`, `terrain.dispose`; `terrain.groundDetail`, `terrain.shadows`,
+  `terrain.cityLights` (switches), `terrain.setQuality(q)` and `terrain.module` (for
+  `app.addModule`), `terrain.horizon` (the horizon maps: `uniforms`, `stats`),
+  `terrain.sunVisibilityAt(x, y, z)`, `terrain.setVegetationCover({range, fade})` (a 3D tree
+  module tells the terrain where it draws trees, so the shader paints plain ground under them
+  instead of crowns); `coords.js` also exports `lonLatToEN`, `enToLonLat`,
   `headingDegFromXZ`, `xzFromHeadingDeg`, `CORE_HALF`, `FAR_HALF`.
