@@ -240,6 +240,17 @@ export class Environment {
     this._shadowTarget = null;
     this._shadowRadius = 12;
     this._shadowMeshCount = -1;
+    /**
+     * Near the ground the sun's shadow box takes in this much (m) around and ahead of the camera
+     * (buildings, hangars, trees); null: by the shadow map size (4096: 160 m, 2048: 110 m, 1024:
+     * the jet only). In the air it stays tight around the jet.
+     */
+    this.shadowNear = null;
+    this._shadowWide = false;
+    this._shadowMap = 0;
+    this._sx = new THREE.Vector3();
+    this._sy = new THREE.Vector3();
+    this._sv = new THREE.Vector3();
 
     // --- renderer / scene defaults ---
     renderer.shadowMap.enabled = true;
@@ -379,6 +390,68 @@ export class Environment {
     });
     const sphere = new THREE.Box3().setFromObject(obj).getBoundingSphere(new THREE.Sphere());
     this._shadowRadius = Math.max(4, Number.isFinite(sphere.radius) ? sphere.radius * 1.1 : 12);
+  }
+
+  /**
+   * The sun's (or moon's) shadow box. There is one shadow map (the terrain shaders read the sun's),
+   * so its box is fitted to what needs it most: in the air, tight around the jet (a crisp shadow,
+   * and the jet's own shadows on itself, ~1 cm texels); with the camera near the ground, also the
+   * ground around and ahead of it (shadowNear), so buildings, hangars and trees cast shadows there
+   * too while the jet's stays sharp (4096 map: ~10 cm texels). The box is fitted in the light's
+   * frame; when wide, its size is quantised and its centre snapped to whole texels, so standing
+   * shadows do not crawl as the camera moves. The depth bias is kept constant in metres.
+   */
+  _fitShadow(jet, camera) {
+    const L = this.sunLight, sc = L.shadow.camera;
+    const z = this.lightDirection;
+    // the light's frame as three's lookAt builds it (up +y)
+    const x = this._sx.set(0, 1, 0).cross(z);
+    if (x.lengthSq() < 1e-10) x.set(1, 0, 0); else x.normalize();
+    const y = this._sy.copy(z).cross(x);
+    const jr = this._shadowRadius;
+    let minX = jet.dot(x) - jr, maxX = minX + 2 * jr, minY = jet.dot(y) - jr, maxY = minY + 2 * jr;
+    // near the ground: a disc ahead of the camera (its centre R/2 ahead), plus 30 m for what stands on it
+    const map = L.shadow.mapSize.x;
+    const R = this.shadowNear ?? (map >= 4096 ? 160 : map >= 2048 ? 110 : 0);
+    const cp = this._camPos;
+    const gh = this._terrain?.loaded && typeof this._terrain.heightAt === 'function' ? this._terrain.heightAt(cp.x, cp.z) : 0;
+    const agl = cp.y - (Number.isFinite(gh) ? gh : 0);
+    this._shadowWide = R > 0 && agl < (this._shadowWide ? 220 : 150);
+    if (this._shadowWide) {
+      const f = camera.getWorldDirection(this._sv);
+      f.y = 0;
+      if (f.lengthSq() < 1e-6) f.set(0, 0, -1); else f.normalize();
+      const c = f.multiplyScalar(R * 0.5).add(cp);
+      c.y = Number.isFinite(gh) ? gh : 0;
+      const cx = c.dot(x), cy = c.dot(y), rr = R + 30;
+      minX = Math.min(minX, cx - rr); maxX = Math.max(maxX, cx + rr);
+      minY = Math.min(minY, cy - rr); maxY = Math.max(maxY, cy + rr);
+    }
+    let r = 0.5 * Math.max(maxX - minX, maxY - minY);
+    let cx = 0.5 * (minX + maxX), cy = 0.5 * (minY + maxY);
+    if (this._shadowWide) {
+      r = Math.ceil(r / 16) * 16;
+      const texel = 2 * r / map;
+      cx = Math.round(cx / texel) * texel;
+      cy = Math.round(cy / texel) * texel;
+    }
+    const D = 1000;
+    L.target.position.copy(x).multiplyScalar(cx).addScaledVector(y, cy).addScaledVector(z, jet.dot(z));
+    L.position.copy(L.target.position).addScaledVector(z, D);
+    const near = D - Math.max(2 * r, 60), far = D + 2000;
+    if (sc.right !== r || sc.near !== near || sc.far !== far || this._shadowMap !== map) {
+      this._shadowMap = map;                     // (setQuality changes the map size)
+      sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r;
+      sc.near = near; sc.far = far;
+      sc.updateProjectionMatrix();
+      // the same bias in metres whatever the depth range (0.8 m, as tuned for the jet), and a
+      // normal offset of half a texel against acne on the wider maps
+      L.shadow.bias = -0.8 / (far - near);
+      L.shadow.normalBias = Math.max(0.03, r / map);
+      // the filter kernel is counted in texels: narrower on the wide map, so the jet keeps a
+      // sharp shadow (~1.2 x 10 cm instead of 2.5 x 10 cm of blur)
+      L.shadow.radius = this._shadowWide ? 1.2 : 2.5;
+    }
   }
 
   _renderSkyLUT() {
@@ -592,21 +665,12 @@ export class Environment {
       this._envSun.copy(this.sunDirection);
     }
 
-    // sun (or moon) light / shadow camera
+    // sun (or moon) light / shadow camera (_fitShadow)
     const L = this.sunLight;
     const sunUp = this.lightDirection.y > -0.01;
     if (this._shadowTarget) {
       this._prepareShadowTarget();
-      this._shadowTarget.getWorldPosition(this._tmp);
-      const D = 1000, r = this._shadowRadius;
-      L.target.position.copy(this._tmp);
-      L.position.copy(this._tmp).addScaledVector(this.lightDirection, D);
-      const sc = L.shadow.camera;
-      if (sc.right !== r || sc.far !== D + 2000) {
-        sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r;
-        sc.near = D - 2 * r; sc.far = D + 2000;
-        sc.updateProjectionMatrix();
-      }
+      this._fitShadow(this._shadowTarget.getWorldPosition(this._tmp), camera);
       // moon shadows only near full moon and with the moon well up (the pass costs ~180 draw calls)
       L.castShadow = sunUp && (!this.lightIsMoon || (this.moon.brightness > 0.25 && this.lightDirection.y > 0.14));
     } else {

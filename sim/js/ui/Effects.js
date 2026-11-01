@@ -34,6 +34,21 @@ function puffTexture() {
 
 const FIRE_N = 40, SMOKE_N = 90;
 
+// Under the HDR chain (js/env/Post.js) the sprites are scene-referred radiance and get the
+// scene's exposure like everything else (about x0.9 at noon, x40 at night). The fire is a light:
+// its radiance is scaled by exposure^-0.75, as an eye adapts to a fire it looks at (bright
+// orange at night, not a white blot). The smoke is lit: its radiance follows the light falling
+// on the scene (the exposure meter's curve, Environment.js METER, inverted), so it is grey by day
+// and dark at night instead of glowing. Drawn straight to the canvas (?post=0): as tuned before.
+const NOON_LIGHT = 5.7;          // the metered light at noon (exposure 0.93)
+function expose(renderer, m, lit) {
+  const base = m.userData.base;
+  if (!renderer.getRenderTarget()) { m.color.copy(base); return; }
+  const e = Math.max(1e-3, renderer.toneMappingExposure || 1);
+  if (lit) m.color.copy(base).multiplyScalar(Math.min(1.5, Math.pow(e / 1.817, -1 / 0.385) / NOON_LIGHT));
+  else m.color.copy(base).multiplyScalar(Math.pow(e, -0.75));
+}
+
 export class Effects {
   constructor(scene) {
     this.scene = scene;
@@ -44,9 +59,11 @@ export class Effects {
     this.fire = [];
     this.smoke = [];
     for (let i = 0; i < FIRE_N; i++) {
-      // self-luminous: not tone mapped, so the fire keeps its colour at any exposure (dusk, night)
+      // self-luminous: not tone mapped on the canvas path; under Post.js see expose()
       const m = new THREE.SpriteMaterial({ map: tex, color: 0xffa040, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false, toneMapped: false });
+      m.userData.base = new THREE.Color(0xffa040);
       const s = new THREE.Sprite(m);
+      s.onBeforeRender = (r) => expose(r, m, false);
       s.visible = false;
       s.renderOrder = 6;
       this.group.add(s);
@@ -54,7 +71,9 @@ export class Effects {
     }
     for (let i = 0; i < SMOKE_N; i++) {
       const m = new THREE.SpriteMaterial({ map: tex, color: 0x2a2826, depthWrite: false, transparent: true, opacity: 0 });
+      m.userData.base = m.color.clone();
       const s = new THREE.Sprite(m);
+      s.onBeforeRender = (r) => expose(r, m, true);
       s.visible = false;
       s.renderOrder = 5;
       this.group.add(s);
@@ -120,7 +139,7 @@ export class Effects {
       p.s.scale.setScalar(size);
       // additive: a white-hot core where many overlap, orange at the edges
       p.s.material.opacity = 0.35 * Math.max(0, 1 - k) * (this.t < 12 ? 1 : 0);
-      p.s.material.color.setRGB(1, 0.3 + 0.3 * (1 - k), 0.06 * (1 - k));
+      p.s.material.userData.base.setRGB(1, 0.3 + 0.3 * (1 - k), 0.06 * (1 - k));
     }
     this.light.intensity = this.t < 12 ? (this.t < 1 ? 2500 : 600 * (0.7 + 0.3 * Math.random())) * sc : 0;
     // smoke: a steady stream rising and drifting
