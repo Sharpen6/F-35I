@@ -418,7 +418,7 @@ def build(tl, only=None):
             summ = (row.get("summary") or "").split("\n")[0].strip().rstrip(".")
             when = (row.get("date") or "")[-5:]
             for view in ("fl34", "side", "rr34"):
-                tl.image(history_still(nn, view), 4.5, f"Backup {nn}  ·  {when}  ·  {summ}", push=0.04, fade=0.5)
+                tl.image(history_still(nn, view), 3.2, f"Backup {nn}  ·  {when}  ·  {summ}", push=0.04, fade=0.4)
         tl.end_chapter()
     if want(4):
         tl.chapter(4, "Detail work", "Review renders against the photos, then fix, then review again")
@@ -433,7 +433,7 @@ def build(tl, only=None):
         revs = sorted(glob.glob(R("renders", "review", "*.png")), key=os.path.getmtime)
         a = tl.f
         for p in revs:
-            tl.image(p, 0.5, None, push=0.0, fade=0.0)
+            tl.image(p, 0.34, None, push=0.0, fade=0.0)
         if revs:
             tl.text(f"{len(revs)} review renders", a, tl.f, size=0.045, x=0.5, y=0.08, box=True)
         tl.end_chapter()
