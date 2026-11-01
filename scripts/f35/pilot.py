@@ -76,11 +76,18 @@ BONES = [
 ]
 
 
+# The body sits cockpit.SEAT_DZ lower with the seat; hands stay on the stick and throttle and feet on
+# the pedals, elbows and knees go half way.
+_DZ_NONE = {"wrist.L", "wrist.R", "hand.L", "hand.R", "ankle.L", "ankle.R", "toe.L", "toe.R"}
+_DZ_HALF = {"elbow.L", "elbow.R", "knee.L", "knee.R"}
+
+
 def jp(name):
     """Joint position in the world (J is in cockpit design stations, see cockpit.COCKPIT_DS)."""
-    from .cockpit import COCKPIT_DS
+    from .cockpit import COCKPIT_DS, SEAT_DZ
     x, s, z = J[name]
-    return Vector(P(s + COCKPIT_DS, x, z))
+    k = 0.0 if name in _DZ_NONE else 0.5 if name in _DZ_HALF else 1.0
+    return Vector(P(s + COCKPIT_DS, x, z + k * SEAT_DZ))
 
 
 def _seg_dist(p, a, b):

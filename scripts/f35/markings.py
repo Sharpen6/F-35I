@@ -301,9 +301,11 @@ def build(ctx):
                                 nv=14))
         out.append(decal_on(f"EjectWarn_{tag}", coll, fus, 4.20, side, 0.68, 0.26, 0.2925, seat))
         out.append(decal_on(f"EjectWarn_Intake_{tag}", coll, fus, 4.95, side, -0.42, 0.30, 0.3375, intake))
-        band = obj.get(f"Canopy_Band_{tag}") or bpy.data.objects.get(f"Canopy_Band_{tag}")
-        if band is not None:                          # on the frame band: opens with the canopy
-            out.append(decal_on(f"Stencil_CanopyWarn_{tag}", coll, band, 2.76, side, 0.672, 0.64, 0.07,
+        band = obj.get("Canopy_Frame") or bpy.data.objects.get("Canopy_Frame")
+        if band is not None:                          # on the frame band (photo c34): opens with the canopy
+            from .canopy import sill_z, glass_edge_z
+            zw = 0.5 * (sill_z(2.68) + glass_edge_z(2.68))     # middle of the frame band
+            out.append(decal_on(f"Stencil_CanopyWarn_{tag}", coll, band, 2.68, side, zw, 0.64, 0.065,
                                 canopy_warn, nu=28, nv=6))
         # wings: upper + lower roundels
         wing = obj.get(f"Wing_{tag}")

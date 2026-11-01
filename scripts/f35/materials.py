@@ -460,6 +460,8 @@ def _make(name):
         "yellow_black": dict(color=(0.85, 0.65, 0.05), rough=0.4),
         "seat":      dict(color=(0.09, 0.10, 0.09), rough=0.7),
         "seat_cushion": dict(color=(0.16, 0.17, 0.12), rough=0.9),
+        # light beige pads on the glare shield corners (photos c29, c34, c09)
+        "glare_pad": dict(color=(0.62, 0.57, 0.45), rough=0.8),
         "led_green": dict(color=(0.0, 0.2, 0.0), rough=0.3, emission=(0.1, 1.0, 0.2), emission_strength=6),
         "led_amber": dict(color=(0.2, 0.1, 0.0), rough=0.3, emission=(1.0, 0.55, 0.05), emission_strength=6),
         "led_red":   dict(color=(0.2, 0.0, 0.0), rough=0.3, emission=(1.0, 0.05, 0.02), emission_strength=6),

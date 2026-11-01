@@ -22,6 +22,10 @@ COCKPIT_DS = -0.55
 PANEL_TILT = math.radians(23.0)       # PCD face tilted back from vertical
 PANEL_C = (0.0, 3.20, 0.70)           # (x, s, z) centre of the PCD face (design stations)
 EYE = (0.0, 3.90, 1.13)               # design eye (s 3.35 after COCKPIT_DS)
+# The seat and the pilot sit 4.5 cm lower than first drawn: photos c34, c51 and c09 show 8-10 cm of
+# clear glass over the helmet (the canopy crest is ~3 cm under the 3-view's), and the seat's
+# headbox a few cm under the glass.  pilot.jp lowers the body by the same amount.
+SEAT_DZ = -0.045
 
 
 # --------------------------------------------------------------------------
@@ -236,6 +240,13 @@ def build(ctx):
     # glare shield (hood over the display)
     gs = _obj("Glareshield", _box_mesh(0.56, 0.22, 0.03), coll, M.get("cockpit"),
               loc=panel_frame(0, 0.135, 0.075), rot=(math.radians(10), 0, 0), bevel=0.01)
+    # two light beige pads on the glare shield's front outboard corners (photos c29, c13, c50
+    # head-on, c34, c53, c09 from the sides)
+    pad_mat = M.get("glare_pad")
+    for u in (0.21, -0.21):
+        _obj(f"Glareshield_Pad_{'L' if u > 0 else 'R'}", _box_mesh(0.10, 0.06, 0.02), coll, pad_mat,
+             loc=panel_frame(u, 0.135, 0.075) + Matrix.Rotation(math.radians(10), 3, 'X') @ Vector((0, -0.07, 0.024)),
+             rot=(math.radians(10), 0, 0), bevel=0.005)
     # lower switch panel
     lp = _obj("Cockpit_LowerPanel", _box_mesh(0.78, 0.10, 0.10), coll,
               M.get("cockpit_panel"), loc=panel_frame(0, -0.215, -0.04),
@@ -348,7 +359,7 @@ def build_aft_deck(coll):
     belongs to the airframe, not to the cockpit design layout."""
     from .canopy import SILL_W
     from .fuselage import fore_upper_z, cockpit_half_width
-    s0, s1, n = 3.66, 4.93, 14
+    s0, s1, n = 3.66, 4.66, 12
     rings = []
     for i in range(n + 1):
         s = s0 + (s1 - s0) * i / n
@@ -370,31 +381,46 @@ def build_aft_deck(coll):
 
 def build_seat(coll):
     """Martin-Baker US16E style ejection seat (simplified)."""
+    def WS(x, s, z):
+        return W(x, s, z + SEAT_DZ)
     objs = {}
     parts = []
     s_pan_f, s_pan_b, z_pan = 3.55, 3.97, 0.40
     # seat pan (bucket bottom)
     parts.append(_box_mesh(0.44, s_pan_b - s_pan_f, 0.10, 0, 0, 0))
-    pan_loc = W(0, (s_pan_f + s_pan_b) / 2, z_pan - 0.05)
+    pan_loc = WS(0, (s_pan_f + s_pan_b) / 2, z_pan - 0.05)
     pan = _obj("Seat_Pan", parts[0], coll, M.get("seat"), loc=pan_loc, bevel=0.012)
     # back (reclined ~18 deg)
     rec = math.radians(18)
     back = _obj("Seat_Back", _box_mesh(0.46, 0.10, 0.82), coll, M.get("seat"),
-                loc=W(0, 4.12, 0.80), rot=(-rec, 0, 0), bevel=0.012)
+                loc=WS(0, 4.12, 0.80), rot=(-rec, 0, 0), bevel=0.012)
     # headbox with drogue container
     head = _obj("Seat_Headbox", _box_mesh(0.30, 0.18, 0.24), coll, M.get("seat"),
-                loc=W(0, 4.33, 1.16), rot=(-rec, 0, 0), bevel=0.02)
-    # side rails / guide rails
+                loc=WS(0, 4.33, 1.16), rot=(-rec, 0, 0), bevel=0.02)
+    # two short rods on top of the headbox (photos c09, c34)
+    axis = Vector((0, math.sin(rec), math.cos(rec)))
+    for x in (0.06, -0.06):
+        rod = _cyl_mesh(0.007, 0.065, seg=8)
+        _obj(f"Seat_HeadRod_{'L' if x > 0 else 'R'}", rod, coll, M.get("cockpit"),
+             loc=WS(x, 4.33, 1.16) + axis * 0.115, rot=(-rec, 0, 0))
+    # side rails / guide rails: from the seat bottom up to just under the headbox top (the old
+    # 1.05 m rails stood ~6-9 cm out through the canopy)
+    rl, rb = 0.92, 0.82 - 0.525 * math.cos(rec)
     for side in (1, -1):
-        _obj(f"Seat_Rail_{'L' if side > 0 else 'R'}", _box_mesh(0.035, 0.07, 1.05), coll,
-             M.get("seat"), loc=W(side * 0.235, 4.15, 0.82), rot=(-rec, 0, 0), bevel=0.006)
+        rc = WS(side * 0.235, 4.15 - 0.525 * math.sin(rec), rb) + axis * (rl / 2)
+        _obj(f"Seat_Rail_{'L' if side > 0 else 'R'}", _box_mesh(0.035, 0.07, rl), coll,
+             M.get("seat"), loc=rc, rot=(-rec, 0, 0), bevel=0.006)
         _obj(f"Seat_Side_{'L' if side > 0 else 'R'}", _box_mesh(0.03, 0.40, 0.17), coll,
-             M.get("seat"), loc=W(side * 0.235, 3.78, 0.46), bevel=0.006)
+             M.get("seat"), loc=WS(side * 0.235, 3.78, 0.46), bevel=0.006)
     # cushions
     _obj("Seat_Cushion", _box_mesh(0.40, 0.38, 0.05), coll, M.get("seat_cushion"),
-         loc=W(0, 3.76, z_pan + 0.025), bevel=0.015)
+         loc=WS(0, 3.76, z_pan + 0.025), bevel=0.015)
     _obj("Seat_BackCushion", _box_mesh(0.38, 0.05, 0.62), coll, M.get("seat_cushion"),
-         loc=W(0, 4.035, 0.80), rot=(-rec, 0, 0), bevel=0.015)
+         loc=WS(0, 4.035, 0.80), rot=(-rec, 0, 0), bevel=0.015)
+    # tall flat panel standing just aft of the headbox, leaning back (photos c09, c34, c53:
+    # dark face with light edges, its top a few cm under the headbox top)
+    _obj("Cockpit_AftPanel", _box_mesh(0.30, 0.03, 0.39), coll, M.get("cockpit_panel"),
+         loc=WS(0, 4.50, 1.04), rot=(-math.radians(20), 0, 0), bevel=0.008)
     # ejection handle (yellow/black loop) at the front of the seat pan
     loop = _cyl_mesh(0.009, 0.16, seg=10)
     rotm = Matrix.Rotation(math.radians(90), 4, 'Y')
@@ -403,6 +429,6 @@ def build_seat(coll):
     l2v = [v + Vector((-0.08, 0, -0.06)) for v in l2[0]]
     l3v = [v + Vector((0.08, 0, -0.06)) for v in l2[0]]
     ej = _obj("Seat_EjectHandle", _merge([(lv, loop[1]), (l2v, l2[1]), (l3v, l2[1])]), coll,
-              M.get("yellow_black"), loc=W(0, 3.54, 0.43))
+              M.get("yellow_black"), loc=WS(0, 3.54, 0.43))
     objs["Seat_EjectHandle"] = ej
     return objs
