@@ -61,6 +61,12 @@ function infoWithPoints(info) {
 const _eye = new THREE.Vector3();
 const _cam = new THREE.Vector3();
 
+/** AB_Open weight of the nozzle from the throttle alone: open at idle, shut by ~60 % (MIL 0.75). */
+export function nozzleIdleOpen(throttle) {
+  const t = Number.isFinite(throttle) ? throttle : 0;
+  return 0.75 * (1 - THREE.MathUtils.smoothstep(t, 0.08, 0.6));
+}
+
 export class AircraftVisual {
   constructor({ scene = null, baseUrl = 'data/aircraft/' } = {}) {
     this.scene = scene;
@@ -100,7 +106,7 @@ export class AircraftVisual {
     this.root = root;
     this.model.add(root);
     // materials, rig, lights, burner
-    const mats = setupMaterials(root);
+    const mats = setupMaterials(root, { rig });
     this.materials = mats;
     this.player = new RigPlayer(rig, root);
     if (this.player.missing.length) console.warn('AircraftVisual: rig nodes missing in the glb:', this.player.missing);
@@ -163,11 +169,12 @@ export class AircraftVisual {
   update(dt, camera) {
     if (!this.loaded) return;
     dt = Math.min(Math.max(dt || 0, 0), 0.25);
-    // nozzle petals: open with the burner when the app gives ab, else with the throttle (rig)
-    this.player.overrideMorph('AB_Open', this._ab === null ? null : this._ab);
-    this.player.apply();
-    // burner plume from ab, or from the throttle above MIL
+    // burner from ab, or from the throttle above MIL
     const ab = this._ab !== null ? this._ab : Math.max(0, (this._throttle - 0.75) / 0.25);
+    // nozzle petals (AB_Open: 0 = the MIL position, 1 = full burner): the F135's convergent-divergent
+    // nozzle is wide open at idle, closes as the throttle comes up to MIL and opens again in burner
+    this.player.overrideMorph('AB_Open', Math.max(ab, nozzleIdleOpen(this._throttle)));
+    this.player.apply();
     this.afterburner.set(ab, this._throttle);
     this.lights.set(null, this._gear);
     this.object3d.updateMatrixWorld();
