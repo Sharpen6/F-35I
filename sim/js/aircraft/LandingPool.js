@@ -2,11 +2,11 @@
 // is drawn on its own: a grid that follows the terrain (Terrain.heightAt) ahead of the lamp, added
 // on top of the ground (additive), lit per fragment from the lamp's beam:
 //     E = I(theta) cos(incidence) / r^2,   L = albedo E / pi
-// with I(theta) the beam pattern of lights.js (400,000 cd peak, 9 deg 1/e half width, plus a faint
-// skirt ~20 deg wide), the ground's albedo assumed (runway asphalt with its paint ~0.12), and the
-// same night visibility gain as the light glows (AircraftLights.nightGain: the sim's night exposure
-// stops far short of a dark-adapted eye). Its display brightness rolls off softly toward uKnee
-// (~1.1), so the pool stays graded where a camera would not clip it to a flat white wedge.
+// with I(theta) the beam pattern of lights.js (400,000 cd peak, 9 deg 1/e half width), the ground's
+// albedo assumed (runway asphalt with its paint ~0.12), and the same night visibility gain as the
+// light glows (AircraftLights.nightGain: the sim's night exposure stops far short of a dark-adapted
+// eye). Its display brightness rolls off softly toward uKnee (~1.1), so the pool stays graded where
+// a camera would not clip it to a flat white wedge, and fades out before the grid's edges.
 // By day it is invisible, as it should be. The beam (world position, direction, intensity, spread)
 // is also published on visual.lights.landing for a terrain shader that wants to light itself.
 
@@ -21,10 +21,13 @@ const NEAR = 2.5, FAR = 320;           // m along the ground ahead of the lamp
 const POOL_VERT = /* glsl */`
   #include <common>
   #include <logdepthbuf_pars_vertex>
+  attribute vec2 aGrid;        // across -1..1, along 0..1 (the grid's own coordinates)
   varying vec3 vWorld;
+  varying vec2 vGrid;
   void main() {
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vWorld = wp.xyz;
+    vGrid = aGrid;
     gl_Position = projectionMatrix * viewMatrix * wp;
     #include <logdepthbuf_vertex>
   }`;
@@ -40,6 +43,7 @@ const POOL_FRAG = /* glsl */`
   uniform float uExposure;     // the camera's exposure (for the knee below)
   uniform float uKnee;         // display brightness the pool saturates toward
   varying vec3 vWorld;
+  varying vec2 vGrid;
   void main() {
     #include <logdepthbuf_fragment>
     vec3 L = vWorld - uLamp;
@@ -47,14 +51,16 @@ const POOL_FRAG = /* glsl */`
     float r = sqrt(r2);
     float c = clamp(dot(L / r, uBeam), -1.0, 1.0);
     float th = acos(c) / uSpread;
-    // the beam: a core plus the faint wide skirt every lamp's reflector throws (soft edges)
-    float I = uI0 * (0.82 * exp(-th * th) + 0.18 * exp(-th * th * 0.2));
+    float I = uI0 * exp(-th * th);
     float cosInc = max(0.0, -L.y / r);
     float v = I * cosInc / r2 * uGain * uExposure;
     if (v < 1e-5) discard;
-    // a soft knee: the bright patch just ahead of the nose wheel stays a bright, graded pool (a
-    // camera's highlight roll-off) instead of a flat blown-out wedge
+    // a soft knee: the bright patch ahead of the nose wheel stays a bright, graded pool (a camera's
+    // highlight roll-off) instead of a flat blown-out wedge
     v = uKnee * (1.0 - exp(-v / uKnee));
+    // and nothing reaches the grid's edges (no visible border whatever the beam does)
+    v *= (1.0 - smoothstep(0.7, 1.0, abs(vGrid.x))) * smoothstep(0.0, 0.08, vGrid.y)
+       * (1.0 - smoothstep(0.8, 1.0, vGrid.y));
     gl_FragColor = vec4(vec3(1.0, 0.95, 0.86) * v / uExposure, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
@@ -76,6 +82,11 @@ export class LandingPool {
     const geo = new THREE.BufferGeometry();
     this._pos = new Float32Array(NX * NZ * 3);
     geo.setAttribute('position', new THREE.BufferAttribute(this._pos, 3).setUsage(THREE.DynamicDrawUsage));
+    const grid = new Float32Array(NX * NZ * 2);
+    for (let j = 0, k = 0; j < NZ; j++) {
+      for (let i = 0; i < NX; i++) { grid[k++] = (i / (NX - 1)) * 2 - 1; grid[k++] = j / (NZ - 1); }
+    }
+    geo.setAttribute('aGrid', new THREE.BufferAttribute(grid, 2));
     const idx = [];
     for (let j = 0; j < NZ - 1; j++) {
       for (let i = 0; i < NX - 1; i++) {
