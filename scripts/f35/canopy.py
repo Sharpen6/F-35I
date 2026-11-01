@@ -76,22 +76,37 @@ def build_bow(coll, n=48):
     return ob
 
 
-def build_band(coll, side, s0=1.95, step=0.05):
-    """Frame band outside the glass along one sill, from the front tip to the rear frame."""
+def _outward(s, th, h=0.01):
+    """Canopy surface point at (s, th) and its outward unit normal (finite differences)."""
+    p = surface_point(s, th)[0]
+    d_s = surface_point(s + h, th)[0] - surface_point(s - h, th)[0]
+    d_t = surface_point(s, th - math.copysign(h, th))[0] - p      # one step towards the crest
+    n = d_s.cross(d_t)
+    c = P(s, 0.0, fore_upper_z(s, min(SILL_W(s), 0.85)) - 0.05)
+    if n.dot(p - c) < 0:
+        n = -n
+    return p, n.normalized()
+
+
+def build_band(coll, side, s0=1.95, step=0.05, inner=0.0155, outer=0.0235):
+    """Frame band outside the glass along one sill, from the front tip to the rear frame.
+    It stands off along the true surface normal: near the front the glass leans forward, and an
+    offset in the section plane alone let the glass (solidified 12 mm outwards) poke through.
+    Ahead of s0 the two bands close over the crest into the opaque frame tip of the canopy."""
     rings = []
+    sts = [1.842, 1.86, 1.88, 1.90, 1.925]
     s = s0
-    sts = []
     while s < S_GLASS_END - 1e-6:
         sts.append(s)
         s += step
     sts.append(S_GLASS_END)
     for s in sts:
         zs = fore_upper_z(s, min(SILL_W(s), 0.85)) - 0.005
-        ub = min(0.9, BAND_H / max(1e-3, CREST(s) - zs))
+        cap = 0.9 + 0.1 * min(1.0, max(0.0, (1.98 - s) / 0.08))
+        ub = min(cap, BAND_H / max(1e-3, CREST(s) - zs))
         ths = [side * math.acos(min(1.0, (ub * k / 2) ** 0.95)) for k in range(3)]
-        outer = [surface_point(s, th, -0.020)[0] for th in ths]
-        inner = [surface_point(s, th, -0.013)[0] for th in reversed(ths)]
-        rings.append(outer + inner)
+        pn = [_outward(s, th) for th in ths]
+        rings.append([p + n * outer for p, n in pn] + [p + n * inner for p, n in reversed(pn)])
     v, f = loft_rings(rings, True, True, True)
     ob = mesh_object(f"Canopy_Band_{'L' if side > 0 else 'R'}", v, f, coll, M.get("skin"))
     bm = bmesh.new()
