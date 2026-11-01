@@ -98,21 +98,40 @@ def hex_on_skin(name, coll, mat, p, n, along, rx, ry, h=0.004):
     return ob
 
 
+def poly_on_skin(name, coll, mat, p, n, along, pts, h=0.004, up=True):
+    """Flat window with any outline on the skin: pts are (u, w), u along `along`, w across it
+    (w points up the surface when `up`, so outlines read the same on both sides)."""
+    n = Vector(n).normalized()
+    a = Vector(along)
+    a = (a - n * a.dot(n)).normalized()
+    b = n.cross(a)
+    if up and b.z < 0:
+        b = -b
+    rings = [[p + a * u + b * w - n * 0.01 for u, w in pts],
+             [p + a * u + b * w + n * h for u, w in pts]]
+    v, f = loft_rings(rings, True, True, True)
+    ob = mesh_object(name, v, f, coll, mat, smooth=False)
+    _fix(ob)
+    return ob
+
+
 # EOTS: the faceted window sits in a shallow fairing under the chin, its back
 # about 0.25 m ahead of the nose-gear doors (photos c34, c51, c53: window at
 # stations ~1.3-2.1 m).
-EOTS_C = 1.78                     # window centre station (spans ~1.44-2.12)
+EOTS_C = 1.78                     # window centre station (spans ~1.31-2.25)
+EOTS_RS = (0.47, 0.44, 0.34)      # half lengths of the housing / window top / window bottom rings
 
 
 def build_eots(coll, skin):
-    """Faceted EOTS window in a shallow housing under the chin (photos c20, c34:
-    a box-like housing whose flat facets face forward, sideways and down).
-    The rings are planar, tilted with the chin line, so the facets stay flat;
-    the housing collar fills the gap to the curved skin."""
+    """Faceted EOTS window in a shallow housing under the chin.  Photos c51, c34, c53: a long,
+    shallow, box-like window (s ~1.3-2.2) with large flat side panes and a flat bottom about
+    3/4 of the top's length; head-on (c13, c29) its front is a prow, two panes meeting at a
+    light-grey centre bar.  The rings are planar, tilted with the chin line, so the facets stay
+    flat; the housing collar fills the gap to the curved skin."""
     p, n = skin.bottom(EOTS_C, 0.0)
     if p is None:
         return []
-    s0, s1 = EOTS_C - 0.33, EOTS_C + 0.34
+    s0, s1 = EOTS_C - EOTS_RS[0], EOTS_C + EOTS_RS[0]
     q0, _ = skin.bottom(s0, 0.0)
     q1, _ = skin.bottom(s1, 0.0)
     z0 = q0.z if q0 is not None else p.z
@@ -121,12 +140,12 @@ def build_eots(coll, skin):
     def plane(s):
         return z0 + (z1 - z0) * (s - s0) / (s1 - s0)
 
-    def ring(cs, rs, rx):
-        out = []
-        for k in range(7):
-            a = math.pi * (0.5 + 2 * k / 7)          # k = 0 at the aft centre; wide facet at the front
-            out.append((cs + rs * math.sin(a), rx * math.cos(a)))
-        return out
+    def ring(cs, rs, rx, fv):
+        """Box outline with a shallow V at the front (a vertex, the prow) and a rounded back:
+        aft centre, aft corners, side panes, front corners, prow."""
+        return [(cs + rs, 0.0), (cs + rs - 0.35 * rx, -0.75 * rx), (cs + rs - 0.9 * rx, -rx),
+                (cs - rs + fv, -rx), (cs - rs, 0.0), (cs - rs + fv, rx),
+                (cs + rs - 0.9 * rx, rx), (cs + rs - 0.35 * rx, 0.75 * rx)]
 
     def skin_dz(pts):
         d = []
@@ -135,37 +154,93 @@ def build_eots(coll, skin):
             d.append((q.z if q is not None else plane(s)) - plane(s))
         return d
 
-    top = ring(EOTS_C, 0.34, 0.165)
-    mid = ring(EOTS_C + 0.01, 0.30, 0.140)
-    bot = ring(EOTS_C + 0.06, 0.15, 0.075)
+    top = ring(EOTS_C, EOTS_RS[0], 0.165, 0.10)
+    mid = ring(EOTS_C + 0.01, EOTS_RS[1], 0.140, 0.09)
+    bot = ring(EOTS_C + 0.05, EOTS_RS[2], 0.110, 0.07)
     d_top = max(skin_dz(top)) + 0.012            # inside the skin everywhere
     d_mid = min(skin_dz(mid)) - 0.006            # just outside it
     ring_top = [P(s, x, plane(s) + d_top) for s, x in top]
     ring_mid = [P(s, x, plane(s) + d_mid) for s, x in mid]
-    ring_bot = [P(s, x, plane(s) + d_mid - 0.055) for s, x in bot]
+    # the bottom face is level (c51: deep raked front pane, shallow aft one) at ~-0.55 m,
+    # where the head-on photos c29 / c20 put it
+    z_bot = min(-0.55, min(plane(s) + d_mid for s, x in bot) - 0.012)
+    ring_bot = [P(s, x, z_bot) for s, x in bot]
     v, f = loft_rings([ring_top, ring_mid], True, True, False)
     frame = mesh_object("EOTS_Fairing", v, f, coll, M.get("skin"), smooth=False)
     _fix(frame)
     v, f = loft_rings([ring_mid, ring_bot], True, True, True)
     glass = mesh_object("EOTS_Window", v, f, coll, M.get("eots_glass"), smooth=False)
     _fix(glass)
-    return [glass, frame]
+    # frame bars along the prow and the two front corners (c13: light grey)
+    bars = []
+    for k in (4, 3, 5):
+        a_, b_ = Vector(ring_mid[k]), Vector(ring_bot[k])
+        d = (b_ - a_).normalized()
+        bars.append(cylinder(f"EOTS_Bar_{k}", a_ - d * 0.004, b_ + d * 0.004, 0.0065 if k == 4 else 0.0045,
+                             0.0065 if k == 4 else 0.0045, coll, M.get("skin"), segments=6))
+    return [glass, frame] + bars
+
+
+def _upper_das_fairing(coll, skin, sa=1.56, sb=1.635, sc=1.76, sd=1.80, w=0.19, h=0.038, ch=0.035):
+    """The upper-forward DAS sits in a low faceted blister at the base of the windscreen
+    (photos c13, c29 head-on): ~0.35 m wide, flat top with a slight centre dip, chamfered
+    sides, a raked front face carrying two windows side by side."""
+    def zs(s, x):
+        q, _ = skin.top(s, x)
+        return q.z if q is not None else None
+    rings = []
+    for s, hh, ww in ((sa, 0.0, w + 0.01), (sb, h, w), (sc, h, w), (sd, 0.0, w + 0.01)):
+        prof = [(-ww, 0.0), (-(ww - ch), hh), (0.0, hh - 0.004 if hh > 0 else 0.0), (ww - ch, hh), (ww, 0.0)]
+        ring = []
+        for x, dz in prof:
+            z = zs(s, x)
+            if z is None:
+                return []
+            ring.append(P(s, x, z + dz - (0.006 if dz == 0.0 else 0.0)))
+        zc = zs(s, 0.0)
+        ring += [P(s, ww * 0.8, zc - 0.03), P(s, -ww * 0.8, zc - 0.03)]
+        rings.append(ring)
+    v, f = loft_rings(rings, True, True, True)
+    ob = mesh_object("DAS_UpperFairing", v, f, coll, M.get("skin"), smooth=False)
+    _fix(ob)
+    out = [ob]
+    # windows on the raked front face: a light mirror hexagon on the aircraft's right (-x),
+    # a dark teal trapezoid on its left (+x), each ~8 cm wide
+    sm = 0.5 * (sa + sb)
+    for x, name, mat, pts in (
+            (-0.075, "DAS_UpperFwd_Hex", M.get("das_mirror"),
+             [(0.04, 0.0), (0.02, 0.017), (-0.02, 0.017), (-0.04, 0.0), (-0.02, -0.017), (0.02, -0.017)]),
+            (0.075, "DAS_UpperFwd", M.get("das_window"),
+             [(0.042, -0.016), (0.026, 0.016), (-0.026, 0.016), (-0.042, -0.016)])):
+        za, zb = zs(sa, x), zs(sb, x)
+        pa, pb = Vector(P(sa, x, za)), Vector(P(sb, x, zb + h))
+        t_ = (pb - pa).normalized()
+        nrm = Vector((1, 0, 0)).cross(t_)
+        if nrm.z < 0:
+            nrm = -nrm
+        pc = (pa + pb) * 0.5
+        out.append(poly_on_skin(name, coll, mat, pc, nrm, (1, 0, 0), pts, h=0.003))
+    return out
 
 
 def build_das(coll, skin):
-    """Six DAS apertures.  Seen in photos: one ahead of the windscreen, one
-    behind the canopy, one on each lower side of the nose just above the front
-    of the nose-gear doors (a small hexagonal window with a pink / teal sheen,
-    c34, c51, c53).  The two lower ones (chin and aft belly) are placed on the
-    centre line; public photos do not show them clearly."""
+    """Six DAS apertures.  Seen in photos: one ahead of the windscreen (in a raised blister with
+    a second window beside it), one behind the canopy, one on each lower side of the nose (a
+    tall dark pentagon with a pink / teal sheen at s ~2.1, in the aft-upper part of the big
+    access panel: ref_03, ref_05, c34, c51, c53).  The two lower ones (chin and aft belly) are
+    placed on the centre line; public photos do not show them clearly."""
     out = []
     mat = M.get("das_window")
-    for name, (p, n) in (("DAS_UpperFwd", skin.top(1.60, 0.0)), ("DAS_UpperAft", skin.top(5.12, 0.0))):
+    out += _upper_das_fairing(coll, skin)
+    p, n = skin.top(5.12, 0.0)
+    if p is not None:
+        out.append(disc_on_skin("DAS_UpperAft", coll, mat, p, n, 0.062))
+    pent = [(0.015, 0.075), (0.06, 0.025), (0.045, -0.065), (-0.045, -0.065), (-0.06, 0.02)]
+    for name, side in (("DAS_Cheek_L", 1), ("DAS_Cheek_R", -1)):
+        p, n = skin.side(2.10, -0.06, side)
         if p is not None:
-            out.append(disc_on_skin(name, coll, mat, p, n, 0.062))
-    for name, (p, n), along in (("DAS_Cheek_L", skin.side(2.36, -0.10, 1), (0, -1, 0)),
-                                ("DAS_Cheek_R", skin.side(2.36, -0.10, -1), (0, -1, 0)),
-                                ("DAS_Chin", skin.bottom(2.33, 0.0), (0, -1, 0)),
+            out.append(poly_on_skin(name, coll, mat, p, n, (0, -1, 0), pent))
+    for name, (p, n), along in (("DAS_Chin", skin.bottom(2.33, 0.0), (0, -1, 0)),
                                 ("DAS_LowerAft", skin.bottom(11.2, 0.0), (0, -1, 0))):
         if p is not None:
             out.append(hex_on_skin(name, coll, mat, p, n, along, 0.068, 0.055))
@@ -173,19 +248,24 @@ def build_das(coll, skin):
 
 
 def build_air_data(coll, skin):
-    """L-shaped air-data probes on the lower sides of the nose (photos c20, c34:
-    a short mast with a forward-pointing tube, by the CAUTION HOT panels)."""
+    """Air-data probes on the lower sides of the nose: a short mast ~5 cm off the skin and a
+    long slender tube pointing forward, its last third bent slightly down and in (a hockey
+    stick, ~0.28 m: ref_05, c34, c53), in a small square panel ahead of the cheek DAS."""
     out = []
     mat = M.get("chrome")
+    fwd = Vector((0, -1, 0))
     for side, tag in ((1, "L"), (-1, "R")):
-        p, n = skin.side(1.95, -0.28, side)
+        p, n = skin.side(1.92, -0.25, side)
         if p is None:
             continue
         n = Vector(n).normalized()
-        elbow = p + n * 0.055
-        tip = elbow + Vector((0, -1, 0)) * 0.10
-        out.append(cylinder(f"AirData_Mast_{tag}", p - n * 0.01, elbow, 0.010, 0.007, coll, mat, segments=10))
-        out.append(cylinder(f"AirData_Tube_{tag}", elbow + Vector((0, 0.008, 0)), tip, 0.007, 0.005, coll, mat,
+        elbow = p + n * 0.05 + fwd * 0.015
+        mid = elbow + fwd * 0.16 + Vector((0, 0, -0.004))
+        tip = mid + fwd * 0.10 + Vector((0, 0, -0.014)) - n * 0.008
+        out.append(cylinder(f"AirData_Mast_{tag}", p - n * 0.01, elbow, 0.011, 0.007, coll, mat, segments=10))
+        out.append(cylinder(f"AirData_Tube_{tag}", elbow + Vector((0, 0.008, 0)), mid, 0.0075, 0.006, coll, mat,
+                            segments=10))
+        out.append(cylinder(f"AirData_Tip_{tag}", mid + Vector((0, 0.002, 0)), tip, 0.006, 0.0035, coll, mat,
                             segments=10))
     return out
 

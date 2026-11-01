@@ -39,7 +39,7 @@ BOW_CREST, BOW_SILL, BOW_W = 2.84, 3.01, 0.085
 # (s, z) of the band's top: 3-view ref_09 (side view, x6) has the glass edge ~0.61-0.63 m from
 # the windscreen (glass from s ~1.9 on the crest) back to a V at s ~3.0 under the bow foot, then
 # straight up at ~15 deg to the rear corner (~1.0 m at s 4.45); the band is ~0.09-0.11 m tall
-GLASS_LINE = [(1.84, 0.668), (3.00, 0.637), (4.47, 0.995)]
+GLASS_LINE = [(1.84, 0.70), (3.00, 0.637), (4.47, 0.995)]     # front run drops ~3 deg aft (c34, c09, c51)
 GLASS_REAR = (4.575, 0.99, 12.0)       # rear edge of the glass: through (s, z), leaning aft (deg)
 GLASS_CORNER_R = 0.07
 FRAME_W = 0.105                         # rear frame, measured along s behind the glass edge

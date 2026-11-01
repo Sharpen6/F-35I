@@ -422,8 +422,10 @@ def _make(name):
         # A ~110 nm film (n 1.9 on n 1.5 glass) reflects a first-order gold that
         # pales at grazing angles; the earlier 420 nm film gave a second-order
         # red + blue peak, i.e. a magenta canopy.
-        "canopy":    dict(color=(0.86, 0.81, 0.68), rough=0.02, metal=0.0,
-                          transmission=1.0, ior=1.5, alpha=1.0, spec_tint=(1.0, 0.88, 0.66),
+        # photo c09: the view through both walls turns amber while the reflections stay
+        # near neutral (magenta-violet glints in c51 / c53), so the tint is in the transmission
+        "canopy":    dict(color=(0.84, 0.72, 0.50), rough=0.02, metal=0.0,
+                          transmission=1.0, ior=1.5, alpha=1.0, spec_tint=(1.0, 0.95, 0.88),
                           thin_film=112.0),
         "canopy_frame": dict(color=(0.17, 0.18, 0.19), rough=0.45, metal=0.3),
         "canopy_bow": dict(color=(0.025, 0.025, 0.028), rough=0.5),
@@ -448,7 +450,9 @@ def _make(name):
         # dark windows with an interference coating: the DAS apertures flash pink /
         # teal in photos (a ~420 nm film), the EOTS facets show a gold sheen (~110 nm)
         "das_window": dict(color=(0.025, 0.025, 0.03), rough=0.06, metal=0.0, spec=0.8, thin_film=420.0),
-        "eots_glass": dict(color=(0.07, 0.055, 0.035), rough=0.04, metal=0.0, spec=0.9, thin_film=112.0),
+        "eots_glass": dict(color=(0.035, 0.03, 0.025), rough=0.02, metal=0.0, spec=1.0, thin_film=140.0),
+        # the second window in the upper DAS blister: light and mirror-like (photo c13)
+        "das_mirror": dict(color=(0.85, 0.87, 0.9), rough=0.04, metal=1.0),
         # cockpit
         "cockpit":   dict(color=(0.06, 0.065, 0.07), rough=0.6),
         "cockpit_panel": dict(color=(0.03, 0.03, 0.035), rough=0.5),

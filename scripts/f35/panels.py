@@ -463,13 +463,35 @@ def layout(pt):
              B, 0.32)
 
     # ---- forebody sides: avionics bay doors below the chine -------------
-    pt.line("side", [(1.48, 0.12), (2.16, 0.18), (2.21, 0.04), (2.06, -0.22), (1.64, -0.25),
-                     (1.46, -0.04)], closed=True, tape=True)
-    pt.line("side", [(2.30, 0.10), (3.30, 0.13), (3.40, -0.02), (3.32, -0.28), (2.36, -0.30),
-                     (2.26, -0.10)], closed=True, tape=True)
-    pt.line("side", [(2.4, -0.38), (3.7, -0.38), (3.85, -0.48)])
-    # under-canopy sill panels and the sawtooth behind the canopy
-    pt.line("side", [(1.95, 0.52), (4.30, 0.60)], rivets=(-0.025, 0.035))
+    # (close photos of both sides, ref_03 / ref_05 = Adir 901, c34, c51, c53): one big access
+    # panel with a stepped outline and fastener rows, the cheek DAS window in its aft-upper
+    # part; ahead of and below it a small square panel round the air-data probe root and a
+    # darker trapezoid (both stencilled CAUTION HOT); a fastener strip along the bottom
+    pt.line("side", [(1.55, 0.12), (2.16, 0.18), (2.22, 0.07), (2.36, 0.06), (2.42, -0.06),
+                     (2.48, -0.08), (2.48, -0.33), (2.40, -0.40), (1.99, -0.40), (1.99, -0.36),
+                     (1.73, -0.36), (1.68, -0.30), (1.56, -0.30), (1.50, -0.12), (1.52, 0.02)],
+            closed=True, rivets=(0.022, 0.034))
+    pt.line("side", rect(1.73, 1.99, -0.36, -0.15), closed=True, rivets=(0.018, 0.03))
+    trap = [(1.36, -0.12), (1.68, -0.10), (1.70, -0.32), (1.42, -0.31)]
+    pt.patch("side", trap, G, 0.55)
+    pt.line("side", trap, closed=True)
+    pt.line("side", [(1.50, -0.43), (2.46, -0.43)], rivets=(0.018, 0.034))
+    pt.line("side", [(2.56, 0.10), (3.30, 0.13), (3.40, -0.02), (3.32, -0.28), (2.62, -0.30),
+                     (2.54, -0.10)], closed=True, tape=True)
+    pt.line("side", [(2.5, -0.38), (3.7, -0.38), (3.85, -0.48)])
+    # the canopy frame band reads a shade lighter than the fuselage side in the photos (c34, c51,
+    # c09): a light coating over the band and the rear frame, in side view between the sill and
+    # the glass edge, back to the frame's aft edge
+    from .canopy import sill_z, glass_edge_z, rear_edge_s, CREST, FRAME_W
+    s_aft = rear_edge_s(sill_z(4.7)) + FRAME_W
+    lo = [(s, sill_z(s) - 0.004) for s in np.linspace(1.86, s_aft, 70)]
+    z_top = CREST(s_aft) + 0.03
+    aft = [(rear_edge_s(z) + FRAME_W, z) for z in np.linspace(sill_z(s_aft), z_top, 12)]
+    top = [(s, min(glass_edge_z(s), CREST(s) + 0.03)) for s in np.linspace(rear_edge_s(z_top) + FRAME_W, 1.86, 110)]
+    pt.patch("side", lo + aft + top, B, 0.35)
+    # under-canopy sill panels (~8 cm below the canopy's sill, which is ~0.55 m up from the
+    # windscreen to the bow) and the sawtooth behind the canopy
+    pt.line("side", [(1.95, 0.47), (3.0, 0.47), (4.30, 0.60)], rivets=(-0.025, 0.035))
     pt.line("side", [(4.78, 0.98), (4.36, 0.34)], saw=(4, 0.05), tape=True)
     pt.line("side", [(3.55, 0.36), (4.30, 0.36)])
     # inlet cowl: line parallel to the lip
