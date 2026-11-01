@@ -42,7 +42,13 @@ from . import normals
 #   fk  corner fillet (fraction of the shorter adjacent edge)
 # Photos (head-on and 3/4 views, camera-matched) show the radome as an upper
 # dome over a V-shaped underside, meeting at a sharp chine that rises from the
-# tip and runs back into the inlet / strake edge.  Behind the canopy (s 4.6-6)
+# tip and runs back into the inlet / strake edge.  The V's flanks are convex, not
+# flat: in c20, c51 and IAF ref_03 the lower radome shades smoothly like a bullet,
+# and head-on (c13) the radome joint's lower outline is nearly a semi-ellipse
+# (depth ~0.59 of the lower height at 0.70 of the half width; a straight V gives
+# 0.30).  So on the radome rows the lower corner sits well outside the chine-keel
+# line (xk 0.70, zk 0.42, wide fillet), easing back by s 1.6 where the chin
+# carries the EOTS.  Behind the canopy (s 4.6-6)
 # the dome narrows to a ridge: the head-on photo shows no body above ~0.83 m
 # at 0.6 m half-width there (edge overlay, data/camera_matches/c29.json).
 # Along the front half of the canopy (s 2.2-3.8) xu / zu put the curve through
@@ -58,15 +64,15 @@ from . import normals
 FORE = Table(
     ["zt", "zb", "wc", "zc", "au", "xu", "zu", "xk", "zk", "fk"],
     [
-        (0.000, 0.080, 0.080, 0.004, 0.080, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
-        (0.100, 0.128, 0.030, 0.065, 0.090, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
-        (0.200, 0.172, -0.017, 0.122, 0.100, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
-        (0.400, 0.245, -0.106, 0.212, 0.115, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
-        (0.600, 0.308, -0.195, 0.312, 0.130, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
-        (0.800, 0.351, -0.271, 0.388, 0.145, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
-        (1.000, 0.392, -0.345, 0.448, 0.160, 70.0, 0.700, 0.720, 0.53, 0.50, 0.60),
-        (1.200, 0.430, -0.405, 0.497, 0.178, 70.0, 0.700, 0.720, 0.54, 0.48, 0.60),
-        (1.400, 0.480, -0.435, 0.522, 0.194, 70.0, 0.700, 0.720, 0.57, 0.40, 0.70),
+        (0.000, 0.080, 0.080, 0.004, 0.080, 70.0, 0.700, 0.720, 0.70, 0.42, 0.85),
+        (0.100, 0.128, 0.030, 0.065, 0.090, 70.0, 0.700, 0.720, 0.70, 0.42, 0.85),
+        (0.200, 0.172, -0.017, 0.122, 0.100, 70.0, 0.700, 0.720, 0.70, 0.42, 0.85),
+        (0.400, 0.245, -0.106, 0.212, 0.115, 70.0, 0.700, 0.720, 0.70, 0.42, 0.85),
+        (0.600, 0.308, -0.195, 0.312, 0.130, 70.0, 0.700, 0.720, 0.70, 0.42, 0.85),
+        (0.800, 0.351, -0.271, 0.388, 0.145, 70.0, 0.700, 0.720, 0.70, 0.42, 0.85),
+        (1.000, 0.392, -0.345, 0.448, 0.160, 70.0, 0.700, 0.720, 0.70, 0.42, 0.85),
+        (1.200, 0.430, -0.405, 0.497, 0.178, 70.0, 0.700, 0.720, 0.70, 0.42, 0.85),
+        (1.400, 0.480, -0.435, 0.522, 0.194, 70.0, 0.700, 0.720, 0.66, 0.36, 0.70),
         (1.600, 0.552, -0.469, 0.542, 0.210, 70.0, 0.700, 0.720, 0.62, 0.30, 0.75),
         (1.850, 0.630, -0.504, 0.566, 0.235, 68.6, 0.700, 0.720, 0.67, 0.17, 0.70),
         (2.200, 0.680, -0.533, 0.610, 0.275, 64.9, 0.525, 0.716, 0.71, 0.06, 0.60),

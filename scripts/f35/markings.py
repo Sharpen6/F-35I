@@ -45,35 +45,68 @@ def _alpha_from_rgb(c):
     c.px[:, :, 3] = m.astype(np.float32)
 
 
-# stroke font for the serial: digits as polylines on a 4 x 7 grid
-_DIGITS = {
-    "0": [[(0, 0.6), (0, 6.4), (0.6, 7), (3.4, 7), (4, 6.4), (4, 0.6), (3.4, 0), (0.6, 0), (0, 0.6)]],
-    "1": [[(1.2, 1.0), (2.4, 0), (2.4, 7)]],
-    "2": [[(0, 1.0), (0.8, 0), (3.2, 0), (4, 0.9), (4, 2.6), (0, 7), (4, 7)]],
-    "3": [[(0, 0.6), (0.6, 0), (3.4, 0), (4, 0.6), (4, 2.8), (3.3, 3.5), (1.4, 3.5)],
-          [(3.3, 3.5), (4, 4.2), (4, 6.4), (3.4, 7), (0.6, 7), (0, 6.4)]],
-    "4": [[(3.0, 7), (3.0, 0), (0, 4.8), (4, 4.8)]],
-    "5": [[(4, 0), (0.2, 0), (0, 3.2), (3.2, 3.0), (4, 3.8), (4, 6.3), (3.3, 7), (0.6, 7), (0, 6.4)]],
-    "6": [[(3.6, 0.2), (1.4, 0), (0, 1.6), (0, 6.4), (0.6, 7), (3.4, 7), (4, 6.4), (4, 4.0), (3.4, 3.4),
-           (0.6, 3.4), (0, 4.0)]],
-    "7": [[(0, 0), (4, 0), (4, 0.8), (1.4, 7)]],
-    "8": [[(0.6, 3.5), (0, 2.9), (0, 0.6), (0.6, 0), (3.4, 0), (4, 0.6), (4, 2.9), (3.4, 3.5), (0.6, 3.5),
-           (0, 4.1), (0, 6.4), (0.6, 7), (3.4, 7), (4, 6.4), (4, 4.1), (3.4, 3.5)]],
-    "9": [[(4, 3.0), (3.4, 3.6), (0.6, 3.6), (0, 3.0), (0, 0.6), (0.6, 0), (3.4, 0), (4, 0.6), (4, 5.4),
-           (2.6, 7), (0.4, 6.8)]],
-}
+# Serial digits: the IAF block font seen on 901's nose (ref_05; ref_03 of 905, ref_07 of 919):
+# square digits about 0.85 as wide as tall, a stroke ~15 % of the height, chamfered outer corners,
+# chamfered holes, a "1" that is a plain bar, and wide spacing.  Each glyph is drawn on a
+# 6.8 x 8 grid (y down) as a union of bars, then chamfered.
+_GW, _GH, _GT = 6.8, 8.0, 1.2          # glyph width, height, stroke
+_GC, _Gc = 1.5, 0.7                    # outer chamfer, inner (hole) chamfer
+_GADV = 8.4                            # advance per digit
+
+
+def _glyph_bars(ch):
+    W, H, T = _GW, _GH, _GT
+    m0, m1 = H / 2 - T / 2 - 0.15, H / 2 + T / 2 - 0.15        # middle bar, a little above centre
+    bar = {"t": (0, 0, W, T), "b": (0, H - T, W, H), "m": (0, m0, W, m1),
+           "lu": (0, 0, T, m1), "ll": (0, m0, T, H), "ru": (W - T, 0, W, m1), "rl": (W - T, m0, W, H)}
+    segs = {"0": "t b lu ll ru rl", "2": "t ru m ll b", "3": "t ru m rl b", "4": "lu m ru rl",
+            "5": "t lu m rl b", "6": "t lu ll m rl b", "7": "t ru rl", "8": "t b m lu ll ru rl",
+            "9": "t lu ru m rl b"}
+    if ch == "1":                      # a plain bar, a little heavier, left of the cell's centre (ref_05)
+        return [(1.3, 0, 2.9, H)], [], [], (m0, m1)
+    bars = [bar[k] for k in segs.get(ch, "").split()]
+    # outer corners to chamfer (corner, directions into the glyph) and concave corners to fill
+    outer = [(0, 0, 1, 1), (W, 0, -1, 1), (0, H, 1, -1), (W, H, -1, -1)]
+    inner = []
+    if ch == "9":
+        outer.append((0, m1, 1, -1))                                   # bowl's lower left
+        inner += [(W - T, m1, -1, 1), (W - T, H - T, -1, -1)]          # where the stem meets the bars
+    if ch in "069" and ch:
+        lo = H - T if ch == "0" else m0
+        inner += [(T, T, 1, 1), (W - T, T, -1, 1), (T, lo, 1, -1), (W - T, lo, -1, -1)]   # hole corners
+    if ch == "6":
+        inner += [(T, m0, 1, -1), (T, m1, 1, 1), (W - T, m1, -1, 1), (T, H - T, 1, -1), (W - T, H - T, -1, -1)]
+    return bars, outer, inner, (m0, m1)
+
+
+def _glyph_mask(ch, gx, gy):
+    bars, outer, inner, _ = _glyph_bars(ch)
+    m = np.zeros(gx.shape, dtype=bool)
+    for x0, y0, x1, y1 in bars:
+        m |= (gx >= x0) & (gx <= x1) & (gy >= y0) & (gy <= y1)
+    for cx, cy, sx, sy in inner:
+        dx, dy = sx * (gx - cx), sy * (gy - cy)
+        m |= (dx >= 0) & (dy >= 0) & (dx + dy < _Gc)
+    for cx, cy, sx, sy in outer:
+        m &= ~((sx * (gx - cx) + sy * (gy - cy)) < _GC)
+    return m
 
 
 def serial_image(text, name, w=768, h=288, col=MARK_WHITE):
     c = Canvas(w, h, (0, 0, 0))
-    gh = h * 0.78
-    sc = gh / 7.0
-    adv = sc * 5.6
-    x0 = (w - adv * len(text) + sc * 1.6) / 2
-    y0 = (h - gh) / 2
+
+    def extent(ch):
+        bars = _glyph_bars(ch)[0]
+        return (min(b[0] for b in bars), max(b[2] for b in bars)) if bars else (0.0, _GW)
+    left = extent(text[0])[0] if text else 0.0
+    span = _GADV * (len(text) - 1) + (extent(text[-1])[1] if text else _GW) - left
+    sc = min(0.92 * h / _GH, 0.95 * w / max(span, 1e-6))
+    x0 = (w - span * sc) / 2 - left * sc
+    y0 = (h - _GH * sc) / 2
     for k, ch in enumerate(text):
-        for poly in _DIGITS.get(ch, []):
-            _stroke(c, [(x0 + k * adv + px * sc, y0 + py * sc) for px, py in poly], sc * 1.45, col)
+        gx = (c.xx - (x0 + k * _GADV * sc)) / sc
+        gy = (c.yy - y0) / sc
+        c.px[_glyph_mask(ch, gx, gy), :3] = col
     _alpha_from_rgb(c)
     return c.to_image(name)
 

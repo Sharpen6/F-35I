@@ -166,19 +166,34 @@ def build_eots(coll, skin):
     z_bot = min(-0.55, min(plane(s) + d_mid for s, x in bot) - 0.012)
     ring_bot = [P(s, x, z_bot) for s, x in bot]
     v, f = loft_rings([ring_top, ring_mid], True, True, False)
-    frame = mesh_object("EOTS_Fairing", v, f, coll, M.get("skin"), smooth=False)
+    # the collar up to the chin skin is glass too: on the real jet the panes run up to the
+    # curved skin, and a skin-coloured collar made the window read as a big grey box
+    frame = mesh_object("EOTS_Fairing", v, f, coll, M.get("eots_rim"), smooth=False)
     _fix(frame)
-    v, f = loft_rings([ring_mid, ring_bot], True, True, True)
+    # thin panes (open at the top, 8 mm solidify inward): as a closed solid block of n 1.76
+    # glass the window refracted and bounced the sunlit apron into bright yellow patches
+    v, f = loft_rings([ring_mid, ring_bot], True, False, True)
     glass = mesh_object("EOTS_Window", v, f, coll, M.get("eots_glass"), smooth=False)
     _fix(glass)
+    add_solidify(glass, 0.008, -1.0)
+    # the sensor turret behind the panes, dark and matte, filling the window to ~2 cm of the
+    # glass: the photos show a dark head through the panes (c34, c51), and with a gap the view
+    # ran through two panes to the sunlit apron and came out yellow
+    hm = ring(EOTS_C + 0.012, EOTS_RS[1] - 0.025, 0.140 - 0.02, 0.088)
+    hb = ring(EOTS_C + 0.05, EOTS_RS[2] - 0.022, 0.110 - 0.02, 0.068)
+    ring_hm = [P(s, x, plane(s) + d_mid + 0.004) for s, x in hm]
+    ring_hb = [P(s, x, z_bot + 0.018) for s, x in hb]
+    v, f = loft_rings([ring_hm, ring_hb], True, True, True)
+    head = mesh_object("EOTS_Head", v, f, coll, M.get("eots_head"), smooth=False)
+    _fix(head)
     # frame bars along the prow and the two front corners (c13: light grey)
     bars = []
     for k in (4, 3, 5):
         a_, b_ = Vector(ring_mid[k]), Vector(ring_bot[k])
         d = (b_ - a_).normalized()
         bars.append(cylinder(f"EOTS_Bar_{k}", a_ - d * 0.004, b_ + d * 0.004, 0.0065 if k == 4 else 0.0045,
-                             0.0065 if k == 4 else 0.0045, coll, M.get("skin"), segments=6))
-    return [glass, frame] + bars
+                             0.0065 if k == 4 else 0.0045, coll, M.get("eots_frame"), segments=6))
+    return [glass, frame, head] + bars
 
 
 def _upper_das_fairing(coll, skin, sa=1.56, sb=1.635, sc=1.76, sd=1.80, w=0.19, h=0.038, ch=0.035):

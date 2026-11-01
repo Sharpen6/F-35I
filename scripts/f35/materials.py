@@ -420,10 +420,12 @@ def _make(name):
                 b.inputs[k].default_value = v
         return mat
     if name == "nozzle":
-        # outer flaps: reddish-taupe gunmetal (ref_06 of 901, c26), each flap a slightly different
-        # tone (attribute 'flap_tone' 0..1 -> x0.86..1.14; 0 where the attribute is missing)
-        color = (0.20, 0.155, 0.15)
-        mat = principled("F35_nozzle", color, rough=0.46, metal=0.60)
+        # outer flaps: taupe / bronze grey gunmetal (ref_02 and ref_06 of IAF jets, c26; in sun
+        # the JASDF close-ups n00 / n01 read silvery grey), each flap a slightly different tone
+        # (attribute 'flap_tone' 0..1 -> x0.86..1.14; 0 where the attribute is missing).  The
+        # earlier reddish base at metallic 0.6 rendered pink-mauve under the sky.
+        color = (0.205, 0.182, 0.158)
+        mat = principled("F35_nozzle", color, rough=0.44, metal=0.35)
         nt = mat.node_tree
         b = _bsdf(mat)
         at = nt.nodes.new("ShaderNodeAttribute")
@@ -484,9 +486,23 @@ def _make(name):
         "marking_yellow": dict(color=(0.75, 0.55, 0.05), rough=0.5),
         "marking_black": dict(color=(0.02, 0.02, 0.02), rough=0.5),
         # dark windows with an interference coating: the DAS apertures flash pink /
-        # teal in photos (a ~420 nm film), the EOTS facets show a gold sheen (~110 nm)
+        # teal in photos (a ~420 nm film)
         "das_window": dict(color=(0.025, 0.025, 0.03), rough=0.06, metal=0.0, spec=0.8, thin_film=420.0),
-        "eots_glass": dict(color=(0.035, 0.03, 0.025), rough=0.02, metal=0.0, spec=1.0, thin_film=140.0),
+        # EOTS window: clear faceted glass, not a dark box.  In c20, c51, c53, c13, c29, c34, c07
+        # and IAF ref_03 / ref_07 the panes mirror the apron and sky, flash gold / amber, teal or
+        # lavender (a high-index coating) and show the sensor or the background through them
+        # (c34, c51), with light-grey frame bars.  Transmission makes it read as glass; the
+        # collar between the panes and the chin skin is the same coated glass, opaque
+        # A 220 nm film of n 1.9 tints the reflections a soft gold-green (c20 beige-gold, c53
+        # green-grey); 280 nm at n 2.1 gave a uniform violet.  Panes are thin (solidify) over a
+        # dark head ('eots_head'), so the view through them ends on the sensor, as in c34 / c51.
+        # The yellow flash in the front pane in test renders is the apron's taxi line mirrored.
+        "eots_glass": dict(color=(0.95, 0.95, 0.95), rough=0.03, metal=0.0, spec=1.0,
+                           transmission=1.0, ior=1.76, thin_film=220.0, film_ior=1.9),
+        "eots_rim":  dict(color=(0.035, 0.032, 0.03), rough=0.03, metal=0.0, spec=1.0,
+                          thin_film=220.0, film_ior=1.9),
+        "eots_frame": dict(color=(0.56, 0.57, 0.58), rough=0.35, metal=0.4),
+        "eots_head": dict(color=(0.03, 0.03, 0.033), rough=0.45, metal=0.0),
         # the second window in the upper DAS blister: light and mirror-like (photo c13)
         "das_mirror": dict(color=(0.85, 0.87, 0.9), rough=0.04, metal=1.0),
         # cockpit
