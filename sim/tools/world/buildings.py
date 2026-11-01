@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(HERE, '..', 'terrain')))
 import grid  # noqa: E402
 import geom  # noqa: E402
 import overture  # noqa: E402
+import airbases  # noqa: E402
 
 COLUMNS = ['id', 'geometry', 'bbox', 'names', 'sources', 'level', 'height', 'min_height', 'is_underground',
            'num_floors', 'num_floors_underground', 'min_floor', 'subtype', 'class', 'facade_color',
@@ -427,7 +428,8 @@ def estimate(recs):
     dens = cnt[cj, ci]                       # buildings per hectare (~500 m window)
 
     # tagged floors of the neighbours (200 m cells, ~1 km window), towers excluded from the median
-    fl = np.array([r['floors'] if r['floors'] is not None else (r['height'] / 3.2 if r['height'] else np.nan) for r in recs], np.float64)
+    fl = np.array([np.nan if r.get('synthetic') else r['floors'] if r['floors'] is not None else
+                   (r['height'] / 3.2 if r['height'] else np.nan) for r in recs], np.float64)
     tagged = np.isfinite(fl) & (fl >= 1) & (fl <= 22)
     tc = 200.0
     nT = int(2 * grid.CORE_HALF / tc)
@@ -644,7 +646,7 @@ def estimate(recs):
         r['bay'] = float(bay[i])
         r['vsize'] = float(vsize[i])
         r['seed'] = int(seed[i] & 255)
-        r['tagged'] = bool(np.isfinite(tagged_h[i]) or np.isfinite(tagged_f[i]))
+        r['tagged'] = bool(np.isfinite(tagged_h[i]) or np.isfinite(tagged_f[i])) and not r.get('synthetic')
         r['cov'] = float(c[i])
         r['dens'] = float(dens[i])
     return dict(kinds=collections.Counter(kind.tolist()), styles=collections.Counter(style.tolist()),
@@ -742,7 +744,7 @@ def stage_fetch(cache, release):
     overture.fetch('buildings', 'building_part', cache, release=release, columns=PART_COLUMNS, threads=2)
 
 
-def stage_tiles(cache, out, terrain, release, only=None):
+def stage_tiles(cache, out, terrain, release, only=None, airfields=None):
     t0 = time.time()
     if release == 'latest':
         rels = sorted(os.listdir(os.path.join(cache, 'overture')))
@@ -769,6 +771,8 @@ def stage_tiles(cache, out, terrain, release, only=None):
     recs += [p for p in parts if p['building_id'] in parent]
     project(recs)
     log(f'projected; {time.time() - t0:.0f} s')
+    # air bases: their buildings are in neither data set; roofs traced in the imagery (airbases.py)
+    recs += airbases.structures(terrain, recs, airfields, log=log)
     keep = []
     boxes = runway_boxes(terrain)
     H = grid.CORE_HALF
@@ -831,6 +835,13 @@ def stage_tiles(cache, out, terrain, release, only=None):
         name = f'tile_{ix}_{iz}.bin'
         info = write_tile(os.path.join(out, name), ix, iz, rs)
         tiles.append(dict(ix=ix, iz=iz, file=name, **info))
+    if only:                                   # a partial rebuild keeps the other tiles of the index
+        try:
+            with open(os.path.join(out, 'index.json')) as f:
+                tiles += [t for t in json.load(f)['tiles'] if (t['ix'], t['iz']) not in only]
+            tiles.sort(key=lambda t: (t['ix'], t['iz']))
+        except (OSError, ValueError, KeyError):
+            pass
     datasets = collections.Counter((r['dataset'], r['license']) for r in recs)
     total = sum(t['count'] for t in tiles)
     tall = sorted((r for r in recs if r['height_m'] > 120), key=lambda r: -r['height_m'])
@@ -841,7 +852,8 @@ def stage_tiles(cache, out, terrain, release, only=None):
         tman = {}
     sources = [dict(dataset=d, license=lic, buildings=n) for (d, lic), n in datasets.most_common()]
     att = ('Buildings: (c) OpenStreetMap contributors (ODbL) and Microsoft ML Buildings (ODbL), '
-           f'via Overture Maps Foundation (release {release}, ODbL)')
+           f'via Overture Maps Foundation (release {release}, ODbL); air bases traced from ESA WorldCover '
+           'Sentinel-2 imagery (CC BY 4.0).')
     index = dict(
         format='f35i-buildings', version=VERSION, generated_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         generator='sim/tools/world/buildings.py', attribution=att,
@@ -871,6 +883,8 @@ def main():
     ap.add_argument('--out', default=os.path.normpath(os.path.join(HERE, '..', '..', 'data', 'world', 'buildings')))
     ap.add_argument('--terrain', default=os.path.normpath(os.path.join(HERE, '..', '..', 'data', 'terrain')))
     ap.add_argument('--release', default='latest')
+    ap.add_argument('--airfields', default=os.path.normpath(os.path.join(HERE, '..', '..', 'data', 'world', 'airfields', 'airfields.json')),
+                    help='taxiways and aprons (sim/tools/world/airfields.py) kept clear of air base buildings')
     ap.add_argument('--stages', default='fetch,tiles')
     ap.add_argument('--only', default='', help='write only these tiles, e.g. "4,3;5,3" (testing)')
     a = ap.parse_args()
@@ -879,7 +893,7 @@ def main():
     if 'fetch' in stages:
         stage_fetch(a.cache, a.release)
     if 'tiles' in stages:
-        stage_tiles(a.cache, a.out, a.terrain, a.release, only)
+        stage_tiles(a.cache, a.out, a.terrain, a.release, only, a.airfields)
 
 
 if __name__ == '__main__':

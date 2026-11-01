@@ -9,6 +9,7 @@ Builders for what stands on the terrain of the flight sim. Each one writes into
 | `overture.py` | reads any theme / type of the [Overture Maps](https://overturemaps.org/) open data release for the core's lon / lat box (GeoParquet on a public S3 bucket, HTTP range requests on row-group bbox statistics) and caches the rows |
 | `buildings.py` | 3D buildings: `sim/data/world/buildings/` (this page) |
 | `geom.py` | polygon helpers (WKB parsing, cleaning, oriented boxes, point in polygon) |
+| `airbases.py`, `airbases.json` | the buildings of Tel Nof, Hatzor and Palmachim, traced in the imagery (below) |
 | `shots.mjs` | screenshots of the scenes the buildings are judged by (Playwright, `window.__sim`) |
 
 Python 3 with numpy, pyarrow and Pillow (as `sim/tools/terrain`).
@@ -18,12 +19,14 @@ Python 3 with numpy, pyarrow and Pillow (as `sim/tools/terrain`).
 ```
 python3 sim/tools/world/buildings.py                       # both stages
 python3 sim/tools/world/buildings.py --stages tiles        # rebuild from the cache (no network)
-python3 sim/tools/world/buildings.py --only 4_3,5_3        # some tiles only (testing)
+python3 sim/tools/world/buildings.py --stages tiles --only '4,7;5,7'   # some tiles only (keeps the rest of index.json)
 ```
 
 Options: `--cache DIR` (default `sim/tools/world/_cache`, ~90 MB), `--out DIR` (default
 `sim/data/world/buildings`), `--terrain DIR` (default `sim/data/terrain`), `--release` (an
-Overture release name, default the newest).
+Overture release name, default the newest), `--airfields FILE` (taxiways and aprons kept clear of
+the air base buildings, default `sim/data/world/airfields/airfields.json` from `airfields.py`;
+without it only the runways are).
 
 **fetch** (~1.5 min, reads ~0.65 GB of 512 remote files): every Overture `buildings/building` and
 `buildings/building_part` row inside the core's lon / lat box (102.4 km square, sim/DESIGN.md),
@@ -56,8 +59,22 @@ Overture release name, default the newest).
    (the White City's whites and creams, limestone, glass tints); floor height and window bay
    width for the facade shader.
 
+**Air bases** (`airbases.py`, `airbases.json`): the buildings inside Tel Nof, Hatzor and Palmachim
+are in neither OpenStreetMap nor the Microsoft footprints, so they are traced in the L0 imagery
+inside a hand-drawn outline of each base (along its perimeter road). Roof pixels are brighter than
+their surroundings at two scales (medians over 56 m and 131 m), unsaturated, in WorldCover's
+built-up class, and off the runways (+25 m), taxiways and aprons (+8 m) and existing footprints;
+connected roofs of 110-6,000 m² that fill at least 45 % of their oriented box become buildings of
+3-10 m (1-3 floors), halls of 8-12 m or vaulted hangars of 11-16 m (over 1,800 m²), in sand, cream
+and concrete colours. Each base also gets a control tower (concrete shaft, glass cab; a plausible
+place by the runways, not surveyed). 10 m imagery does not resolve small buildings: this gives the
+bases' built-up pattern, not their exact buildings. `python3 sim/tools/world/airbases.py --plot
+DIR` draws the result over the imagery for review. Tel Nof 385 structures, Hatzor 218,
+Palmachim 158.
+
 Output: `index.json` and one `tile_<ix>_<iz>.bin` per terrain L0 tile (6.4 km) with buildings:
-222 tiles, 838,635 buildings, 4.2 million footprint vertices, 31.9 MB (gzip; 46 MB unpacked).
+222 tiles, 839,394 buildings (759 of them traced at the air bases), 4.2 million footprint vertices,
+32.0 MB (gzip; 46.5 MB unpacked).
 
 ### Tile format (`tile_<ix>_<iz>.bin`, gzip, little-endian)
 
@@ -117,6 +134,8 @@ chunks red.
 Overture Maps buildings combine OpenStreetMap (ODbL 1.0, (c) OpenStreetMap contributors) and
 Microsoft ML Building Footprints (ODbL 1.0), among others; in the core 491,386 buildings come
 from OpenStreetMap and 347,249 from Microsoft. The derived tiles are therefore under the ODbL;
-the app credits them in its menu ("Buildings: (c) OpenStreetMap contributors and Microsoft ML
-Buildings (ODbL), via Overture Maps Foundation"). See https://docs.overturemaps.org/attribution/.
-Facades, roofs and all other building detail are procedural (no textures or models).
+the app credits them in its menu (the `attribution` line of index.json). See
+https://docs.overturemaps.org/attribution/. The 759 air base buildings are traced from the
+terrain's imagery and land cover (ESA WorldCover 2021, contains modified Copernicus Sentinel data,
+CC BY 4.0, credited with the terrain and in the attribution line). Facades, roofs and all other
+building detail are procedural (no textures or models).

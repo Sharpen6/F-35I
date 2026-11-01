@@ -1,0 +1,30 @@
+{
+ "about": "Air bases for sim/tools/world/airbases.py. Their buildings are not in OpenStreetMap or the Microsoft footprints, so roofs are taken from the terrain's L0 imagery (Sentinel-2) inside these outlines (sim world x / z in m, drawn on the imagery along the perimeter roads), and a few structures are added by hand (towers: plausible positions next to the runways, not surveyed).",
+ "bases": [
+  {
+   "icao": "LLEK", "name": "Tel Nof",
+   "outline": [[-20012, -5471], [-19503, -5667], [-18878, -5589], [-17354, -2853], [-18253, -2501], [-18800, -2130],
+               [-19503, -2189], [-20012, -2384], [-20715, -3283], [-20910, -3439], [-20910, -4455], [-20793, -4533],
+               [-20012, -4963], [-19855, -5159]],
+   "structures": [
+    {"kind": "tower", "x": -19045, "z": -4075, "yaw": 60, "shaft": [7, 7, 22], "cab": [10, 10, 5]}
+   ]
+  },
+  {
+   "icao": "LLHS", "name": "Hatzor",
+   "outline": [[-29046, 3588], [-27483, 3354], [-26545, 3745], [-26154, 4800], [-26389, 5269], [-26897, 5464],
+               [-28030, 5464], [-28812, 5152], [-29593, 5074], [-29632, 4917], [-29124, 4526], [-29085, 3901]],
+   "structures": [
+    {"kind": "tower", "x": -27704, "z": 5060, "yaw": 20, "shaft": [7, 7, 20], "cab": [10, 10, 5]}
+   ]
+  },
+  {
+   "icao": "LL59", "name": "Palmachim",
+   "outline": [[-31821, -11959], [-30962, -12936], [-30337, -12819], [-30493, -11725], [-31001, -11412],
+               [-31040, -10084], [-31665, -10006], [-32056, -10006], [-31978, -11100]],
+   "structures": [
+    {"kind": "tower", "x": -31235, "z": -10904, "yaw": 30, "shaft": [6, 6, 18], "cab": [9, 9, 5]}
+   ]
+  }
+ ]
+}
