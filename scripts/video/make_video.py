@@ -90,6 +90,7 @@ PROGRESS = {
     "035": "Stencils redrawn from close photos; the canopy band closes over the tip",
     "036": "Canopy rebuilt from the 3-view and photos: flush band with a V, deeper glass",
     "037": "Nose details from photos: EOTS box, DAS blister, pentagon DAS, probes, panels",
+    "038": "Shoulder gun and vent fairings, main gear brace, nozzle teeth, shallower belly",
 }
 CLIPS = [  # (file stem, title, caption)
     ("turntable_v6", "Turntable", "Final paint, sky and the new pilot"),
