@@ -208,8 +208,8 @@ async function main() {
           const out = {};
           for (const [k, [d, sh, c]] of Object.entries(cfgs)) {
             t.groundDetail = d; t.shadows = sh; t.cityLights = c;
-            window.__sim.render();
-            out[k] = Math.min(window.__sim.render().ms, window.__sim.render().ms);
+            window.__sim.render();                     // uniforms and maps settle
+            out[k] = window.__sim.render().ms;
           }
           t.groundDetail = keep.d; t.shadows = keep.s; t.cityLights = keep.c;
           return out;
