@@ -87,6 +87,7 @@ PROGRESS = {
     "032": "Afterburner: volumetric flame with shock diamonds",
     "033": "Cockpit moved 0.55 m forward, canopy bow and frame band",
     "034": "Pilot rebuilt: skinned body, IAF flight gear, HMDS helmet",
+    "035": "Stencils redrawn from close photos; the canopy band closes over the tip",
 }
 CLIPS = [  # (file stem, title, caption)
     ("turntable_v6", "Turntable", "Final paint, sky and the new pilot"),
