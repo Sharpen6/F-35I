@@ -14,10 +14,10 @@
 // drag, hat, numpad: rates that build up and die away, the view smoothed a little). The head turns
 // about the neck and the torso twists to look back, so the eye moves as a pilot's does; the g
 // load shifts it; the seat vibrates on the runway (slab joints, roughness), drops at the
-// touchdown, shakes in the high-AoA buffet. The wheel zooms (20-80 deg). Chase: a spring camera behind the jet
-// that follows its attitude with a lag. Orbit: mouse drag and wheel around the jet. Fly-by: the
-// camera waits ahead of the jet and watches it pass. Tower: a camera above the nearest airfield
-// that tracks the jet with a zoom lens.
+// touchdown, shakes in the high-AoA buffet (?shake=0: off). The wheel zooms (20-80 deg).
+// Chase: a spring camera behind the jet that follows its attitude with a lag. Orbit: mouse drag
+// and wheel around the jet. Fly-by: the camera waits ahead of the jet and watches it pass. Tower:
+// a camera above the nearest airfield that tracks the jet with a zoom lens.
 
 import * as THREE from 'three';
 
@@ -62,7 +62,8 @@ export class CameraRig {
     this.head = { yaw: 0, pitch: 0, centering: false, ay: 0, ap: 0, vy: 0, vp: 0 };
     this.gShift = new THREE.Vector3();
     // cockpit vibration: runway rumble, touchdown, buffet (a damped spring per axis: seat height,
-    // pitch, roll), and the state it needs
+    // pitch, roll), and the state it needs; `vibration` scales it (0 off: ?shake=0)
+    this.vibration = typeof location !== 'undefined' && new URLSearchParams(location.search).get('shake') === '0' ? 0 : 1;
     this._jolt = { y: 0, vy: 0, p: 0, vp: 0, r: 0, vr: 0 };
     this._wasOnGround = null;
     this._roll = 0;                    // m rolled on the ground (the runway's slab joints)
@@ -253,12 +254,13 @@ export class CameraRig {
     const onGround = !!ctx.onGround;
     const gs = ctx.groundSpeed || 0;
     const t = this.time;
+    const s = this.vibration;
     // touchdown: the seat (and the pilot) drop with the sink rate, the nose dips a little
     if (this._wasOnGround === false && onGround) {
       // the sink rate of the frame before (the gear may have taken it already)
       const sink = ctx.velocity ? Math.max(0, -ctx.velocity.y, -(this._vyPrev ?? 0)) : 0;
-      J.vy -= clamp(sink * 0.12, 0, 0.45);
-      J.vp -= clamp(sink * 0.03, 0, 0.1);
+      J.vy -= clamp(sink * 0.12, 0, 0.45) * s;
+      J.vp -= clamp(sink * 0.03, 0, 0.1) * s;
     }
     this._wasOnGround = onGround;
     // forcing (accelerations of the springs): the runway's roughness, the buffet
@@ -270,7 +272,7 @@ export class CameraRig {
       this._roll += gs * dt;
       const j1 = Math.floor(this._roll / 6);
       if (j1 !== j0) {
-        const k = (0.5 + 0.5 * Math.abs(Math.sin(j1 * 12.9898))) * v;
+        const k = (0.5 + 0.5 * Math.abs(Math.sin(j1 * 12.9898))) * v * s;
         J.vy -= 0.035 * k;
         J.vp += 0.03 * k * (Math.sin(j1 * 78.233) > 0 ? 1 : -1);
       }
@@ -285,6 +287,7 @@ export class CameraRig {
       fr += wobble(t * 0.9, 8.1) * 1.8 * buffet;
       fy += wobble(t * 1.2, 1.9) * 400 * buffet;
     }
+    fy *= s; fp *= s; fr *= s;
     // springs: seat ~4.5 Hz, head pitch / roll ~6 Hz, damping 0.35 (semi-implicit Euler, sub-steps)
     const n = Math.max(1, Math.ceil(dt / 0.004)), h = dt / n;
     const wy = 2 * Math.PI * 4.5, wa = 2 * Math.PI * 6, z = 0.35;

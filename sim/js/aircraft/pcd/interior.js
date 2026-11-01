@@ -9,7 +9,8 @@
 // * A floor plate over the opening between the rudder pedals (the white nose gear showed through).
 // * Ambient occlusion per vertex (the worker): the tub is lit by the sky through the canopy only.
 // * A shader patch on the cockpit materials (and the pilot's): the occlusion on the sky light,
-//   the displays' glow (a small area light at the PCD, strongest at night), and a triplanar detail
+//   the display's glow (a small area light at the PCD: its physical light by day, lost in the
+//   daylight, and glowGain x that at night, as a dark-adapted eye sees it), and a triplanar detail
 //   (paint grain, smudges) on the painted parts.
 // * The switch LEDs and the kneeboard tablet are emissive: they follow the exposure like the PCD
 //   (white dots at night before).
@@ -63,7 +64,7 @@ export class Interior {
     this.enabled = true;
     this.ready = false;           // analysis applied
     this.stats = null;
-    this.glowGain = 120;          // the displays' glow on the cockpit: x physical (an eye adapted to the dark sees it)
+    this.glowGain = 120;          // the display's glow on the cockpit at night: x physical (an eye adapted to the dark sees it)
     this.detailAmount = 1;
     this.uniforms = {
       uCkGlow: { value: new THREE.Color(0, 0, 0) },
@@ -364,16 +365,19 @@ ${detail ? `if ( uCkDetailOn > 0.5 ) {
   // ------------------------------------------------------------------------------ per frame
   /**
    * @param {object} s {exposure, sunY, pcdGlow (THREE.Color, mean linear colour of the screen),
-   *                    pcdIntensity (its emissive intensity), pcdCentre, pcdNormal (world)}
+   *                    pcdIntensity (its physical luminance at white, scene units), pcdCentre,
+   *                    pcdNormal (world)}
    */
   update(s) {
     const U = this.uniforms;
+    const day = smooth(-0.1, 0.08, s.sunY ?? 1);
     if (s.pcdCentre) U.uCkGlowPos.value.copy(s.pcdCentre);
     if (s.pcdNormal) U.uCkGlowN.value.copy(s.pcdNormal);
-    U.uCkGlow.value.copy(s.pcdGlow || U.uCkGlow.value).multiplyScalar((s.pcdIntensity || 0) * PCD_AREA * this.glowGain);
+    // the glow is the physical light by day (lost in the daylight) and glowGain x that at night
+    const gain = 1 + (this.glowGain - 1) * (1 - day);
+    U.uCkGlow.value.copy(s.pcdGlow || U.uCkGlow.value).multiplyScalar((s.pcdIntensity || 0) * PCD_AREA * gain);
     U.uCkDetailOn.value = this.detailAmount > 0 ? 1 : 0;
     // emissive parts at a picture level, whatever the exposure
-    const day = smooth(-0.1, 0.08, s.sunY ?? 1);
     for (const e of this._emissive) {
       const level = e.lv[1] + (e.lv[0] - e.lv[1]) * day;
       e.m.emissiveIntensity = (s.power ?? 1) * level / Math.max(1e-3, s.exposure || 1);

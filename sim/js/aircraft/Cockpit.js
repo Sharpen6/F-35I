@@ -44,6 +44,15 @@ export const COCKPIT_MATERIALS = {
   face: ['P2_Skin', 'P2_TShirt'],
 };
 
+/**
+ * The display's full brightness in scene units. A scene unit is ~25,000 cd/m2 (the sun's 4 units
+ * of irradiance ~100,000 lx: grey card 0.23 units ~ 5,700 cd/m2), a sunlit-readable AMLCD gives
+ * ~1,000 cd/m2. By day the glass itself is drawn far brighter (a picture level, legible through
+ * the tone mapping); the light it throws on the canopy and the tub is the physical one, which by
+ * day is lost in the daylight and at night is what the pilot sees.
+ */
+const PCD_LIGHT_MAX = 1000 / 25000;
+
 /** Per graphics quality (the PCD's own table is in PCD.js). */
 export const COCKPIT_QUALITY = {
   low: { canopy: false, detail: 0 },
@@ -68,7 +77,8 @@ export class Cockpit {
     this.inside = 0;                         // 0 camera outside .. 1 at the pilot's eye
     this._eye = new THREE.Vector3();
     this._cam = new THREE.Vector3();
-    this._pcdW = { o: new THREE.Vector3(), u: new THREE.Vector3(), v: new THREE.Vector3(), n: new THREE.Vector3(), c: new THREE.Vector3(), texture: null, gain: 0 };
+    // the display in world space: its rectangle, picture level (gain) and physical light (light)
+    this._pcdW = { o: new THREE.Vector3(), u: new THREE.Vector3(), v: new THREE.Vector3(), n: new THREE.Vector3(), c: new THREE.Vector3(), texture: null, gain: 0, light: 0 };
     if (!this.enabled) return;
     this._findMeshes();
     this.pcd = new PCD({ maxAnisotropy: renderer ? renderer.capabilities.getMaxAnisotropy() : 8 });
@@ -77,7 +87,15 @@ export class Cockpit {
     this.pcd.setMaps(terrain).catch(() => {});
     this.detail = makeDetailTexture(512);
     this.interior = new Interior({ visual, detail: this.detail });
-    this.interior.start().then((s) => { this.interiorStats = s; }).catch((e) => console.warn('Cockpit: interior:', e.message));
+    this.interior.start().then((s) => {
+      this.interiorStats = s;
+      // the patched materials need new programs: where the driver compiles in parallel
+      // (KHR_parallel_shader_compile, e.g. Chrome on D3D11) compile them in the background, so the
+      // first frame after the patch does not stall; elsewhere the next render compiles them
+      if (renderer && renderer.compileAsync && camera && scene && renderer.extensions.has('KHR_parallel_shader_compile')) {
+        renderer.compileAsync(visual.object3d, camera, scene).catch(() => {});
+      }
+    }).catch((e) => console.warn('Cockpit: interior:', e.message));
     this.canopy = new CanopyGlass({ root: visual.root, detail: this.detail });
     // the side-stick and the pedals from the pilot's inputs (rig nodes, re-posed after the rig)
     this._inceptors = visual.player ? visual.player.nodes.filter((n) => n.name in INCEPTORS && !n.hinge) : [];
@@ -161,6 +179,10 @@ export class Cockpit {
     // the display: redraw only while it can be seen (a drawn frame, the camera within ~40 m)
     if (st && this.pcd) {
       const visible = f.draw !== false && d < 40 && this.visual.object3d.visible;
+      // headings as the helmet shows them: where it shows magnetic ones (hmd.last.magVar, the grid
+      // convergence conv), the same reference; else the flight model's
+      const H = app.hmd && app.hmd.last;
+      this.pcd.variation = H && Number.isFinite(H.magVar) ? (H.conv || 0) - H.magVar : 0;
       this.pcd.update(f.dt || 0, {
         st, levers: app.input ? app.input.levers : {},
         hours: f.time, dayOfYear: this.dayOfYear || (app.spawn && app.spawn.day_of_year) || 172,
@@ -181,7 +203,7 @@ export class Cockpit {
     }
     const P = this._pcdW;
     if (this.interior) {
-      this.interior.update({ exposure, sunY, power, pcdGlow: this.pcd.glow, pcdIntensity: P.gain, pcdCentre: P.c, pcdNormal: P.n });
+      this.interior.update({ exposure, sunY, power, pcdGlow: this.pcd.glow, pcdIntensity: P.light, pcdCentre: P.c, pcdNormal: P.n });
     }
     if (this.canopy) {
       const show = this.canopy.enabled !== false && d < 80 && this.visual.object3d.visible;
@@ -251,6 +273,7 @@ export class Cockpit {
     if (P.n.dot(_t.copy(this._eye).sub(P.c)) < 0) P.n.negate();
     P.texture = this.pcd.texture;
     P.gain = this.pcdMaterial.emissiveIntensity;
+    P.light = Math.min(P.gain, PCD_LIGHT_MAX);
   }
 
   dispose() {

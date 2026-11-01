@@ -5,8 +5,9 @@
 //   on the clean glass, a glare that lights up the streaks when looking towards the sun (a
 //   forward-peaked Henyey-Greenstein phase), on both sides of the glass;
 // * from inside, the inner surface reflects the cockpit (Fresnel): the lit PCD, ray-traced off the
-//   glass onto the display's rectangle and its live canvas (the night reflections pilots know), and
-//   a faint veil from the sunlit interior.
+//   glass onto the display's rectangle and its live canvas, at the display's physical luminance
+//   (lost in the daylight; at night the reflections pilots know), and a faint veil from the
+//   sunlit interior.
 //
 // Additive, no depth write, front faces only: from inside the inner surface of the shell, from
 // outside the outer one. One draw of the canopy mesh, four texture reads per pixel.
@@ -153,7 +154,8 @@ export class CanopyGlass {
 
   /**
    * @param {object} s {sunDir, sunColor (irradiance), ambient (sky irradiance), inside 0..1,
-   *                    pcd: {texture, gain, o, u, v, n} in world space}
+   *                    pcd: {texture, light (its physical luminance, scene units), o, u, v, n}
+   *                    in world space}
    */
   update(s) {
     if (!this.mesh) return;
@@ -170,7 +172,7 @@ export class CanopyGlass {
     const p = s.pcd;
     if (p && p.texture) {
       U.uPcd.value = p.texture;
-      U.uPcdGain.value = p.gain;
+      U.uPcdGain.value = p.light ?? p.gain;
       const img = p.texture.image;
       if (img && img.width) U.uPcdSize.value.set(img.width, img.height);
       U.uPcdO.value.copy(p.o);

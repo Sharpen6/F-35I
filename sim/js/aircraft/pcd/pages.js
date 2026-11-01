@@ -190,7 +190,7 @@ export function drawStatusBar(ctx, d) {
   cell(x + 2, 'CAS', fmt(F.cas), 112);
   cell(x + 112, 'ALT', fmt(F.alt), 150);
   cell(x + 262, 'MACH', F.mach.toFixed(2), 100);
-  cell(x + 362, 'HDG', pad3(F.hdg), 110);
+  cell(x + 362, 'HDG', pad3(F.hdg + (d.variation || 0)), 110);
   // steerpoint
   x = 1236;
   fab(ctx, x, 204, 'STPT');
@@ -267,7 +267,7 @@ export function drawTSD(ctx, r, d, maps) {
   }
   ctx.setLineDash([]);
   const rr = R * ppm;
-  const vari = d.variation || 0;               // displayed heading - true heading (deg)
+  const vari = d.variation || 0;               // displayed heading - the grid heading (deg)
   ctx.strokeStyle = C.white;
   for (let a = 0; a < 360; a += 10) {
     const ang = (a - vari) * DEG - hdg;        // screen angle from up
@@ -357,7 +357,7 @@ export function drawTSD(ctx, r, d, maps) {
   ctx.strokeStyle = C.white;
   ctx.lineWidth = 2;
   ctx.strokeRect(sx - 40, r.y + 4, 80, 34);
-  text(ctx, pad3(sys.flight.hdg), sx, r.y + 31, 26, C.white, 'center', 700);
+  text(ctx, pad3(sys.flight.hdg + vari), sx, r.y + 31, 26, C.white, 'center', 700);
   portal(ctx, r, 'TSD-1', 'NAV');
   // range: half ring value, the range box with the orientation under it
   textOutlined(ctx, `${rangeNm / 2}`, sx + R * 0.5 * ppm * 0.71 + 6, sy - R * 0.5 * ppm * 0.71 - 4, 17, '#b9c3cc', 'left', 700);

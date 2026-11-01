@@ -85,7 +85,7 @@ export class Systems {
     if (!st) return this;
     const e = st.engine || {};
     // ---- flight data: the numbers the helmet shows (HMD._data), from the same flight model state
-    //      (headings are true: the sim has no magnetic variation)
+    //      (headings from the flight model; PCD.variation turns them to the helmet's)
     const F = this.flight;
     F.hdg = F.hdgTrue = ((((st.heading || 0) / DEG) % 360) + 360) % 360;
     F.cas = st.ias_kt ?? (st.ias || 0) / KT;

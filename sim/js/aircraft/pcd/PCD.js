@@ -61,6 +61,9 @@ export class PCD {
     this.quality = null;
     this.hz = 6;
     this.rangeNm = 20;
+    /** Displayed heading minus the flight model's (map grid) heading, deg: 0 shows the grid
+     *  headings; Cockpit.js sets it to the helmet's when the helmet shows magnetic ones. */
+    this.variation = 0;
     this.timer = 0;
     this.time = 0;
     this.drawMs = 0;          // last redraw (ms, CPU side)
@@ -197,7 +200,7 @@ export class PCD {
     const d = this._data;
     d.st = st;
     d.hours = src.hours;
-    d.variation = 0;                         // true headings, as the helmet shows them
+    d.variation = this.variation;
     this.rangeNm = this._autoRange(st);
     d.rangeNm = this.rangeNm;
     d.airports = src.airports || [];
