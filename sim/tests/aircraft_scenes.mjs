@@ -111,6 +111,8 @@ const PARK = (time, tag) => ({
     { name: 'rear34', cam: [35, 10, 22, 40] },
     { name: 'side', cam: [92, 2, 24, 40] },
     { name: 'chase', cam: 'chase' },
+    // the landing light's pool on the ground ahead (gear down, lights on)
+    ...(tag === 'night' ? [{ name: 'pool', cam: [-160, 16, 34, 55] }] : []),
   ],
 });
 
@@ -166,7 +168,8 @@ const SCENES = [
     setup: `async () => {
       const S = window.__sim; S.start('telnof_36', { time: 21.5, camera: 'chase' }); S.autopilot('takeoff');
       for (let i = 0; i < 400; i++) { S.step(12); const s = S.summary(); if (s.ab > 0.95 && s.ias_kt > 70) break; } }`,
-    shots: [{ name: 'chase', cam: 'chase' }, { name: 'side', cam: [100, 3, 20, 40] }, { name: 'rear34', cam: [28, 6, 18, 40] }],
+    shots: [{ name: 'chase', cam: 'chase' }, { name: 'side', cam: [100, 3, 20, 40] }, { name: 'rear34', cam: [28, 6, 18, 40] },
+      { name: 'pool', cam: [-160, 16, 34, 55] }],
   },
   {
     name: 'ab_air_noon',

@@ -24,6 +24,7 @@ import { UI, formatHours } from './ui/Menu.js';
 import { BindingsUI } from './ui/BindingsUI.js';
 import { Effects } from './ui/Effects.js';
 import { EngineSound } from './audio/EngineSound.js';
+import { AircraftFX } from './aircraft/AircraftFX.js';     // graphics module: vapour, tyre smoke, landing-light pool
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -245,6 +246,7 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+    this.addModule(new AircraftFX(ctx));      // aircraft: vapour, contrail, tyre smoke, landing-light pool, burner quality
   }
 
   /**

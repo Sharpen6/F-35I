@@ -24,6 +24,7 @@
 // Frame: everything is built in the BODY frame (+Z aft); `exit` is the nozzle exit centre.
 
 import * as THREE from 'three';
+import { fxExposure } from './fxshared.js';
 
 const PLUME_VERT = /* glsl */`
   #include <common>
@@ -48,6 +49,7 @@ const PLUME_FRAG = /* glsl */`
   uniform float uTime;
   uniform float uGain;        // brightness (burner fill)
   uniform float uExpComp;     // exposure compensation (see the header)
+  uniform float uDay;         // 1 against a daylight sky, 0 at night (from the exposure)
   uniform vec3 uSat;          // radiance each channel saturates at (display, linear)
   uniform float uKappa;       // opacity per unit of integrated luminance
   uniform float uSpacing;     // shock-cell spacing (m)
@@ -65,6 +67,9 @@ const PLUME_FRAG = /* glsl */`
   // core radius and axial weight of the flame at z (m downstream of the exit)
   float coreRadius(float z) { float s = clamp(z / uCore, 0.0, 1.0); return uR0 * (0.93 - 0.62 * pow(s, 1.3)) + 0.02; }
   float coreFall(float z) { float s = clamp(z / uCore, 0.0, 1.0); return pow(1.0 - s, 1.7); }
+  // by day the faint back half of the flame is lost against the sky (drawn, it would only tint the
+  // sky pink): it fades out over the core's back half; at night all of it shows
+  float dayTail(float s) { return mix(1.0, 1.0 - smoothstep(0.3, 0.75, s), uDay); }
 
   // emission (display-referred linear RGB per metre) at a point of the plume frame
   vec3 emission(vec3 p) {
@@ -76,8 +81,9 @@ const PLUME_FRAG = /* glsl */`
     float fall = coreFall(z);
     float turb = 0.75 + 0.5 * vnoise(vec3(p.xy * 5.0, z * 3.0 - uTime * 26.0));
     // core: yellow-orange at the exit -> orange -> a deep orange tail (never pink)
-    float env = exp(-pow(rho / r, 2.0) * 2.6) * fall * turb;
-    vec3 c1 = vec3(1.0, 0.62, 0.24), c2 = vec3(1.0, 0.44, 0.13), c3 = vec3(0.92, 0.30, 0.08);
+    float env = exp(-pow(rho / r, 2.0) * 2.6) * fall * turb * dayTail(s);
+    vec3 c1 = vec3(1.0, 0.62, 0.24), c2 = vec3(1.0, 0.44, 0.13);
+    vec3 c3 = mix(vec3(0.92, 0.30, 0.08), vec3(1.0, 0.46, 0.12), uDay);
     vec3 col = (s < 0.4 ? mix(c1, c2, s / 0.4) : mix(c2, c3, clamp((s - 0.4) / 0.6, 0.0, 1.0))) * env * 1.8;
     // faint blue at the nozzle lip (the outer mixing layer right behind the exit)
     float lip = exp(-pow((rho - 0.85 * uR0) / (0.16 * uR0), 2.0)) * exp(-z / 0.30);
@@ -91,7 +97,8 @@ const PLUME_FRAG = /* glsl */`
       float rk = 0.52 * coreRadius(zk);
       float hk = 0.30 * uSpacing;
       float d = rho / rk + abs(z - zk) / hk;
-      float ik = coreFall(zk) * pow(1.0 - k / 5.0, 1.2) * (0.85 + 0.3 * vnoise(vec3(k * 3.1, uTime * 9.0, 0.0)));
+      float ik = coreFall(zk) * dayTail(zk / uCore) * pow(1.0 - k / 5.0, 1.2)
+        * (0.85 + 0.3 * vnoise(vec3(k * 3.1, uTime * 9.0, 0.0)));
       col += vec3(1.0, 0.82, 0.55) * pow(max(1.0 - d, 0.0), 1.2) * ik * 2.4;
     }
     return col;
@@ -191,7 +198,7 @@ export class Afterburner {
       uLen: { value: 4.0 }, uCore: { value: 3.0 }, uR0: { value: this.r0 }, uRmax: { value: this.rMax },
       uAb: { value: 0 }, uTime: { value: 0 }, uGain: { value: 1.0 }, uScale: { value: new THREE.Vector3(1, 1, 1) },
       uSat: { value: new THREE.Vector3(1.0, 0.56, 0.20) }, uKappa: { value: 0.35 },
-      uSpacing: { value: 0.8 }, uSteps: { value: this.steps }, uExpComp: { value: 1 },
+      uSpacing: { value: 0.8 }, uSteps: { value: this.steps }, uExpComp: { value: 1 }, uDay: { value: 1 },
     };
     // premultiplied "over": the tone-mapped flame colour + the background * (1 - opacity)
     this.plumeMat = new THREE.ShaderMaterial({
@@ -208,7 +215,9 @@ export class Afterburner {
     this.plume.receiveShadow = false;
     this.plume.visible = false;
     this.plume.onBeforeRender = (renderer) => {
-      this.uniforms.uExpComp.value = flameExposureComp(renderer.toneMappingExposure);
+      const e = fxExposure.get(renderer);
+      this.uniforms.uExpComp.value = flameExposureComp(e);
+      this.uniforms.uDay.value = 1 - THREE.MathUtils.smoothstep(e, 2, 8);
     };
     this.group.add(this.plume);
     // throat glow, a little inside the exit, facing aft
@@ -226,7 +235,7 @@ export class Afterburner {
     this.glow.castShadow = false;
     this.glow.receiveShadow = false;
     this.glow.onBeforeRender = (renderer) => {
-      this.glowUniforms.uExpComp.value = flameExposureComp(renderer.toneMappingExposure);
+      this.glowUniforms.uExpComp.value = flameExposureComp(fxExposure.get(renderer));
     };
     this.group.add(this.glow);
     this.ab = 0;

@@ -29,6 +29,7 @@
 // glows ride on the node that carries the lens (the landing lamp swings up with the nose leg).
 
 import * as THREE from 'three';
+import { fxExposure } from './fxshared.js';
 
 const ROLE = { nav: 'nav', beacon: 'anticoll', anticoll: 'anticoll', formation: 'formation', landing: 'landing' };
 const CD = 1 / 30000;                  // cd/m^2 -> scene radiance units; lux -> illuminance units
@@ -56,10 +57,10 @@ const GLOW = {
 const TAIL = { name: 'TailLight', role: 'tail', pos: [0, 0.80, 5.50], dir: [0, 0.25, 1], colour: [1.0, 0.95, 0.88] };
 
 // The lamp sits square to the raked nose leg, so its lens axis points ~12 deg above the body's
-// horizon; the beam is aimed ahead and 3 deg below the body axis instead (on the ground it lights
+// horizon; the beam is aimed ahead and 5 deg below the body axis instead (on the ground it lights
 // the runway from ~5 m out). Node frame with the gear down = model frame (+Z forward).
-const LANDING_BEAM = new THREE.Vector3(0, Math.sin(THREE.MathUtils.degToRad(-3)), Math.cos(THREE.MathUtils.degToRad(-3)));
-const LANDING_SPREAD = THREE.MathUtils.degToRad(7);       // 1/e half width of the beam
+const LANDING_BEAM = new THREE.Vector3(0, Math.sin(THREE.MathUtils.degToRad(-5)), Math.cos(THREE.MathUtils.degToRad(-5)));
+const LANDING_SPREAD = THREE.MathUtils.degToRad(9);       // 1/e half width of the beam (landing + taxi)
 const LANDING_SPILL = 0.002;                               // fraction seen from outside the beam
 
 /** Anti-collision pattern: [top, bottom] 0..1 at time t (s). LED: square 90 ms flashes, 1 Hz each. */
@@ -193,7 +194,7 @@ export class AircraftLights {
     this.points.renderOrder = 5;
     this.points.visible = false;
     this.points.onBeforeRender = (renderer) => {
-      this.exposure = renderer.toneMappingExposure || 1;
+      this.exposure = fxExposure.get(renderer);
       this.glowUniforms.uPixelRatio.value = renderer.getPixelRatio();
     };
     root.add(this.points);
