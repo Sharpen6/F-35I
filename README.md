@@ -7,7 +7,7 @@ built only from publicly available reference material (see [`docs/research.md`](
 is assembled from the renders by [`scripts/video/make_video.py`](scripts/video/make_video.py).
 `renders/progress/` holds the build history and `blend/history/` a saved .blend for every milestone.
 
-![F-35I Adir, front left](renders/history/14_fl34.jpg)
+![F-35I Adir, front left](renders/history/23_fl34.jpg)
 
 **Animations** (MP4 in [`renders/animation/`](renders/animation), small GIF previews in
 [`renders/gifs/`](renders/gifs)): turntable, landing-gear retraction, canopy, pilot head look, cockpit
@@ -23,7 +23,10 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
   six DAS windows, L-shaped air-data probes, formation light strips on the inlets.
 * **Undercarriage:** nose and main gear with solved retraction kinematics, doors sequenced to the legs
   (two long nose-gear doors with sawtooth fronts that stay open beside the leg, as on the real jet),
-  wheels that spin with the distance rolled, nose-wheel steering.
+  wheels that spin with the distance rolled, nose-wheel steering. Measured from photos in tyre
+  diameters: the jet sits 1.45° nose-up; the nose leg has the white steering housing with its two lamps,
+  a short chrome piston and torque links; the main wheels have twelve lightening holes and a triangular
+  cap plate, with brake hoses clamped down the legs.
 * **Weapon bays:** both internal bays with doors, a GBU-31 JDAM and an AIM-120 AMRAAM in each.
 * **Pilot:** modelled separately in detail ([`scripts/pilot/`](scripts/pilot), studio file
   [`blend/F-35I_Pilot.blend`](blend), renders in [`renders/pilot/`](renders/pilot), research notes in
