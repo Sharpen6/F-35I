@@ -10,13 +10,29 @@
 //
 // Cockpit view: green, helmet-fixed boxes (KIAS left, altitude right, heading tape on top) and
 // conformal symbols drawn where they are in the world: flight path marker, 5-degree pitch ladder
-// (dashed below the horizon), waterline (the jet's nose). Below the boxes Mach, g, max g, AoA,
-// radar altitude below 5,000 ft AGL, vertical speed, throttle / afterburner, fuel, gear, brakes;
-// warnings (PULL UP with the break-X, AOA LIMIT, OVER G, GEAR, ...) flash in the middle. Other
-// views get a compact info strip along the bottom instead. The canvas is sized in device pixels,
-// so the lines stay crisp at any resolution and zoom.
+// (dashed and with negative numbers below the horizon), waterline (the jet's nose). Below the boxes
+// Mach, g, max g, AoA (HI AOA in the 50 deg mode), radar altitude below 5,000 ft AGL, vertical
+// speed, throttle / afterburner (APC: the auto-throttle flies it), fuel, gear, brakes; warnings (PULL UP with the break-X, AOA LIMIT,
+// OVER G, GEAR, HARD LANDING, ...) flash under the heading tape. Other views get a compact info
+// strip along the bottom instead. The canvas is sized in device pixels, so the lines stay crisp at
+// any resolution and zoom.
+//
+// Gear down in the air (approach): an AoA bracket beside the flight path marker (marker centred =
+// on-speed, 13 deg AoA, about 140 KIAS; marker high in the bracket = fast, low = slow), a dashed
+// -3 deg glide-path line on the ladder, and below 100 ft the radar altitude next to the marker for
+// the flare.
+//
+// Heading is magnetic, as on the real display and the runway numbers: the flight model's heading
+// is relative to the map grid (north = -Z), so the grid convergence of the transverse Mercator
+// projection (js/world/coords.js) and the magnetic variation (WMM2025, about 5 deg E) are applied.
+// hmd.last holds the numbers on display, with hdgGrid, hdgTrue, conv and magVar for the tests.
+//
+// The pitch ladder stops at the glare shield (a body-fixed line), so it does not run over the
+// cockpit displays below it; the flight path marker is never hidden.
 
 import * as THREE from 'three';
+import { xzToLonLat, ORIGIN } from '../world/coords.js';
+import { MOUSE_DEADZONE } from '../input/Input.js';
 
 const KT = 0.514444;
 const FT = 0.3048;
@@ -26,17 +42,44 @@ const GREEN = 'rgba(96, 255, 128, 0.96)';
 const GREEN_GLOW = 'rgba(70, 255, 110, 0.22)';
 const WARN_NAMES = {
   'PULL UP': 'PULL UP', AOA: 'AOA LIMIT', 'OVER-G': 'OVER G', GEAR: 'GEAR', OVERSPEED: 'OVERSPEED',
-  ENGINE: 'ENGINE', 'BINGO FUEL': 'BINGO FUEL', 'PARKING BRAKE': 'PARKING BRAKE',
+  ENGINE: 'ENGINE', 'HARD LANDING': 'HARD LANDING', 'BINGO FUEL': 'BINGO FUEL', 'PARKING BRAKE': 'PARKING BRAKE',
 };
-const WARN_ORDER = ['PULL UP', 'OVER-G', 'AOA', 'GEAR', 'OVERSPEED', 'ENGINE', 'BINGO FUEL', 'PARKING BRAKE'];
+const WARN_ORDER = ['PULL UP', 'OVER-G', 'AOA', 'GEAR', 'OVERSPEED', 'ENGINE', 'HARD LANDING', 'BINGO FUEL', 'PARKING BRAKE'];
+
+// Approach symbols (gear down, in the air)
+const ON_SPEED_AOA = 13;             // deg: the approach AoA the flight model is tuned for (f35i_config)
+const BRACKET_AOA = 1;               // deg each side of on-speed: the ends of the AoA bracket
+const GLIDE_REF = -3;                // deg: the dashed glide-path reference line
+const FLARE_FT = 100;                // radar altitude next to the flight path marker below this
+// The glare shield's top edge, in body angles from the pilot's eye (the cockpit model: ~16 deg
+// below the nose line ahead, the PCD under it). The ladder is clipped below this line.
+const GLARE_EL = -15.5 * DEG;
+const GLARE_AZ = 30 * DEG;
+
+/** Magnetic variation (declination, deg, + = east) at lat / lon (deg): WMM2025 at 2026.8, fitted
+ *  over the sim's far area (within 0.04 deg; 4.7 deg E in the south to 5.2 deg E in the north,
+ *  changing by about 0.02 deg a year). */
+export function magneticVariation(lat, lon) {
+  return 4.956 + 0.126 * (lat - ORIGIN.lat) - 0.0126 * (lon - ORIGIN.lon);
+}
+
+/** Grid convergence (deg) of the sim's transverse Mercator at lat / lon: true = grid + this. */
+export function gridConvergence(lat, lon) {
+  return Math.atan(Math.tan((lon - ORIGIN.lon) * DEG) * Math.sin(lat * DEG)) / DEG;
+}
+
+const wrap360 = (x) => ((x % 360) + 360) % 360;
 
 const _q = new THREE.Quaternion();
+const _qb = new THREE.Quaternion();
 const _v = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+const _p1 = {}, _p2 = {};
 
 const fmtInt = (x) => Math.round(x).toLocaleString('en-US');
-const pad3 = (x) => String(Math.round(x) % 360).padStart(3, '0');
+/** Heading as three digits; north is 360, as in aviation (never 000). */
+const pad3 = (x) => { const v = Math.round(wrap360(x)) % 360; return String(v === 0 ? 360 : v).padStart(3, '0'); };
 
 export class HMD {
   constructor(container) {
@@ -53,6 +96,7 @@ export class HMD {
     this._last = performance.now();
     this._w = 0; this._h = 0; this._dpr = 1;
     this._clear = false;
+    this._geo = { x: NaN, z: NaN, lat: ORIGIN.lat, lon: ORIGIN.lon, conv: 0, magVar: magneticVariation(ORIGIN.lat, ORIGIN.lon) };
   }
 
   _resize() {
@@ -90,6 +134,18 @@ export class HMD {
   }
 
   // ------------------------------------------------------------------------------ data
+  /** Latitude / longitude, grid convergence and magnetic variation at the jet (recomputed every 200 m). */
+  _geoAt(pos) {
+    const g = this._geo;
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z) && !(Math.abs(pos.x - g.x) < 200 && Math.abs(pos.z - g.z) < 200)) {
+      const ll = xzToLonLat(pos.x, pos.z);
+      g.x = pos.x; g.z = pos.z; g.lat = ll.lat; g.lon = ll.lon;
+      g.conv = gridConvergence(ll.lat, ll.lon);
+      g.magVar = magneticVariation(ll.lat, ll.lon);
+    }
+    return g;
+  }
+
   _data(s, extra) {
     const eng = s.engine || {};
     const V = s.velocity ? s.velocity.length() : (s.tas || 0);
@@ -111,25 +167,33 @@ export class HMD {
       if ((s.gLoad || 1) > 9.3 || (s.gLoad || 1) < -3.3) warnings.push('OVER-G');
     }
     warnings.sort((a, b) => WARN_ORDER.indexOf(a) - WARN_ORDER.indexOf(b));
+    // heading: grid (flight model) -> true -> magnetic
+    const geo = this._geoAt(extra.position || s.position);
+    const hdgGrid = wrap360((s.heading || 0) / DEG);
+    const hdgTrue = wrap360(hdgGrid + geo.conv);
     return {
       V, iasKt, altFt, aglFt, vsFpm,
       mach: s.mach || 0,
       g: s.gLoad != null ? s.gLoad : 1,
       maxG: extra.maxG != null ? extra.maxG : null,
       alphaDeg: (s.alpha || 0) / DEG,
-      hdg: (((s.heading || 0) / DEG) % 360 + 360) % 360,
+      hdg: wrap360(hdgTrue - geo.magVar),  // magnetic: what the display shows
+      hdgTrue, hdgGrid, conv: geo.conv, magVar: geo.magVar,
       thr,
       ab: eng.ab || 0,
       rpm: eng.rpm != null ? eng.rpm : null,
       fuelLb: eng.fuelKg != null ? eng.fuelKg / LB : null,
       gear: s.gear != null ? s.gear : 1,
       onGround: !!s.onGround,
+      highAoA: !!s.highAoA,
+      apc: !!s.apc,                        // the auto-throttle is flying the throttle
       warnings,
       parkingBrake: !!extra.parkingBrake,
       brakes: !!extra.brakes,
       speedbrake: (s.controls && s.controls.speedbrake > 0.05) || !!extra.speedbrake,
       crashed: !!s.crashed,
       gs: s.groundSpeed != null ? s.groundSpeed : V,
+      approach: false,                     // set when the approach symbols are drawn
     };
   }
 
@@ -172,6 +236,12 @@ export class HMD {
     return out;
   }
 
+  /** Body direction (three.js body axes: x right, y up, -z forward) -> screen px, or null. */
+  _projectBody(x, y, z, quat, camera, out) {
+    _dir.set(x, y, z).applyQuaternion(quat);
+    return this._project(_dir, camera, out);
+  }
+
   // ------------------------------------------------------------------------------ cockpit HMD
   _drawCockpit(d, s, camera, extra) {
     const c = this.ctx;
@@ -184,7 +254,7 @@ export class HMD {
     const quat = extra.quaternion || s.quaternion;
     const flash = (this.time * 2.5) % 1 < 0.6;
 
-    // ---- conformal: waterline, flight path marker, pitch ladder
+    // ---- conformal: waterline, flight path marker, pitch ladder, approach symbols
     if (quat) {
       _fwd.set(0, 0, -1).applyQuaternion(quat);
       const wl = this._project(_fwd, camera, {});
@@ -195,8 +265,16 @@ export class HMD {
       const fpm = this._project(_dir, camera, {});
       const trackAz = Math.atan2(_dir.x, -_dir.z);
       const fpaDeg = Math.asin(Math.max(-1, Math.min(1, _dir.y))) / DEG;
-      this._drawLadder(camera, trackAz, fpaDeg, u, lw, fs * 0.8);
-      if (fpm && hasFpm) this._drawFpm(fpm.x, fpm.y, u, lw);
+      const approach = d.gear > 0.99 && !d.onGround && hasFpm;
+      this._drawLadder(camera, trackAz, fpaDeg, u, lw, fs * 0.8, quat, approach);
+      if (fpm && hasFpm) {
+        this._drawFpm(fpm.x, fpm.y, u, lw);
+        if (approach) {
+          d.approach = true;
+          this._drawAoaBracket(quat, s.velocity, camera, u, lw);
+          if (d.aglFt < FLARE_FT) this._text(String(Math.max(0, Math.round(d.aglFt))), fpm.x + 44 * u, fpm.y, fsS, 'left', 600);
+        }
+      }
     }
 
     // ---- heading tape (helmet fixed, top)
@@ -209,7 +287,7 @@ export class HMD {
     this._box(ax, by, 150 * u, 46 * u, lw);
     this._text(fmtInt(d.altFt), ax + 66 * u, by, fs + 3, 'right');
 
-    // left column: Mach, g (max g), AoA, throttle, fuel
+    // left column: Mach, g (max g), AoA (HI AOA mode), throttle, fuel
     const lx = bx - 56 * u;
     let ly = by + 52 * u;
     const step = 31 * u;
@@ -217,10 +295,12 @@ export class HMD {
     this._text(`G ${d.g.toFixed(1)}`, lx, ly, fsS);
     if (d.maxG != null) this._text(d.maxG.toFixed(1), lx + 96 * u, ly, fsS * 0.9, 'left', 500);
     ly += step;
-    this._text(`α ${d.alphaDeg.toFixed(1)}`, lx, ly, fsS); ly += step * 1.5;
+    this._text(`α ${d.alphaDeg.toFixed(1)}`, lx, ly, fsS);
+    if (d.highAoA) this._text('HI AOA', lx + 96 * u, ly, fsS * 0.9, 'left', 700);
+    ly += step * 1.5;
     const thrPct = Math.round(Math.min(d.thr, 0.75) / 0.75 * 100);
     const abTxt = d.thr > 0.751 ? ` AB ${Math.round((d.thr - 0.75) / 0.25 * 100)}%` : (Math.abs(d.thr - 0.75) < 0.002 ? ' MIL' : '');
-    this._text(`THR ${thrPct}%${abTxt}`, lx, ly, fsS);
+    this._text(`THR ${thrPct}%${abTxt}${d.apc ? '  APC' : ''}`, lx, ly, fsS);
     ly += step;
     if (d.fuelLb != null) { this._text(`FUEL ${fmtInt(Math.round(d.fuelLb / 10) * 10)}`, lx, ly, fsS); ly += step; }
 
@@ -241,8 +321,9 @@ export class HMD {
     else if (d.brakes && d.onGround) { this._text('BRAKES', rx, ry, fsS); ry += step; }
     if (d.speedbrake) { this._text('SPD BRK', rx, ry, fsS); ry += step; }
 
-    // ---- warnings
-    this._drawWarnings(d, cx, cy + 250 * u, u, lw, fs, flash);
+    // ---- warnings: under the heading tape, clear of the flight path marker on the approach and
+    // of the cockpit displays below the glare shield (they used to flash over the PCD)
+    this._drawWarnings(d, cx, cy - 290 * u, u, lw, fs, flash);
   }
 
   _box(x, y, w, h, lw) {
@@ -273,34 +354,102 @@ export class HMD {
     }, lw);
   }
 
-  _drawLadder(camera, az, fpaDeg, u, lw, fs) {
+  /**
+   * Gear down: the AoA bracket left of the flight path marker. It stands at the marker's sideslip,
+   * from 12 deg AoA (top end: fast) through 13 (the middle tick: on-speed) to 14 (bottom: slow), in
+   * body axes, so the marker sits in its middle when the AoA is on-speed, whatever the bank.
+   */
+  _drawAoaBracket(quat, vel, camera, u, lw) {
+    _qb.copy(quat).invert();
+    _v.copy(vel).normalize().applyQuaternion(_qb);          // body: x right, y up, -z forward
+    const sb = Math.max(-1, Math.min(1, _v.x)), cb = Math.sqrt(1 - sb * sb);
+    const pts = [];
+    for (const a of [ON_SPEED_AOA - BRACKET_AOA, ON_SPEED_AOA, ON_SPEED_AOA + BRACKET_AOA]) {
+      const p = this._projectBody(sb, -Math.sin(a * DEG) * cb, -Math.cos(a * DEG) * cb, quat, camera, {});
+      if (!p) return;
+      pts.push(p);
+    }
+    let ex = pts[2].x - pts[0].x, ey = pts[2].y - pts[0].y;   // down the bracket (fast -> slow)
+    const L = Math.hypot(ex, ey);
+    if (L < 1e-3) return;
+    ex /= L; ey /= L;
+    const lx = -ey, ly = ex;               // the jet's left on the screen
+    const off = 42 * u, tick = 9 * u;
+    const c = this.ctx;
+    const at = (p, k) => [p.x + lx * off - lx * k, p.y + ly * off - ly * k];
+    this._stroke(() => {
+      c.beginPath();
+      const [x0, y0] = at(pts[0], 0), [x2, y2] = at(pts[2], 0), [x1, y1] = at(pts[1], 0);
+      const [t0x, t0y] = at(pts[0], tick), [t2x, t2y] = at(pts[2], tick), [t1x, t1y] = at(pts[1], tick * 1.5);
+      c.moveTo(t0x, t0y); c.lineTo(x0, y0); c.lineTo(x2, y2); c.lineTo(t2x, t2y);
+      c.moveTo(x1, y1); c.lineTo(t1x, t1y);
+    }, lw);
+  }
+
+  /** Screen centre a and unit direction {dx, dy} of a pitch-ladder rung at p deg on azimuth az. */
+  _rung(camera, az, p, a) {
+    const el = p * DEG;
+    const ce = Math.cos(el);
+    // rung centre on the flight path azimuth, and a point 1 deg to the right for the rung direction
+    _dir.set(Math.sin(az) * ce, Math.sin(el), -Math.cos(az) * ce);
+    if (!this._project(_dir, camera, a)) return null;
+    const az2 = az + 1 * DEG;
+    _dir.set(Math.sin(az2) * ce, Math.sin(el), -Math.cos(az2) * ce);
+    const ok = this._project(_dir, camera, _p2);
+    let dx = 1, dy = 0;
+    if (ok && Math.abs(p) < 89) { dx = _p2.x - a.x; dy = _p2.y - a.y; }
+    const L = Math.hypot(dx, dy) || 1;
+    return { dx: dx / L, dy: dy / L };
+  }
+
+  /** Clip to the part of the view above the glare shield (a body-fixed line); false if it is not in view. */
+  _clipGlareShield(quat, camera) {
+    // two points of the (straight, level) edge, GLARE_EL below the nose line straight ahead
+    const ty0 = Math.tan(GLARE_EL), tx0 = Math.tan(GLARE_AZ);
+    const a = this._projectBody(-tx0, ty0, -1, quat, camera, _p1);
+    if (!a) return false;
+    const ax = a.x, ay = a.y;
+    const b = this._projectBody(tx0, ty0, -1, quat, camera, _p1);
+    if (!b) return false;
+    let tx = b.x - ax, ty = b.y - ay;
+    const L = Math.hypot(tx, ty);
+    if (L < 1) return false;
+    tx /= L; ty /= L;
+    // the kept side holds the nose (the waterline)
+    const nose = this._projectBody(0, 0, -1, quat, camera, _p1);
+    let nx = -ty, ny = tx;
+    if (nose && (nose.x - ax) * nx + (nose.y - ay) * ny < 0) { nx = -nx; ny = -ny; }
+    const B = 4 * (this._w + this._h);
+    const c = this.ctx;
+    c.beginPath();
+    c.moveTo(ax - tx * B, ay - ty * B);
+    c.lineTo(ax + tx * B, ay + ty * B);
+    c.lineTo(ax + tx * B + nx * B, ay + ty * B + ny * B);
+    c.lineTo(ax - tx * B + nx * B, ay - ty * B + ny * B);
+    c.closePath();
+    c.clip();
+    return true;
+  }
+
+  _drawLadder(camera, az, fpaDeg, u, lw, fs, quat, approach) {
     const c = this.ctx;
     const W = this._w, H = this._h;
     const cx = W / 2, cy = H / 2;
     const clipR = 330 * u;
     c.save();
-    // keep the ladder in the middle (clear of the boxes and the heading tape)
+    // keep the ladder in the middle (clear of the boxes and the heading tape) and above the
+    // glare shield (the rungs used to run over the cockpit displays)
     c.beginPath();
     c.rect(cx - 330 * u, cy - 330 * u, 660 * u, 600 * u);
     c.clip();
-    const a = {}, b = {};
+    if (quat) this._clipGlareShield(quat, camera);
+    const a = {};
     const lo = Math.ceil((fpaDeg - 40) / 5) * 5, hi = Math.floor((fpaDeg + 40) / 5) * 5;
     for (let p = Math.max(-90, lo); p <= Math.min(90, hi); p += 5) {
-      const el = p * DEG;
-      const ce = Math.cos(el);
-      // rung centre on the flight path azimuth, and a point 1 deg to the right for the rung direction
-      _dir.set(Math.sin(az) * ce, Math.sin(el), -Math.cos(az) * ce);
-      if (!this._project(_dir, camera, a)) continue;
-      const az2 = az + 1 * DEG;
-      _dir.set(Math.sin(az2) * ce, Math.sin(el), -Math.cos(az2) * ce);
-      let ok = this._project(_dir, camera, b);
-      let dx, dy;
-      if (ok && Math.abs(p) < 89) { dx = b.x - a.x; dy = b.y - a.y; }
-      else { dx = 1; dy = 0; }
-      const L = Math.hypot(dx, dy) || 1;
-      dx /= L; dy /= L;
+      const r = this._rung(camera, az, p, a);
+      if (!r) continue;
       if (Math.hypot(a.x - cx, a.y - cy) > clipR * 1.6) continue;
-      // normal towards the horizon side (down on the screen for positive rungs when level)
+      const { dx, dy } = r;
       // tick direction: towards the horizon (down the screen for rungs above it when level)
       let nx = -dy, ny = dx;
       if (p < 0) { nx = -nx; ny = -ny; }
@@ -326,11 +475,29 @@ export class HMD {
         }
       }, lw * 0.9);
       if (p !== 0) {
-        const label = String(Math.abs(p));
+        // dive rungs carry a minus sign (they used to read like the climb rungs)
+        const label = String(p);
         for (const sgn of [-1, 1]) {
           const tx = a.x + dx * (half + 22 * u) * sgn, ty = a.y + dy * (half + 22 * u) * sgn;
           this._text(label, tx, ty, fs, 'center', 500);
         }
+      }
+    }
+    // approach: the -3 deg glide-path reference, short dashes without numbers
+    if (approach) {
+      const r = this._rung(camera, az, GLIDE_REF, a);
+      if (r) {
+        const { dx, dy } = r;
+        this._stroke(() => {
+          c.beginPath();
+          for (const sgn of [-1, 1]) {
+            for (let i = 0; i < 6; i++) {
+              const t0 = 36 + i * 20, t1 = t0 + 9;
+              c.moveTo(a.x + dx * t0 * u * sgn, a.y + dy * t0 * u * sgn);
+              c.lineTo(a.x + dx * t1 * u * sgn, a.y + dy * t1 * u * sgn);
+            }
+          }
+        }, lw * 0.9);
       }
     }
     c.restore();
@@ -355,8 +522,8 @@ export class HMD {
     for (let h = start; h <= hdg + span; h += 10) {
       const x = cx + (h - hdg) * pxPerDeg;
       if (Math.abs(x - cx) < 34 * u) continue;     // the box shows it
-      const v = ((h % 360) + 360) % 360;
-      this._text(String(v / 10).padStart(2, '0'), x, y - 30 * u, fs * 0.85, 'center', 500);
+      const v = wrap360(h);
+      this._text(v === 0 ? '36' : String(v / 10).padStart(2, '0'), x, y - 30 * u, fs * 0.85, 'center', 500);
     }
     this._box(cx, y - 32 * u, 64 * u, 30 * u, lw);
     this._text(pad3(hdg), cx, y - 32 * u, fs, 'center');
@@ -380,7 +547,7 @@ export class HMD {
     for (const w of d.warnings.slice(0, 3)) {
       const txt = WARN_NAMES[w] || w;
       const big = w === main;
-      if (big && !flash) { yy += (big ? 48 : 34) * u; continue; }
+      if (big && !flash) { yy += 52 * u; continue; }
       const size = big ? fs * 1.6 : fs;
       this._text(txt, cx, yy, size, 'center', 700);
       if (big) {
@@ -407,7 +574,8 @@ export class HMD {
       `HDG ${pad3(d.hdg)}`,
       `VS ${d.vsFpm > 0 ? '+' : ''}${fmtInt(Math.round(d.vsFpm / 10) * 10)}`,
       `G ${d.g.toFixed(1)}`,
-      `THR ${thrPct}%${ab}`,
+      `α ${d.alphaDeg.toFixed(1)}${d.highAoA ? ' HI' : ''}`,
+      `THR ${thrPct}%${ab}${d.apc ? ' APC' : ''}`,
       d.gear > 0.99 ? 'GEAR DN' : d.gear > 0.01 ? 'GEAR ↕' : 'GEAR UP',
       d.parkingBrake ? 'PARK BRK' : null,
       d.speedbrake ? 'SPD BRK' : null,
@@ -438,19 +606,23 @@ export class HMD {
     }
   }
 
+  /** Mouse stick position, bottom left (it used to sit on the cockpit displays): the ring is a full
+   *  throw, the inner ring the deadzone where the stick reads centred. */
   _drawMouseStick(p) {
     const c = this.ctx;
     const H = this._h;
     const u = H / 1000;
     const R = 48 * u;
-    const x = this._w / 2, y = H - 150 * u;
+    const x = 60 * u + R, y = H - 90 * u - R;
     c.save();
     c.globalAlpha = 0.75;
     this._stroke(() => {
       c.beginPath();
       c.arc(x, y, R, 0, Math.PI * 2);
-      c.moveTo(x - 6 * u, y); c.lineTo(x + 6 * u, y);
-      c.moveTo(x, y - 6 * u); c.lineTo(x, y + 6 * u);
+      c.moveTo(x + R * MOUSE_DEADZONE, y);
+      c.arc(x, y, R * MOUSE_DEADZONE, 0, Math.PI * 2);
+      c.moveTo(x - R, y); c.lineTo(x - R * 0.8, y); c.moveTo(x + R * 0.8, y); c.lineTo(x + R, y);
+      c.moveTo(x, y - R); c.lineTo(x, y - R * 0.8); c.moveTo(x, y + R * 0.8); c.lineTo(x, y + R);
     }, 1.2);
     c.fillStyle = GREEN;
     c.beginPath();

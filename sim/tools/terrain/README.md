@@ -121,7 +121,9 @@ of +-64 km (the core plus a 12.8 km ring) so the core edges and the far area joi
   above MSL and `ground_y` the ground height below. Extra hints: `gear` (1 down, 0 up),
   `throttle` (0 = idle, on-ground spawns only: airborne spawns carry none, so the flight model
   trims the throttle for 1 g at the spawn's speed and flight path), `flight_path_deg` (final),
-  `time_h` / `day_of_year` (sunset), `airport` / `runway`.
+  `time_h` / `day_of_year` (sunset), `airport` / `runway`. The final is flown at 140 KIAS
+  (`speed_ms` is the true airspeed for that at the spawn height) with `fuel` 0.45 (fraction): the
+  13 deg on-speed AoA; `apc: true` starts it on the approach auto-throttle (flight track).
 * `previews/`: `core_hillshade.jpg`, `far_hillshade.jpg`, crops `telnof.jpg`, `tel_aviv_coast.jpg`,
   `jerusalem.jpg`, `dead_sea.jpg`, `telnof_runways.jpg` (runways and spawns drawn on),
   `runway_strips.jpg` (each runway straightened: red = pavement edges, cyan = thresholds, yellow =

@@ -63,7 +63,14 @@ def takeoff_pilot(t, s, mem):
     roll = 0.0
     if mem.get("rot"):
         target = 12.0 if t < 22 else 8.0
-        pitch = 0.8 if s.get("onGround") else max(-0.4, min(0.75, (target - s.get("pitch_deg", 0)) * 0.05))
+        # Flight track: until the gear goes up the take-off law holds the pitch attitude the raw
+        # stick sets (0.6 aft or more: the full 12 deg), so the small pull of the pitch loop below
+        # only gave about 6 deg there and the jet stayed at 10-30 m into the turn.  Hold the
+        # rotation pull until the gear is up, then fly the pitch.
+        if s.get("onGround") or not mem.get("gear"):
+            pitch = 0.7
+        else:
+            pitch = max(-0.4, min(0.75, (target - s.get("pitch_deg", 0)) * 0.05))
     if mem.get("rot") and not mem.get("gear") and not s.get("onGround") and s.get("agl_m", 0) > 25:
         mem["gear"] = True
         out["keys"].append(("G", False))

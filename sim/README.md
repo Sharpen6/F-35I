@@ -59,7 +59,7 @@ screenshot; or open the page in a normal browser window and leave it for a minut
   for high-DPI screens, 4096 px shadows). High is meant for an RTX 3070 at 1440p.
 * **Options**: two AI wingmen in fingertip formation, the mouse stick, 3D buildings, the volume.
 * **Joystick & gamepad**: bind any axis or button of any controller (saved in the browser),
-  deadzone and expo, invert the keyboard pitch.
+  deadzone and expo, invert the keyboard pitch, the mouse stick's roll spring.
 
 ## Controls
 
@@ -69,15 +69,17 @@ The same list is in the sim (F1 or the Controls help button).
 
 | | |
 | --- | --- |
-| `↓` / `↑` | pull (nose up) / push (nose down) |
+| `↓` / `↑` | pull (nose up) / push (nose down): a tap is a small correction, held for half a second it is full stick |
 | `←` / `→` | roll left / right |
 | `Z` / `X` | rudder and nose-wheel steering left / right |
 | `Shift` / `Ctrl` or `+` / `-` | throttle up / down; it stops at MIL: hold on or press again for afterburner |
 | `Page Up` / `Page Down` | full afterburner / idle |
-| `B` (hold) | wheel brakes |
+| `T` | auto-throttle on / off: with the gear down in the air it flies the approach AoA (13 deg) with the throttle; any throttle input takes over (on at the 10 km final start) |
+| `B` (hold) | wheel brakes (with `Ctrl` held too: throttle back and brakes) |
 | `Shift`+`B` | parking brake on / off (set at the start) |
 | `G` | landing gear up / down |
 | `S` | speed brake |
+| `A` | high-AoA mode on / off: the AoA limit is 50 deg instead of 25 (HI AOA on the helmet display) |
 | `C` | canopy (on the ground, below 30 kt) |
 | `L` / `Shift`+`L` | exterior lights / landing light |
 
@@ -98,7 +100,7 @@ The same list is in the sim (F1 or the Controls help button).
 | | |
 | --- | --- |
 | `P` or `Esc` | pause and menu |
-| `R` | restart at the start point |
+| `R` | restart at the start point (in flight: hold it for a second) |
 | `[` / `]` | time of day 15 minutes earlier / later |
 | `M` | sound on / off |
 | `F1` or `?` | help |
@@ -109,20 +111,22 @@ The same list is in the sim (F1 or the Controls help button).
 | --- | --- |
 | left stick | pitch and roll |
 | right stick left / right | rudder and nose wheel |
-| right stick up / down, `RT` / `LT` | throttle up / down (MIL detent as on the keyboard) |
+| right stick up / down, `RT` / `LT` | throttle up / down (MIL detent as on the keyboard); the right stick works rudder or throttle, whichever it is pushed toward first, until it is back in the centre |
 | `A` (hold) | wheel brakes |
 | `Y` / `X` / `B` | gear / canopy / speed brake |
 | `LB` / `RB` | previous / next camera |
 | d-pad, `R3` | look around, look ahead |
-| `L3` | parking brake |
+| `L3` | parking brake on the ground, high-AoA mode in the air |
 | `View` / `Menu` | helmet display / pause (in menus: A select, B back, Y restart) |
 
 **Mouse stick (option in the menu)**
 
 | | |
 | --- | --- |
-| click the view | capture the mouse; it now moves the stick (the ring at the bottom) |
-| move the mouse | down = pull, up = push, sideways = roll |
+| click the view | capture the mouse; it now moves the stick (the ring at the bottom left) |
+| move the mouse | down = pull, up = push, sideways = roll; near the centre (the small ring) the stick reads centred |
+| let the mouse rest | roll springs back to the centre: roll in, stop, and the bank is held (the spring can be turned off under *Joystick & gamepad*) |
+| middle click | centre the stick |
 | right drag | look around |
 | `Esc` | release the mouse (and pause) |
 
@@ -135,10 +139,10 @@ looks around. Bindings are kept per controller in the browser's local storage.
 
 | | |
 | --- | --- |
-| take-off | MIL or afterburner, release the parking brake (`Shift`+`B`); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (`G`) once climbing |
+| take-off | MIL or afterburner, release the parking brake (`Shift`+`B`); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (`G`) once climbing, then centre the stick: the jet holds the climb (a pull held on keeps the nose coming up) |
 | fly-by-wire | the stick commands g (pitch rate when slow) and roll rate; let go and the jet holds its flight path and bank; the FCS limits AoA to 25 deg and g to +9 / -3 |
-| landing | gear down, about 140 kt and 13 deg AoA on a 3 deg path; brakes (`B`) after touchdown |
-| crash | the cause is shown (hard landing, gear up, water, terrain, over-g ...); `R` starts again |
+| landing | gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (`T`) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft); idle and brakes (`B`) after touchdown |
+| crash | the cause is shown (hard landing, gear up, water, terrain, over-g ...); `R` starts again. A firm touchdown without a flare shows HARD LANDING; above about 15 ft/s (4.6 m/s) the gear collapses |
 
 ## Cameras
 
@@ -161,10 +165,17 @@ Green symbology as in the F-35's helmet, drawn crisp at the screen's resolution.
 cockpit: airspeed (KIAS) in the box on the left, altitude (ft) on the right with the radar
 altitude below 5,000 ft and the vertical speed, a heading tape on top, the flight-path marker
 (where the jet is going), the waterline (where the nose points), a pitch ladder every 5 deg
-around the flight path, Mach, g (and the peak g), AoA, thrust (MIL and burner), fuel, gear,
-parking brake, brakes and speed brake, and the warnings of the flight model (PULL UP, OVER G,
-AOA LIMIT, GEAR, OVERSPEED, ENGINE, BINGO FUEL, PARKING BRAKE). In the outside views a one-line
-strip at the bottom shows the same numbers.
+around the flight path (dashed with minus numbers below the horizon, stopping at the glare
+shield), Mach, g (and the peak g), AoA (HI AOA in the 50 deg mode), thrust (MIL and burner; APC
+while the auto-throttle flies it), fuel, gear, parking brake, brakes and speed brake, and the
+warnings of the flight model under the heading tape (PULL UP, OVER G, AOA LIMIT, GEAR, OVERSPEED,
+ENGINE, HARD LANDING, BINGO FUEL, PARKING BRAKE). The heading is magnetic, as on the real display
+and the runway numbers (the map grid heading plus the grid convergence, minus the WMM2025
+variation of about 5 deg E): lined up on Tel Nof 36 it reads 358. With the gear down in the air an
+AoA bracket stands beside the flight path marker (the marker in its middle: on-speed, 13 deg AoA;
+high: fast; low: slow), a dashed line marks the -3 deg glide path, and below 100 ft the radar
+altitude shows beside the marker for the flare. In the outside views a one-line strip at the
+bottom shows the same numbers.
 
 ## Sound
 
@@ -247,6 +258,7 @@ The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terr
 node sim/tests/e2e.mjs   [--port 8110] [--out DIR] [--size 960x540] [--quality low|medium|high] [--root SIM_FOLDER]
 node sim/tests/smoke.mjs [--mode stubs|real|both] [--port 8103] [--out DIR] [--root SIM_FOLDER]
 node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs        (flight model, no browser)
+node sim/tests/input.test.mjs                                          (keyboard, mouse stick, gamepad; no browser)
 ```
 
 Both browser tests start `serve.py` on their port and open the app in headless Chromium
@@ -303,7 +315,7 @@ and radians unless a name says otherwise (`_kt`, `_deg`, `Ft`).
 | `visual()` | the AircraftVisual: rig control values (`rig`), what the app gave it (`given`), head visible, plume `{visible, ab, length}`, throat glow colour, eye point (body and world) |
 | `gear()` | per wheel: `wow`, the flight model's `fdmCompression` / `fdmStatic`, the modelled `oleo` / `rigStatic` / `rigValue`, `travel`, `tyreDeflection`, the tyre's lowest point `tyreBottom`, the `ground` height and the `gap` (negative: pressed in), `steer_deg`, `along` / `cross` on the spawn's runway |
 | `runway(id, icao)` | the jet against a runway end (default the spawn's): `along`, `cross` (m, + = right), `headingError_deg`, `onRunway`, threshold, length, width |
-| `hmd()` | the numbers the helmet display drew last: `iasKt`, `altFt`, `hdg`, `g`, `mach`, `alphaDeg`, `vsFpm`, `aglFt`, `thr`, `ab`, `fuelLb`, `gear`, `warnings` ... |
+| `hmd()` | the numbers the helmet display drew last: `iasKt`, `altFt`, `hdg` (magnetic; `hdgGrid` the flight model's, `hdgTrue`, `conv`, `magVar`), `g`, `mach`, `alphaDeg`, `vsFpm`, `aglFt`, `thr`, `ab`, `fuelLb`, `gear`, `apc`, `approach`, `warnings` ... |
 | `renderInfo()`, `timing()`, `gpuMemory()` | renderer.info of the last drawn frame; step and frame times, fps, GPU name, canvas size; the GPU memory estimate (MB, the largest textures) |
 
 Example (Playwright, after `waitForFunction(() => window.__sim?.ready)`):
@@ -353,11 +365,15 @@ use 4 texture units (3 atmosphere tables and the sun's shadow map).
   peak g, the mouse-stick position).
 * `EngineSound.update(state, viewMode, dt, opts)`: optional `opts` (camera position for distance
   and Doppler, canopy, active); also `setVolume`, `setMuted`, `toggleMute`, `setPaused`.
-* `Input.update(dt)` also returns `brake`, `speedbrake`, look axes, drag and wheel, and the edges
-  `parkingBrakeToggle`, `speedbrakeToggle`, `lightsToggle`, `landingLightToggle`, `mute`,
-  `timeEarlier`, `timeLater`, `camera` (1-5), `fullscreen`, `lookCenter`, `confirm`, `menuBack`;
-  the levers (throttle with the MIL detent, gear handle, parking brake, canopy, speed brake)
-  live in `input.levers`.
+* `Input.update(dt)` also returns `brake`, `speedbrake`, `highAoA`, `apc`, look axes, drag and
+  wheel, and the edges `parkingBrakeToggle`, `speedbrakeToggle`, `highAoAToggle`, `apcToggle`,
+  `resetHint`, `lightsToggle`, `landingLightToggle`, `mute`, `timeEarlier`, `timeLater`, `camera`
+  (1-5), `fullscreen`, `lookCenter`, `confirm`, `menuBack`; the levers (throttle with the MIL
+  detent, gear handle, parking brake, canopy, speed brake, high-AoA mode, auto-throttle) live in
+  `input.levers`. The app tells it each frame whether the jet is `airborne` (L3's two roles) and
+  whether a restart needs R held (`resetNeedsHold`: in flight).
+* A spawn's `apc: true` (the 10 km final) starts on the auto-throttle; `fuel` sets the fuel
+  fraction (and with it the on-speed AoA at the spawn's speed).
 * A spawn's `time_h` / `day_of_year` (the Jerusalem sunset) set the time of day when it is
   chosen.
 * `serve.py` listens on 127.0.0.1 only and moves to the next free port when 8035 is taken.

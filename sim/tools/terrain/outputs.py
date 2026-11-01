@@ -183,15 +183,29 @@ def runway_start(H, ap, rw, end_id, label):
                 airport=ap['icao'], runway=end_id)
 
 
-def final_approach(H, ap, rw, end_id, dist_m, speed_ms, label, glide_deg=3.0, tch_m=15.0):
+def tas_from_cas(cas_ms, alt_m):
+    """True airspeed for a calibrated airspeed at an ISA altitude (low Mach: CAS / sqrt(sigma))."""
+    sigma = (1.0 - 2.25577e-5 * alt_m) ** 4.25588
+    return cas_ms / math.sqrt(sigma)
+
+
+def final_approach(H, ap, rw, end_id, dist_m, cas_ms, label, glide_deg=3.0, tch_m=15.0, fuel=None, apc=False):
     """On the extended centreline `dist_m` before the threshold, on a `glide_deg` glide path.
-    No throttle: the flight model trims the jet (throttle included) for 1 g on that path."""
+    No throttle: the flight model trims the jet (throttle included) for 1 g on that path.
+    cas_ms is the calibrated airspeed the HMD shows (speed_ms, true airspeed, is ~3 % more at the
+    spawn height); fuel (fraction) sets the weight, and with it the AoA at that speed; apc starts
+    the jet on the auto-throttle (a fixed throttle runs away in speed on the back side of the drag curve)."""
     e, d = _end_and_dir(rw, end_id)
     x, z = e['x'] - dist_m * d[0], e['z'] - dist_m * d[1]
     y = H.at(e['x'], e['z']) + tch_m + dist_m * math.tan(math.radians(glide_deg))
-    return dict(label=label, x=r2(x), y=r2(y, 1), z=r2(z), heading_deg=r2(heading_deg(*d)),
-                on_ground=False, speed_ms=r2(speed_ms), gear=1,
-                flight_path_deg=-glide_deg, ground_y=r2(H.at(x, z), 1), airport=ap['icao'], runway=end_id)
+    s = dict(label=label, x=r2(x), y=r2(y, 1), z=r2(z), heading_deg=r2(heading_deg(*d)),
+             on_ground=False, speed_ms=r2(tas_from_cas(cas_ms, y)), gear=1,
+             flight_path_deg=-glide_deg, ground_y=r2(H.at(x, z), 1), airport=ap['icao'], runway=end_id)
+    if fuel is not None:
+        s['fuel'] = fuel
+    if apc:
+        s['apc'] = True
+    return s
 
 
 def airborne(H, lon, lat, alt_m, hdg, speed_ms, label, **extra):
@@ -224,8 +238,13 @@ def build_spawns(airports, H, dead_sea_level):
         k33 = 'telnof_' + e33.lower()
         if k33 not in sp:
             sp[k33] = runway_start(H, llek, r, e33, f'Tel Nof, runway {e33}, ready for takeoff')
+    # 140 KIAS with 45 % fuel (a jet back from a sortie) is the on-speed approach AoA (13 deg) the
+    # flight model is tuned for; with the old 140 kt true airspeed and 60 % fuel the jet spawned
+    # at 15 deg AoA, behind the power curve, and sank short of the runway. It starts on the
+    # auto-throttle, which holds that AoA (hands off, the jet flies down the 3 deg path to the runway)
     sp['telnof_final'] = final_approach(H, llek, longest, end, 10000.0, 140 * KT,
-                                        f'Tel Nof, 10 km final runway {end}, 140 kt, gear down')
+                                        f'Tel Nof, 10 km final runway {end}, 140 kt, gear down', fuel=0.45,
+                                        apc=True)
     sp['tlv_3000'] = airborne(H, 34.7800, 32.0800, 3000.0, 180.0, 200.0, 'Over Tel Aviv, 3,000 m')
     sp['jerusalem_sunset'] = airborne(H, 35.1200, 31.7850, 1500.0, 90.0, 160.0,
                                       'Jerusalem hills at sunset, 1,500 m, heading east',

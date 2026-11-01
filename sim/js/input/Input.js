@@ -7,14 +7,19 @@
 //     pitch, roll, yaw (-1..1, + = pull / right / right), throttle (0..1, 0.75 = MIL),
 //     brake (0..1), parkingBrake, gearHandle (true = down), canopy (true = open), nwsEnable,
 //     speedbrake (0..1)
-//   and the edges of this frame (true once per press): gearToggle, canopyToggle, cameraNext,
-//   cameraPrev, camera (1..5 or 0), pause, reset, hmdToggle, help, lightsToggle,
-//   landingLightToggle, mute, timeEarlier, timeLater, parkingBrakeToggle, speedbrakeToggle,
-//   lookCenter, fullscreen, menuBack; plus head look: lookX / lookY (rates -1..1 from hats and
-//   the numpad), dragX / dragY (mouse drag in px this frame), wheel (scroll steps this frame).
+//   highAoA (the 50 deg AoA mode is selected), apc (the auto-throttle is selected), and the edges of this frame (true once per press):
+//   gearToggle, canopyToggle, cameraNext, cameraPrev, camera (1..5 or 0), pause, reset, resetHint,
+//   hmdToggle, help, lightsToggle, landingLightToggle, mute, timeEarlier, timeLater,
+//   parkingBrakeToggle, speedbrakeToggle, highAoAToggle, apcToggle, lookCenter, fullscreen, menuBack; plus
+//   head look: lookX / lookY (rates -1..1 from hats and the numpad), dragX / dragY (mouse drag in
+//   px this frame), wheel (scroll steps this frame).
 //
-// The levers (throttle, gear handle, parking brake, canopy, speed brake) live here; the app
-// may veto a change by writing input.levers back (e.g. the gear handle is locked on the ground).
+// The levers (throttle, gear handle, parking brake, canopy, speed brake, high-AoA mode, auto-throttle)
+// live here; moving the throttle in any way turns the auto-throttle off (the pilot takes over);
+// the app may veto a change by writing input.levers back (e.g. the gear handle is locked on the
+// ground).  Two hints from the app (main.js, every frame): `airborne` (L3 on a gamepad is the
+// parking brake on the ground and the high-AoA mode in the air) and `resetNeedsHold` (R restarts
+// at once when crashed or stopped, but must be held for a second in flight).
 //
 // Throttle: Shift / Ctrl, + / -, gamepad triggers or right stick move it; it stops at the MIL
 // detent (0.75): keep holding (0.5 s) or press again to go into afterburner (and the same on the
@@ -25,8 +30,20 @@ import { Bindings, STANDARD_GAMEPAD, HELD_ACTIONS, povHas, povDirection } from '
 const MIL = 0.75;
 const THROTTLE_RATE = 0.55;          // lever travel per second at full key / trigger
 const DETENT_HOLD = 0.5;             // s of holding at the MIL detent before it lets go
-const KEY_RISE = 2.6;                // keyboard stick: deflection per s while held
+// Keyboard stick, two stages: a slow start so a tap is a small correction (a 0.3 s tap used to be
+// 0.78 of full stick: 20 deg of bank, 5 g), then quicker to full deflection for a held key.
+const KEY_FINE = 0.3;                // deflection reached at the fine rate (after 0.25 s)
+const KEY_FINE_RATE = 1.2;           // deflection per s up to KEY_FINE
+const KEY_RISE = 3.0;                // ... per s beyond it (full stick after ~0.5 s)
 const KEY_RETURN = 5.0;              // ... and back to centre when released
+const RESET_HOLD = 1.0;              // s to hold R (or a bound reset button) to restart in flight
+// Mouse stick: a full throw is 0.22 x the smaller window side; inside MOUSE_DEADZONE (of a throw)
+// the stick reads centred, so the FCS holds attitude.  The roll axis springs back to centre once
+// the mouse rests (MOUSE_ROLL_IDLE s), like a spring-loaded side-stick: roll in, stop, and the
+// bank is held.  Middle click centres both axes.
+export const MOUSE_DEADZONE = 0.06;        // (the HMD draws it round the mouse-stick indicator)
+const MOUSE_ROLL_IDLE = 0.25;
+const MOUSE_ROLL_RETURN = 3.0;       // throw per s
 const LOOK_KEYS = { Numpad8: [0, 1], Numpad2: [0, -1], Numpad4: [-1, 0], Numpad6: [1, 0] };
 
 /** Keys this module uses: their browser defaults are suppressed while flying. */
@@ -35,14 +52,24 @@ const OWN_KEYS = new Set([
   'KeyH', 'KeyV', 'KeyM', 'KeyP', 'KeyR', 'KeyS', 'KeyF', 'PageUp', 'PageDown', 'Home', 'F1',
   'BracketLeft', 'BracketRight', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'Slash',
   'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Numpad8', 'Numpad2', 'Numpad4', 'Numpad6',
-  'Numpad5', 'Space', 'Tab',
+  'Numpad5', 'Space', 'Tab', 'KeyA', 'KeyT',
 ]);
 const THR_UP_KEYS = new Set(['ShiftLeft', 'ShiftRight', 'Equal', 'NumpadAdd']);
 const THR_DOWN_KEYS = new Set(['ControlLeft', 'ControlRight', 'Minus', 'NumpadSubtract']);
 const MODIFIERS = new Set(['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight']);
+const SHIFTS = new Set(['ShiftLeft', 'ShiftRight']);
+/** Keys that make a shortcut with Shift: Shift is then a modifier, not "throttle up". (Ctrl makes
+ *  none: Ctrl + B is "throttle down and brake"; it used to put the throttle back and lock it.) */
+const SHIFT_COMBOS = new Set(['KeyB', 'KeyL', 'KeyV', 'Slash']);
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const approach = (x, target, rate) => (x < target ? Math.min(target, x + rate) : Math.max(target, x - rate));
+
+/** Keyboard stick deflection one frame on: fine rate up to KEY_FINE, then KEY_RISE; back at KEY_RETURN. */
+export function keyRamp(x, target, dt, k = 1) {
+  if (target === 0 || (x !== 0 && Math.sign(x) !== Math.sign(target))) return approach(x, target, KEY_RETURN * dt);
+  return approach(x, target, (Math.abs(x) < KEY_FINE ? KEY_FINE_RATE : KEY_RISE) * k * dt);
+}
 
 /** Deadzone (rescaled so the output starts at 0) and expo (cubic blend) for a stick axis. */
 export function shapeAxis(v, deadzone, expo) {
@@ -52,9 +79,9 @@ export function shapeAxis(v, deadzone, expo) {
   return Math.sign(v) * ((1 - expo) * x + expo * x * x * x);
 }
 
-const EDGE_NAMES = ['gearToggle', 'canopyToggle', 'cameraNext', 'cameraPrev', 'pause', 'reset', 'hmdToggle',
+const EDGE_NAMES = ['gearToggle', 'canopyToggle', 'cameraNext', 'cameraPrev', 'pause', 'reset', 'resetHint', 'hmdToggle',
   'help', 'lightsToggle', 'landingLightToggle', 'mute', 'timeEarlier', 'timeLater', 'parkingBrakeToggle',
-  'speedbrakeToggle', 'lookCenter', 'fullscreen', 'menuBack', 'confirm'];
+  'speedbrakeToggle', 'highAoAToggle', 'apcToggle', 'lookCenter', 'fullscreen', 'menuBack', 'confirm'];
 
 export class Input {
   constructor(domElement) {
@@ -65,7 +92,10 @@ export class Input {
     /** Mouse stick: the mouse (pointer locked to the view) moves a virtual stick. */
     this.mouseStick = false;
     this.mouseStickPos = { x: 0, y: 0 };
-    this.levers = { throttle: 0, gearHandle: true, parkingBrake: true, canopy: false, speedbrake: false, nwsEnable: true };
+    this.levers = { throttle: 0, gearHandle: true, parkingBrake: true, canopy: false, speedbrake: false, nwsEnable: true, highAoA: false, apc: false };
+    /** Hints from the app, every frame (see the header). */
+    this.airborne = false;
+    this.resetNeedsHold = false;
     this.detent = { hold: 0, t: 0 };     // at the MIL detent: +1 stopped going up, -1 going down
     this.kb = { pitch: 0, roll: 0, yaw: 0 };
     this.keys = new Set();
@@ -81,10 +111,13 @@ export class Input {
     this._trigPrev = { up: false, down: false };
     this._wasEnabled = true;
     this._quietPads = false;             // one frame without pad edges after a menu closes / opens
+    this._mouseIdle = 0;                 // s since the mouse last moved the stick sideways
+    this._resetHeld = -1;                // s R (or a bound reset button) has been held; -1 = idle
+    this._rsLock = new Map();            // pad index -> 'yaw' | 'thr': right-stick axis lock
 
     this.frame = {
       pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: 0, parkingBrake: true, gearHandle: true, canopy: false,
-      nwsEnable: true, speedbrake: 0, camera: 0, lookX: 0, lookY: 0, dragX: 0, dragY: 0, wheel: 0, dragButton: -1,
+      nwsEnable: true, speedbrake: 0, highAoA: false, apc: false, camera: 0, lookX: 0, lookY: 0, dragX: 0, dragY: 0, wheel: 0, dragButton: -1,
     };
     for (const k of EDGE_NAMES) this.frame[k] = false;
 
@@ -122,17 +155,25 @@ export class Input {
   }
 
   /** Put the levers where the flight model set them up (after reset(spawn)). */
-  setLevers({ throttle, gearDown, parkingBrake, canopy, speedbrake } = {}) {
+  setLevers({ throttle, gearDown, parkingBrake, canopy, speedbrake, highAoA = false, apc = false } = {}) {
     const L = this.levers;
     if (throttle != null) L.throttle = clamp(+throttle, 0, 1);
     if (gearDown != null) L.gearHandle = !!gearDown;
     if (parkingBrake != null) L.parkingBrake = !!parkingBrake;
     if (canopy != null) L.canopy = !!canopy;
     if (speedbrake != null) L.speedbrake = !!speedbrake;
+    L.highAoA = !!highAoA;               // a new flight starts in the normal 25 deg mode
+    L.apc = !!apc;                       // and the auto-throttle off unless the spawn has it on
     this.detent.hold = 0;
     this.kb.pitch = this.kb.roll = this.kb.yaw = 0;
     this.mouseStickPos.x = this.mouseStickPos.y = 0;
     this._throttleAxisLast.clear();
+    this._resetHeld = -1;                // R still held through the restart does not count again
+  }
+
+  /** Centre the mouse stick (middle click; a new flight). */
+  centreMouseStick() {
+    this.mouseStickPos.x = this.mouseStickPos.y = 0;
   }
 
   /** Mouse stick on/off; with it on, clicking the view captures the mouse (Esc releases it). */
@@ -158,10 +199,10 @@ export class Input {
       if ((code === 'Enter' || code === 'NumpadEnter') && !e.repeat) this._queue.push('confirm');
       return;
     }
-    // a modifier pressed with another key is a modifier, not a throttle move: undo what it did
-    if (!MODIFIERS.has(code)) {
+    // Shift pressed for a Shift shortcut is a modifier, not a throttle move: undo what it did
+    if (SHIFT_COMBOS.has(code)) {
       for (const [mod, m] of this._modUsed) {
-        if (!m.used && this.keys.has(mod) && (code === 'KeyB' || code === 'KeyL' || code === 'KeyV' || code === 'Slash')) {
+        if (!m.used && SHIFTS.has(mod) && this.keys.has(mod)) {
           m.used = true;
           this.levers.throttle = m.throttleAtPress;
           this.detent.hold = m.holdAtPress;
@@ -203,7 +244,9 @@ export class Input {
         this._queue.push('cam' + code.slice(5)); break;
       case 'KeyM': q('mute'); break;
       case 'KeyP': case 'Escape': q('pause'); break;
-      case 'KeyR': q('reset'); break;
+      case 'KeyR': this._resetPress(); break;
+      case 'KeyA': q('highAoAToggle'); break;
+      case 'KeyT': q('apcToggle'); break;
       case 'KeyS': q('speedbrakeToggle'); break;
       case 'KeyF': q('fullscreen'); break;
       case 'Home': case 'Numpad5': q('lookCenter'); break;
@@ -219,13 +262,25 @@ export class Input {
     if (MODIFIERS.has(e.code)) this._modUsed.delete(e.code);
   }
 
+  /** R pressed (or a bound reset button): at once when stopped or crashed, else hold to confirm. */
+  _resetPress() {
+    if (!this.resetNeedsHold) { this._queue.push('reset'); this._resetHeld = -1; return; }
+    this._queue.push('resetHint');
+    this._resetHeld = 0;
+  }
+
   // ------------------------------------------------------------------------------ mouse
   _mouseDown(e) {
     if (this.mouseStick && !this._locked && e.button === 0 && this.enabled) {
       this.dom.requestPointerLock?.();
       return;
     }
-    if (e.button === 1) { this._queue.push('lookCenter'); e.preventDefault(); return; }
+    if (e.button === 1) {
+      if (this.mouseStick && this._locked) this.centreMouseStick();
+      this._queue.push('lookCenter');
+      e.preventDefault();
+      return;
+    }
     // left or right drag: head look / orbit (right only while the mouse flies the jet)
     if (e.button === 2 || (e.button === 0 && !(this.mouseStick && this._locked))) {
       this._drag.active = true;
@@ -241,6 +296,7 @@ export class Input {
       p.y += e.movementY / s;              // mouse down (towards you) = pull
       const r = Math.hypot(p.x, p.y);
       if (r > 1) { p.x /= r; p.y /= r; }
+      if (e.movementX) this._mouseIdle = 0;
       this.lastDevice = 'mouse';
     }
     if (this._drag.active) {
@@ -328,6 +384,7 @@ export class Input {
     const seen = new Set();
     this.padStatus = [];
     let thrRate = 0, upPress = false, downPress = false;
+    this._padResetDown = false;
     for (const pad of pads) {
       seen.add(pad.index);
       const B = this.bindings.forPad(pad);
@@ -335,10 +392,25 @@ export class Input {
       let prev = this._padPrev.get(pad.index);
       if (!prev || prev.id !== pad.id) { prev = { id: pad.id, held: {} }; this._padPrev.set(pad.index, prev); }
       let active = false;
+      const tr = B.throttleRate !== undefined ? B.throttleRate : (pad.mapping === 'standard' ? STANDARD_GAMEPAD.throttleRate : null);
+      // Rudder (right stick X) and throttle (right stick Y) share a thumb: a push that is not quite
+      // straight used to move both.  The first axis out of the deadzone owns the stick until it is
+      // back in the centre.
+      let rsLock = null;
+      const yb = B.axes && B.axes.yaw;
+      if (yb && tr && tr.stickAxis >= 0 && pad.mapping === 'standard' && (yb.index >> 1) === (tr.stickAxis >> 1)) {
+        const ax = Math.abs(pad.axes[yb.index] || 0), ay = Math.abs(pad.axes[tr.stickAxis] || 0);
+        const dz = Math.max(0.15, tun.deadzone);
+        rsLock = this._rsLock.get(pad.index) || null;
+        if (ax <= dz && ay <= dz) rsLock = null;
+        else if (!rsLock) rsLock = ay > ax ? 'thr' : 'yaw';
+        this._rsLock.set(pad.index, rsLock);
+      }
       // stick axes
       for (const name of ['pitch', 'roll', 'yaw']) {
         const b = B.axes && B.axes[name];
         if (!b) continue;
+        if (name === 'yaw' && rsLock === 'thr') continue;
         let v = pad.axes[b.index];
         if (!Number.isFinite(v)) continue;
         if (b.invert) v = -v;
@@ -354,7 +426,7 @@ export class Input {
         const lever = clamp((v + 1) / 2, 0, 1);
         const last = this._throttleAxisLast.get(pad.id);
         if (last === undefined || Math.abs(lever - last) > 0.015) {
-          if (last !== undefined) { this.levers.throttle = lever; this.detent.hold = 0; active = true; }
+          if (last !== undefined) { this.levers.throttle = lever; this.levers.apc = false; this.detent.hold = 0; active = true; }
           this._throttleAxisLast.set(pad.id, lever);
         }
       }
@@ -366,9 +438,8 @@ export class Input {
         out.brake = Math.max(out.brake, clamp((v + 1) / 2, 0, 1) > 0.05 ? clamp((v + 1) / 2, 0, 1) : 0);
       }
       // gamepad throttle as a rate: right stick Y and the triggers
-      const tr = B.throttleRate !== undefined ? B.throttleRate : (pad.mapping === 'standard' ? STANDARD_GAMEPAD.throttleRate : null);
       if (tr) {
-        if (tr.stickAxis >= 0 && Number.isFinite(pad.axes[tr.stickAxis])) {
+        if (tr.stickAxis >= 0 && Number.isFinite(pad.axes[tr.stickAxis]) && rsLock !== 'yaw') {
           const v = -shapeAxis(pad.axes[tr.stickAxis], Math.max(0.15, tun.deadzone), 0);
           if (v !== 0) { thrRate += v; active = true; }
         }
@@ -386,6 +457,7 @@ export class Input {
         const was = !!prev.held[action];
         prev.held[action] = h;
         if (h) active = true;
+        if (action === 'reset' && h) this._padResetDown = true;
         if (HELD_ACTIONS.has(action)) {
           if (!h) continue;
           if (action === 'brakes') out.brake = 1;
@@ -396,7 +468,9 @@ export class Input {
           else if (action === 'lookLeft') out.lookX -= 1;
           else if (action === 'lookRight') out.lookX += 1;
         } else if (h && !was && !this._quietPads) {
-          this._padEdge(action, out);
+          // a button can do something else in the air (L3: parking brake on the ground, high-AoA
+          // mode in the air), see Bindings.js
+          this._padEdge(this.airborne && b.inAir ? b.inAir : action, out);
         }
       }
       if (active) this.lastDevice = pad.mapping === 'standard' ? 'gamepad' : 'joystick';
@@ -407,6 +481,11 @@ export class Input {
 
   _padEdge(action, out) {
     // while the game is paused or in a menu, the pad navigates instead (see main.js)
+    if (action === 'reset') {
+      // like R: at once when stopped or crashed, held for a second in flight
+      if (!this.resetNeedsHold) { out.reset = true; this._resetHeld = -1; } else { out.resetHint = true; this._resetHeld = 0; }
+      return;
+    }
     if (action in out) out[action] = true;
     if (action === 'pause') out.pause = true;
   }
@@ -419,6 +498,7 @@ export class Input {
     // a fresh press in the held direction lets the lever through the detent at once
     if (atDetent && ((D.hold > 0 && upPress) || (D.hold < 0 && downPress))) { D.hold = 0; D.t = 0; }
     if (rate === 0) { D.t = 0; return; }
+    L.apc = false;                       // the pilot takes the throttle back from the auto-throttle
     const target = t + rate * THROTTLE_RATE * dt;
     if (rate > 0 && t < MIL - 1e-6 && target >= MIL) { t = MIL; D.hold = 1; D.t = 0; }
     else if (rate < 0 && t > MIL + 1e-6 && target <= MIL) { t = MIL; D.hold = -1; D.t = 0; }
@@ -468,9 +548,9 @@ export class Input {
       for (const [code, [x, y]] of Object.entries(LOOK_KEYS)) if (K.has(code)) { f.lookX += x; f.lookY += y; }
     }
     const kb = this.kb;
-    kb.pitch = approach(kb.pitch, tp, (tp !== 0 && Math.sign(tp) === Math.sign(kb.pitch) ? KEY_RISE : KEY_RETURN) * dt);
-    kb.roll = approach(kb.roll, tr, (tr !== 0 && Math.sign(tr) === Math.sign(kb.roll) ? KEY_RISE : KEY_RETURN) * dt);
-    kb.yaw = approach(kb.yaw, ty, (ty !== 0 && Math.sign(ty) === Math.sign(kb.yaw) ? KEY_RISE * 0.8 : KEY_RETURN) * dt);
+    kb.pitch = keyRamp(kb.pitch, tp, dt);
+    kb.roll = keyRamp(kb.roll, tr, dt);
+    kb.yaw = keyRamp(kb.yaw, ty, dt, 0.8);
     f.pitch = kb.pitch;
     f.roll = kb.roll;
     f.yaw = kb.yaw;
@@ -480,8 +560,8 @@ export class Input {
     for (const e of this._queue) {
       if (e === 'thrUpPress') upPress = true;
       else if (e === 'thrDownPress') downPress = true;
-      else if (e === 'throttleMax') { this.levers.throttle = 1; this.detent.hold = 0; }
-      else if (e === 'throttleIdle') { this.levers.throttle = 0; this.detent.hold = 0; }
+      else if (e === 'throttleMax') { this.levers.throttle = 1; this.levers.apc = false; this.detent.hold = 0; }
+      else if (e === 'throttleIdle') { this.levers.throttle = 0; this.levers.apc = false; this.detent.hold = 0; }
       else if (e.startsWith('cam')) f.camera = +e.slice(3);
       else if (e in f) f[e] = true;
     }
@@ -491,10 +571,23 @@ export class Input {
     const pad = on ? this._pollPads(dt, f) : { thrRate: 0, upPress: false, downPress: false };
     if (!on) { this._pollPadsMenu(f); }
 
-    // mouse stick
+    // mouse stick: roll springs back once the mouse rests; a small deadzone around the centre
     if (this.mouseStick && this._locked && on) {
-      f.pitch += this.mouseStickPos.y;
-      f.roll += this.mouseStickPos.x;
+      const p = this.mouseStickPos;
+      this._mouseIdle += dt;
+      if (this._mouseIdle > MOUSE_ROLL_IDLE && this.bindings.tuning.mouseRollReturn !== false) p.x = approach(p.x, 0, MOUSE_ROLL_RETURN * dt);
+      const r = Math.hypot(p.x, p.y);
+      if (r > MOUSE_DEADZONE) {
+        const k = (r - MOUSE_DEADZONE) / ((1 - MOUSE_DEADZONE) * r);
+        f.pitch += p.y * k;
+        f.roll += p.x * k;
+      }
+    }
+
+    // restart: R (or a bound button) held for RESET_HOLD s in flight; letting go early cancels it
+    if (this._resetHeld >= 0) {
+      if (!(on && (K.has('KeyR') || this._padResetDown))) this._resetHeld = -1;
+      else if ((this._resetHeld += dt) >= RESET_HOLD) { f.reset = true; this._resetHeld = -1; }
     }
     f.pitch = clamp(f.pitch, -1, 1);
     f.roll = clamp(f.roll, -1, 1);
@@ -514,6 +607,8 @@ export class Input {
     const L = this.levers;
     if (f.parkingBrakeToggle) L.parkingBrake = !L.parkingBrake;
     if (f.speedbrakeToggle) L.speedbrake = !L.speedbrake;
+    if (f.highAoAToggle) L.highAoA = !L.highAoA;
+    if (f.apcToggle) L.apc = !L.apc;                     // the app may put it back (gear up, on the ground)
     if (f.gearToggle) L.gearHandle = !L.gearHandle;      // the app may put it back
     if (f.canopyToggle) L.canopy = !L.canopy;            // the app may put it back
 
@@ -523,6 +618,8 @@ export class Input {
     f.canopy = L.canopy;
     f.speedbrake = L.speedbrake ? 1 : 0;
     f.nwsEnable = L.nwsEnable;
+    f.highAoA = L.highAoA;
+    f.apc = L.apc;
 
     // mouse drag and wheel
     f.dragX = this._drag.dx;
@@ -544,7 +641,7 @@ export class Input {
       for (const [name, i] of Object.entries(map)) {
         const h = read(i), was = !!prev.held['menu_' + name];
         prev.held['menu_' + name] = h;
-        if (h && !was && !this._quietPads) f[name] = true;
+        if (h && !was && !this._quietPads) { f[name] = true; this.lastDevice = 'gamepad'; }
       }
     }
   }

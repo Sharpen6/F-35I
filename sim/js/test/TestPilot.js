@@ -227,7 +227,8 @@ export class TestPilot {
       }
       case 'flare': {
         // sink rate proportional to the height of the mains (exponential flare, 2.5 s), power
-        // kept on until the last couple of metres (the FCS caps the pitch at 13 deg near the ground)
+        // kept on until the last couple of metres (the FCS caps the pitch at 14 deg near the ground,
+        // tailStrikePitch in f35i_config.js)
         const vsCmd = -clamp(hm / 2.5, 0.4, 4.2);
         const gCmd = Math.asin(clamp(vsCmd / Math.max(st.tas || st.ias, 30), -0.2, 0.2));
         o.pitch = this._pitchFor(st, gCmd, gearDown, 0.26);
