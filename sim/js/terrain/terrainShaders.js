@@ -46,6 +46,8 @@ float hFar(ivec2 p) { return decodeH(texelFetch(uHFar, clamp(p, ivec2(0), ivec2(
 // Height at a position in 25 m units: bilinear on the core grid (exact at samples), the far
 // grid outside the core (same function as HeightField on the CPU).
 float heightU(vec2 u) {
+  // one return at the end: Direct3D's compiler (ANGLE on Windows) warns about an early return
+  float h;
   vec2 c = u - 6144.0;
   if (c.x >= 0.0 && c.y >= 0.0 && c.x <= 4096.0 && c.y <= 4096.0) {
     vec2 i = min(floor(c), vec2(4095.0));
@@ -53,15 +55,17 @@ float heightU(vec2 u) {
     ivec2 p = ivec2(i);
     float h00 = hCore(p), h10 = hCore(p + ivec2(1, 0));
     float h01 = hCore(p + ivec2(0, 1)), h11 = hCore(p + ivec2(1, 1));
-    return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+    h = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+  } else {
+    vec2 g = u * 0.125;
+    vec2 i = clamp(floor(g), vec2(0.0), vec2(2047.0));
+    vec2 f = clamp(g - i, 0.0, 1.0);
+    ivec2 p = ivec2(i);
+    float h00 = hFar(p), h10 = hFar(p + ivec2(1, 0));
+    float h01 = hFar(p + ivec2(0, 1)), h11 = hFar(p + ivec2(1, 1));
+    h = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
   }
-  vec2 g = u * 0.125;
-  vec2 i = clamp(floor(g), vec2(0.0), vec2(2047.0));
-  vec2 f = clamp(g - i, 0.0, 1.0);
-  ivec2 p = ivec2(i);
-  float h00 = hFar(p), h10 = hFar(p + ivec2(1, 0));
-  float h01 = hFar(p + ivec2(0, 1)), h11 = hFar(p + ivec2(1, 1));
-  return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+  return h;
 }
 
 void main() {
