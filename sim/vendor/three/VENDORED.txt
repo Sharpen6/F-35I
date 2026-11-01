@@ -1,0 +1,1 @@
+three r187 (MIT, see LICENSE): build/ plus a subset of examples/jsm (no webgpu, tsl, inspector, most libs).
