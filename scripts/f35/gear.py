@@ -49,7 +49,12 @@ MG_AXLE_OFF = 0.215                # strut centreline inboard of wheel centre
 MG_OLEO = 1.15                     # oleo body length below the trunnion (piston below it)
 MG_STOW_C = (1.20, 8.85, 0.13)     # wheel centre stowed (target), above/outboard of the weapon bay roof
 MG_STOW_TILT = 50.0                # axle tilt when stowed (deg, outboard-up)
-MG_B = (1.74, 9.40, 0.28)          # drag-brace airframe pivot (well roof)
+MG_B = (2.17, 9.48, 0.17)          # drag-brace airframe pivot: a fitting in a notch at the outboard
+                                   # top-front corner of the hanging door's opening, under the wing
+                                   # root (c10, c14, c48, c51, ref_04: the white brace runs from there
+                                   # down and aft just ahead of the door's raked front edge)
+MG_BRACE_D = 0.90                  # brace lug on the leg, this far down from the trunnion (below the
+                                   # hanging door's lower edge)
 MG_E = (1.62, 10.62, 0.31)         # actuator airframe pivot (well roof)
 
 
@@ -407,11 +412,15 @@ def build_main(coll, bones, side):
             cylinder(f"MG_BrakeLine{k}_{tag}", pts[k], pts[k + 1], 0.009, None, coll, chrome, segments=6, cap=False))
     # wheel (outboard face shows the hub)
     wheel = build_wheel(f"MG_Wheel_{tag}", coll, C, a1, MG_R, MG_RIM, MG_W)
-    # drag brace (forward)
+    # drag brace (forward): outside the well with the gear down, folding into it on retraction
     Bw = W(mirror(MG_B, side))
-    Dw = T + u * 0.50 + fwd_p * 0.11
-    pole = Vector((-side, 0, 0))                 # knee folds inboard, into the well (up would pierce the wing)
-    K, Lk, n = brace_geometry(Bw, Dw, pole)
+    Dw = T + u * MG_BRACE_D + fwd_p * 0.11
+    # the pole sits above the stowed brace, inboard: retracted, the knee folds up into the body
+    # instead of out through the well opening; deployed, the brace keeps a slight forward-up bend
+    Dw_stow = rot_about(Dw, T, R)
+    pole_pt = (Bw + Dw_stow) / 2 + Vector((0, 0, 0.7)) + Vector((-side * 0.25, 0, 0))
+    pole = (pole_pt - (Bw + Dw) / 2).normalized()
+    K, Lk, n = brace_geometry(Bw, Dw, pole, over=0.005)
     br_u = bar(f"MG_DragBrace_U_{tag}", Bw, K, 0.085, 0.06, n.cross((Dw - Bw).normalized()), coll, gear,
                bevel=0.008)
     br_l = bar(f"MG_DragBrace_L_{tag}", K, Dw, 0.075, 0.055, n.cross((Dw - Bw).normalized()), coll, gear,
@@ -440,7 +449,7 @@ def build_main(coll, bones, side):
     _bone(bones, f"MG_Wheel_{tag}", C, C + a1 * 0.2, f"MG_Oleo_{tag}", wheel, drive="wheel_spin",
           radius=MG_R)
     _bone(bones, f"MG_BraceTgt_{tag}", Dw, Dw + pin_axis * 0.08, f"MG_Strut_{tag}")
-    _bone(bones, f"MG_BracePole_{tag}", K + n * 0.8, K + n * 0.8 + pin_axis * 0.08, "Root")
+    _bone(bones, f"MG_BracePole_{tag}", pole_pt, pole_pt + pin_axis * 0.08, "Root")
     _bone(bones, f"MG_BraceUp_{tag}", Bw, K, "Root", [br_u, pinB], roll_axis=n)
     _bone(bones, f"MG_BraceLo_{tag}", K, Dw, f"MG_BraceUp_{tag}", [br_l, pinK], roll_axis=n,
           ik=(f"MG_BraceTgt_{tag}", f"MG_BracePole_{tag}", 2))

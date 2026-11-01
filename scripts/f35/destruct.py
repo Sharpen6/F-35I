@@ -444,7 +444,7 @@ def owner_of(name):
             return f"{comp}_{base[-1]}"
     if base.startswith("NoseGearDoor"):
         return "nose_gear"
-    if base == "GunDoor":
+    if base in ("GunDoor", "GunFairing"):
         return "gun"
     if base == "Canopy_Frame":
         return "cockpit"

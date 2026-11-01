@@ -8,7 +8,7 @@ Construction (all solids, combined with exact booleans)
 -------------------------------------------------------
 F  forebody  - upper dome + lower V / canted sides meeting at a sharp chine, nose -> s=6.
 M  main body - 8-control-point sections (spine, shoulder, strake/chine edge,
-               lower cowl side, flat belly, keel) from s=3.9 -> 14.3; aft of
+               lower cowl side, flat belly, keel) from s=3.9 -> 14.4; aft of
                s ~12.8 the centre is drawn onto the nozzle shroud circle.
    F carries the diverterless (DSI) bumps: a broad bulge on each side below
    the chine, ahead of and inside the inlet (dsi_bump).
@@ -291,7 +291,7 @@ def fore_upper_z(s, x):
 # ---------------------------------------------------------------------------
 # M: main body control points  station -> (x, z)
 # ---------------------------------------------------------------------------
-M_START, M_END = 3.90, 14.30
+M_START, M_END = 3.90, 14.40
 Q_ROWS = {
     # Q0 top centre / spine (kept inside F ahead of the canopy rear frame)
     0: [(3.90, (0.0, 0.50)), (4.30, (0.0, 0.66)), (4.60, (0.0, 0.86)),
@@ -300,14 +300,14 @@ Q_ROWS = {
         (8.50, (0.0, 1.11)), (9.50, (0.0, 1.08)), (10.5, (0.0, 1.05)),
         (11.5, (0.0, 1.02)), (12.2, (0.0, 0.99)), (12.8, (0.0, 0.90)),
         (13.05, (0.0, 0.82)), (13.3, (0.0, 0.73)), (13.6, (0.0, 0.725)),
-        (14.3, (0.0, 0.725))],
+        (14.4, (0.0, 0.725))],
     # Q1 spine shoulder: a narrow ridge behind the canopy (photo-matched
     # head-on view: nothing of the spine shows outside the canopy outline)
     1: [(3.90, (0.32, 0.46)), (4.30, (0.32, 0.60)), (4.60, (0.30, 0.80)),
         (5.10, (0.27, 1.15)), (5.40, (0.26, 1.16)), (6.00, (0.26, 1.12)),
         (7.00, (0.29, 1.07)), (9.00, (0.34, 1.02)), (11.0, (0.38, 0.96)),
         (12.2, (0.40, 0.93)), (12.8, (0.38, 0.84)), (13.05, (0.35, 0.78)),
-        (13.3, (0.30, 0.65)), (13.6, (0.29, 0.645)), (14.3, (0.29, 0.645))],
+        (13.3, (0.30, 0.65)), (13.6, (0.29, 0.645)), (14.4, (0.29, 0.645))],
     # Q2 foot of the spine; nearly flat out to the inlet shoulder.  ~0.1 m
     # lower than the 3-view: the camera-matched head-on photo shows the
     # upper body beside the canopy that much lower
@@ -315,13 +315,15 @@ Q_ROWS = {
         (5.10, (0.63, 0.71)), (5.60, (0.68, 0.70)), (6.50, (0.74, 0.68)),
         (8.00, (0.80, 0.68)), (10.0, (0.84, 0.67)), (11.5, (0.84, 0.665)),
         (12.4, (0.80, 0.64)), (13.0, (0.74, 0.61)), (13.3, (0.64, 0.53)),
-        (13.6, (0.54, 0.40)), (14.0, (0.52, 0.36)), (14.3, (0.52, 0.30))],
+        (13.6, (0.54, 0.40)), (14.0, (0.52, 0.40)), (14.12, (0.52, 0.39)), (14.4, (0.55, 0.26))],
     # Aft of s ~12.8 the body converges onto the nozzle shroud (s 13.3): above
     # and below the nozzle the section is drawn onto the shroud circle
     # (_shroud_blend) and cut away behind the teeth; beside the nozzle only
     # the stabilator booms carry on (Q2-Q6), their inner faces hugging the
     # nozzle, as in the JASDF F-35A rear photos (references/nozzle).  The boom
-    # ends taper (s 14.0-14.3) to a thin edge round the stabilator root.
+    # top stays level to s ~14.1 (ref_06 of 901) and then closes in sloped
+    # facets onto the stabilator plane (z 0.22) by s 14.4, the outer edge
+    # swept in, so the boom runs into the stab with no end face.
     # Near the inlet lip the cowl hugs the aperture (lips ~4 cm thick, as on
     # the front drawings and photo c29) and flares out behind it: the cowl's
     # top, outboard side and lower corner ramp out to the full body by s ~5.6
@@ -331,35 +333,36 @@ Q_ROWS = {
     3: [(3.90, (1.25, 0.33)), (4.45, (1.27, 0.335)), (4.75, (1.29, 0.45)),
         (5.05, (1.32, 0.52)), (5.20, (1.33, 0.53)), (6.00, (1.40, 0.565)), (7.00, (1.44, 0.59)), (7.50, (1.45, 0.60)), (9.50, (1.44, 0.585)),
         (11.0, (1.40, 0.575)), (12.0, (1.40, 0.565)), (13.0, (1.37, 0.54)), (13.6, (1.32, 0.47)),
-        (14.0, (1.30, 0.43)), (14.3, (1.22, 0.31))],
+        (14.0, (1.30, 0.47)), (14.12, (1.28, 0.465)), (14.4, (1.10, 0.27))],
     # Q4 strake / chine edge (sharp)
     #    (forward-most at the lip tip TIP: side drawing and photo c28 put it
     #    ~0.1 m above the nose tip)
     4: [(3.90, (1.49, 0.195)), (4.28, (1.50, 0.20)), (4.70, (1.55, 0.235)),
         (5.20, (1.625, 0.28)), (5.80, (1.70, 0.31)), (6.60, (1.76, 0.32)), (7.50, (1.80, 0.31)), (9.00, (1.82, 0.30)), (12.0, (1.86, 0.27)),
         (12.5, (1.74, 0.26)), (13.0, (1.60, 0.25)), (13.5, (1.49, 0.24)),
-        (14.0, (1.42, 0.23)), (14.3, (1.33, 0.22))],
+        (14.0, (1.42, 0.23)), (14.4, (1.20, 0.22))],
     # Q5 lower outboard side of the cowl
     5: [(3.90, (1.20, -0.50)), (4.65, (1.22, -0.51)), (5.20, (1.36, -0.47)),
         (5.60, (1.45, -0.445)), (6.20, (1.54, -0.43)), (7.00, (1.59, -0.42)),
         (9.50, (1.59, -0.41)), (11.5, (1.52, -0.39)), (12.4, (1.32, -0.35)),
         (12.8, (1.22, -0.27)), (13.3, (1.16, -0.12)), (13.6, (1.14, 0.03)),
-        (14.0, (1.10, 0.08)), (14.3, (1.05, 0.15))],
+        (14.0, (1.10, 0.08)), (14.4, (1.05, 0.18))],
     # Q6 bottom outboard corner of the flat belly.  Belly ~0.08 m higher than
     # the 3-view: camera-matched side and head-on photos show more daylight
     # between belly and wheels
     6: [(3.90, (1.15, -0.60)), (4.65, (1.16, -0.60)), (5.20, (1.29, -0.625)),
         (5.60, (1.30, -0.665)),
         (6.20, (1.24, -0.73)), (6.80, (1.20, -0.77)), (10.5, (1.19, -0.775)),
-        (11.5, (1.14, -0.78)), (12.2, (1.08, -0.745)), (12.6, (0.92, -0.62)),
+        (11.5, (1.14, -0.765)), (12.2, (1.08, -0.745)), (12.6, (0.92, -0.62)),
         (13.0, (0.68, -0.43)), (13.3, (0.46, -0.27)), (13.6, (0.50, -0.05)),
-        (14.0, (0.52, 0.0)), (14.3, (0.52, 0.14))],
-    # Q7 keel (inside F ahead of s~5.1)
+        (14.0, (0.52, 0.0)), (14.4, (0.55, 0.18))],
+    # Q7 keel (inside F ahead of s~5.1).  The ventral bulge behind the bays is only ~4-5 cm deeper
+    # than the bay section (camera-matched c14, c48, c51: ~0.95-1.0 m above the ground)
     7: [(3.90, (0.0, -0.565)), (4.60, (0.0, -0.60)), (5.40, (0.0, -0.655)),
         (6.20, (0.0, -0.725)), (6.80, (0.0, -0.78)), (10.4, (0.0, -0.785)),
-        (11.0, (0.0, -0.85)), (11.4, (0.0, -0.875)), (11.9, (0.0, -0.835)),
+        (11.0, (0.0, -0.81)), (11.4, (0.0, -0.83)), (11.9, (0.0, -0.805)),
         (12.4, (0.0, -0.75)), (12.9, (0.0, -0.62)), (13.3, (0.0, -0.485)),
-        (13.6, (0.0, -0.48)), (14.3, (0.0, -0.48))],
+        (13.6, (0.0, -0.48)), (14.4, (0.0, -0.48))],
 }
 
 _QT = None
@@ -608,16 +611,19 @@ def lip_cutters(collection):
 # ---------------------------------------------------------------------------
 # Aperture traced from the front drawings (c25 / ref09: dark region, model
 # coordinates): the top edge falls from the bump (1.02, 0.42) to the
-# top-outboard corner (1.46, 0.19); the outboard wall cants in along
-# x = 1.387 + 0.44 z to (1.18, -0.475); the floor is flat.
+# top-outboard corner (1.46, 0.19); the outboard wall cants in to
+# (1.17, -0.38); the floor is flat at z -0.39.  The camera-matched head-on
+# photos c22 / c29 put the floor (top of the lower lip) ~9 cm higher than the
+# drawings, so the lower lip face is ~0.37 m deep: the wall below z 0 is
+# compressed into the shorter height.
 APERTURE = [
     (1.000, 0.430), (1.100, 0.380), (1.200, 0.330), (1.300, 0.280), (1.400, 0.230),
     (1.440, 0.208), (1.461, 0.186), (1.463, 0.160), (1.444, 0.110), (1.387, 0.000),
-    (1.343, -0.100), (1.299, -0.200), (1.255, -0.300), (1.211, -0.400), (1.192, -0.445),
-    (1.172, -0.471), (1.140, -0.482), (1.000, -0.482), (0.800, -0.482),
+    (1.343, -0.081), (1.299, -0.162), (1.255, -0.243), (1.211, -0.324), (1.192, -0.360),
+    (1.172, -0.381), (1.140, -0.390), (1.000, -0.390), (0.800, -0.390),
 ]
 DUCT_GAP = 0.006        # inboard wall just outside the forebody: the bump runs on into the duct
-DUCT_WALL_Z = [-0.482, -0.45, -0.40, -0.35, -0.30, -0.25, -0.20, -0.15, -0.10, -0.05,
+DUCT_WALL_Z = [-0.39, -0.35, -0.30, -0.25, -0.20, -0.15, -0.10, -0.05,
                0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.39, 0.43]
 
 
@@ -681,6 +687,7 @@ NOZ_TOOTH = 0.05        # tooth depth (photos: ~60 teeth round the nozzle, ~6 cm
 NOZ_TEETH = 60          # teeth round the shroud
 NOZ_SKIN_R = 0.596      # shroud skin radius about the nozzle axis (outer flap roots r 0.58-0.586)
 NOZ_CUT_R = 0.606       # behind the teeth everything inside this radius is cut away
+NOZ_WALL_R = 0.585      # the shroud wall is thinned to ~1 cm over the last 9 cm ahead of the teeth
 NOZ_CORE = (12.92, 0.555)              # engine bay opened from here (flame holder shows)
 SHROUD_BLEND = (12.45, NOZ_SHROUD_S)   # the section centre is drawn onto the shroud circle
 # angles about the nozzle axis left to the booms: from, to, lower ramp, upper ramp (deg).  The upper
@@ -726,14 +733,17 @@ def build_nozzle_well_cutter(collection):
     n = 2 * NOZ_TEETH
     s_core, r_core = NOZ_CORE
     s_back = 16.5
+    s_step, r_wall = NOZ_SHROUD_S - 0.09, NOZ_WALL_R
     bm = bmesh.new()
-    a, b, c, d = [], [], [], []
+    a, a2, a3, b, c, d = [], [], [], [], [], []
     for j in range(n):
         th = 2.0 * math.pi * j / n
         ct, sn = math.cos(th), math.sin(th)
         sf = NOZ_SHROUD_S + (NOZ_TOOTH if j % 2 else 0.0)
         a.append(bm.verts.new(P(s_core, r_core * ct, NOZ_Z + r_core * sn)))
-        b.append(bm.verts.new(P(sf, r_core * ct, NOZ_Z + r_core * sn)))
+        a2.append(bm.verts.new(P(s_step, r_core * ct, NOZ_Z + r_core * sn)))
+        a3.append(bm.verts.new(P(s_step + 0.01, r_wall * ct, NOZ_Z + r_wall * sn)))
+        b.append(bm.verts.new(P(sf, r_wall * ct, NOZ_Z + r_wall * sn)))
         c.append(bm.verts.new(P(sf, NOZ_CUT_R * ct, NOZ_Z + NOZ_CUT_R * sn)))
         d.append(bm.verts.new(P(s_back, NOZ_CUT_R * ct, NOZ_Z + NOZ_CUT_R * sn)))
     cf = bm.verts.new(P(s_core, 0.0, NOZ_Z))
@@ -742,11 +752,15 @@ def build_nozzle_well_cutter(collection):
     for j in range(n):
         k = (j + 1) % n
         inner.append(bm.faces.new((cf, a[k], a[j])))
-        inner.append(bm.faces.new((a[j], a[k], b[k], b[j])))
+        inner.append(bm.faces.new((a[j], a[k], a2[k], a2[j])))
+        inner.append(bm.faces.new((a2[j], a2[k], a3[k], a3[j])))
+        inner.append(bm.faces.new((a3[j], a3[k], b[k], b[j])))
         teeth.append(bm.faces.new((b[j], b[k], c[k], c[j])))
         bm.faces.new((c[j], c[k], d[k], d[j]))
         bm.faces.new((cb, d[j], d[k]))
-    for f in inner:
+    # dark tooth flanks and a ~1 cm shroud wall over the last 9 cm: the serration reads as
+    # light teeth with black notches all round (ref_06 of 901, c26, c27)
+    for f in inner + teeth:
         f.material_index = 1
     # the tooth flanks are twisted quads: split them so the cut is exact
     bmesh.ops.triangulate(bm, faces=teeth, quad_method='BEAUTY', ngon_method='BEAUTY')

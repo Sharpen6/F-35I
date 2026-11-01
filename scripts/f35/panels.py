@@ -559,6 +559,18 @@ def layout(pt):
     for s in (6.4, 7.9, 9.5):
         pt.frame("top", [(s, 0.32), (s, 1.45)])
     pt.line("top", [(5.05, 1.40), (6.80, 1.55), (8.20, 1.66)], rivets=(-0.03, 0.035))
+    # gun fairing (left only): a rectangular access panel two-thirds of the way aft, lighter in
+    # c20 and ref_05 (901), and the fastener row along its inboard foot
+    pt.line("top", rect(7.00, 7.70, 1.17, 1.40), mirror=False, closed=True, rivets=(0.025, 0.035))
+    pt.patch("top", rect(7.00, 7.70, 1.17, 1.40), B, 0.45, mirror=False)
+    pt.line("top", [(5.85, 1.125), (8.60, 1.125)], mirror=False, value=0.5, rivets=(0.02, 0.04))
+    # vent fairing (right only): two grille panels on its top, fasteners round the aft taper
+    for s0, s1 in ((6.40, 6.72), (6.78, 7.10)):
+        pt.line("top", rect(s0, s1, -1.565, -1.675), mirror=False, closed=True)
+        for s in np.arange(s0 + 0.03, s1 - 0.01, 0.03):
+            pt.line("top", [(s, -1.575), (s, -1.665)], mirror=False, value=0.75)
+    pt.line("top", [(7.15, -1.53), (7.75, -1.60), (7.15, -1.70)], mirror=False, value=0.6,
+            rivets=(0.02, 0.035))
     # inlet top: line parallel to the cowl lip
     pt.line("top", [(4.62, 0.98), (4.82, 1.50)], tape=True)
 

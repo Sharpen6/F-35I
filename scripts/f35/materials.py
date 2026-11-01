@@ -440,7 +440,8 @@ def _make(name):
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),
         # outer flaps: dark gunmetal; divergent flaps: light ceramic coating
         # (photos of the exit: a whitish-tan serrated ring inside the dark flaps)
-        "nozzle":    dict(color=(0.24, 0.23, 0.22), rough=0.38, metal=0.75),
+        # outer flaps: reddish-taupe gunmetal, darker and warmer than the skin (ref_06 of 901, c26)
+        "nozzle":    dict(color=(0.20, 0.155, 0.15), rough=0.46, metal=0.60),
         "nozzle_in": dict(color=(0.07, 0.065, 0.06), rough=0.6, metal=0.3),
         "bay":       dict(color=(0.78, 0.79, 0.78), rough=0.55),
         "gear":      dict(color=(0.82, 0.83, 0.82), rough=0.4, metal=0.1),

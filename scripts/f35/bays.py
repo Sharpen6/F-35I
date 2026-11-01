@@ -12,7 +12,7 @@
   so it hangs beside the leg as a gently curved panel while the gear is
   down, as in photos of parked F-35s (c29, c50, c51, c53); the forward
   outboard door and the inboard door only open while the gear is moving
-* GAU-22/A gun-port door on the left shoulder
+* GAU-22/A gun fairing along the left shoulder, its gun-port door on the nose
 * air-refuelling receptacle door on the spine (F-35A/I boom receptacle)
 
 Door panels are ray-cast onto the closed skin, so they follow the outer
@@ -61,7 +61,48 @@ MAIN_WELL_POLY = [(1.13, -1.00), (2.215, -0.43), (2.215, 0.21), (1.40, 0.40),
                   (0.78, 0.40), (0.78, -0.17), (1.13, -0.21)]
 MAIN_SPLIT_X = 1.64            # inboard door | outboard doors
 MAIN_OUT_X = 2.20              # outboard hinge line (under the wing root, above the wheel)
-MAIN_AFT_S = 9.70              # forward outboard door | aft outboard door
+MAIN_AFT_S = 9.50              # forward outboard door | aft outboard door, at the hinge line
+MAIN_RAKE = 0.62               # ... the split runs aft by this much towards the doors' free edge: the
+                               # hanging door is a trapezoid with a raked front edge (c14, c51), the
+                               # white drag brace just ahead of it
+MAIN_NOTCH = (0.84, 0.14)      # notch in the forward door's aft-outboard corner (u from, depth) for
+                               # the brace fitting
+
+
+def main_split_s(u):
+    """Station of the forward / hanging door split at u (0 free edge, 1 hinge line)."""
+    return MAIN_AFT_S + MAIN_RAKE * (1.0 - u)
+
+
+def main_fwd_aft_s(u):
+    """Aft edge of the forward outboard door: the split, notched near the hinge line."""
+    u0, depth = MAIN_NOTCH
+    t = min(1.0, max(0.0, (u - u0) / 0.04))
+    return main_split_s(u) - depth * t * t * (3 - 2 * t)
+# GAU-22/A gun fairing on the left shoulder (photos c20, c53 and ref_05 / ref_06 of 901): a long,
+# half-buried tube along the shoulder from a rounded nose just aft of and above the cowl's top
+# corner to the wing root.  Seen from above it stands out of the shoulder as a separate cylinder
+# with a steep inboard flank; outboard it rolls over the shoulder and runs down the cowl side as
+# a thin skin to a fastener crease about 5 cm above the strake edge.  Its crest is only ~5 cm
+# above the old shoulder (camera-matched c20 / c29 silhouettes).  The gun door is its nose.
+GUN_FAIR_S = (5.00, 5.42, 7.70, 8.95)   # nose tip / full section from / taper from / gone by
+GUN_FAIR_X = 1.28                       # crest line |x|
+GUN_FAIR_IN = 0.17                      # crest to the inboard foot (x)
+GUN_FAIR_ROLL = 0.45                    # crest to where the skin runs down the side (fraction of the
+                                        # arc from the crest to the crease)
+GUN_FAIR_H = 0.050                      # crest height above the shoulder
+GUN_FAIR_SIDE = 0.008                   # skin thickness down the cowl side
+GUN_FAIR_C = (1.20, 0.20)               # (x, z) centre of the radial ray casts
+GUN_FAIR_EPS = 0.0025                   # edges tuck this far under the skin: clean crease lines
+# Raised NO STEP vent fairing on the outer slope of the right shoulder (photos c10, c28, c29, c50,
+# c51, ref_01 of 926; seen in flight on 901 in ref_06): a flat-topped box ~0.24 m wide standing
+# ~0.11 m off the slope, a blunt front face at s ~5.9 that is mostly a dark forward-facing opening
+# (head-on a slanted parallelogram ~0.2 x 0.14 m standing above the shoulder skyline), grille
+# panels on top and a taper into the shoulder by s ~7.75.
+VENT_S = (5.88, 5.95, 7.15, 7.75)       # front face / full from / taper from / gone by
+VENT_Z = 0.47                           # centre line: where the slope passes this height
+VENT_HALF = 0.12                        # half-width along the skin
+VENT_H = 0.11                           # height off the slope
 
 
 def nose_front(x):
@@ -166,6 +207,203 @@ def _prism(name, coll, poly_xz, s0, s1, mat):
     return ob
 
 
+def _ss(a, b, x):
+    t = min(1.0, max(0.0, (x - a) / (b - a)))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def gun_crease_z(s):
+    """Height of the fairing's side crease: ~5 cm above the strake edge, rising aft to stay above
+    the wing's upper surface where it runs out of the cowl side."""
+    return 0.37 + 0.10 * _ss(7.0, 8.6, s)
+
+
+def _gun_section(bvh, s, side=1, n=241):
+    """Outer skin section round a shoulder (side 1 = left) at station s: (points, arc lengths),
+    ordered inboard over the top and down the cowl side.  Rays come in from outside towards
+    GUN_FAIR_C so the duct walls inside are never hit."""
+    cx, cz = GUN_FAIR_C
+    c = P(s, side * cx, cz)
+    pts = []
+    for k in range(n):
+        th = math.radians(128.0 - 128.0 * k / (n - 1))
+        d = Vector((side * math.cos(th), 0.0, math.sin(th)))
+        hit = bvh.ray_cast(c + d * 3.0, -d, 3.2)
+        if hit[0] is not None and (not pts or (hit[0] - pts[-1]).length > 2e-4):
+            pts.append(hit[0])
+    w = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        w.append(w[-1] + (b - a).length)
+    return pts, w
+
+
+def _at(pts, w, x, side=1):
+    """Point and outward section normal at arc length x."""
+    x = min(max(x, 0.0), w[-1])
+    for i in range(len(w) - 1):
+        if w[i + 1] >= x:
+            break
+    f = (x - w[i]) / max(w[i + 1] - w[i], 1e-9)
+    p = pts[i].lerp(pts[i + 1], f)
+    # tangent over a ~2 cm window: smooth normals on a faceted skin
+    a = _lerp_w(pts, w, x - 0.01)
+    b = _lerp_w(pts, w, x + 0.01)
+    t = b - a
+    nrm = Vector((t.z, 0.0, -t.x)).normalized()       # rotate the tangent; outward = away from C
+    if nrm.x * (p.x - side * GUN_FAIR_C[0]) + nrm.z * (p.z - GUN_FAIR_C[1]) < 0:
+        nrm = -nrm
+    return p, nrm
+
+
+def _lerp_w(pts, w, x):
+    x = min(max(x, 0.0), w[-1])
+    for i in range(len(w) - 1):
+        if w[i + 1] >= x:
+            break
+    f = (x - w[i]) / max(w[i + 1] - w[i], 1e-9)
+    return pts[i].lerp(pts[i + 1], f)
+
+
+def _w_where(pts, w, test, start=0):
+    """Arc length where test(p) first becomes true (linear between samples)."""
+    for i in range(max(start, 0), len(pts) - 1):
+        a, b = test(pts[i]), test(pts[i + 1])
+        if b >= 0.0 > a or (a == 0.0):
+            f = -a / (b - a) if b != a else 0.0
+            return w[i] + f * (w[i + 1] - w[i]), i
+    return None, None
+
+
+def build_gun_fairing(coll, bvh):
+    """Closed solid lying on the left shoulder (see GUN_FAIR_*): every station is a section of
+    the skin found by ray casts, pushed out along its normal by the fairing thickness; the
+    bottom runs 2 cm under the skin."""
+    s0, sn, st, s1 = GUN_FAIR_S
+    e_min = 0.12
+    stations = []
+    s = s0
+    while s < s1 - 1e-6:
+        stations.append(s)
+        s += 0.012 if s < sn else (0.03 if s < st else 0.04)
+    stations.append(s1)
+    # cross-section samples: (region, u); A inboard foot -> crest (dense at the foot),
+    # B crest -> side, C down the side, D the crease
+    na, nb, nc, nd = 18, 14, 10, 6
+    samples = ([("A", 1.0 - math.cos(0.5 * math.pi * k / na)) for k in range(na)]
+               + [("B", k / nb) for k in range(nb)]
+               + [("C", k / nc) for k in range(nc)]
+               + [("D", math.sin(0.5 * math.pi * k / (nd - 1))) for k in range(nd)])
+    rings = []
+    for s in stations:
+        pts, w = _gun_section(bvh, s, 1)
+        if len(pts) < 20:
+            raise RuntimeError(f"gun fairing: no skin section at s={s:.3f}")
+        if s < sn:
+            e = e_min + (1.0 - e_min) * math.sqrt(max(0.0, 1.0 - ((sn - s) / (sn - s0)) ** 2))
+        else:
+            e = 1.0
+        grow = (e - e_min) / (1.0 - e_min)
+        fade = 1.0 - _ss(st, s1, s)
+        h = GUN_FAIR_H * grow ** 0.7 * fade
+        hs = GUN_FAIR_SIDE * grow * fade
+        wc, ic = _w_where(pts, w, lambda p: p.x - GUN_FAIR_X)
+        wi, _ = _w_where(pts, w, lambda p: p.x - (GUN_FAIR_X - GUN_FAIR_IN))
+        zc = gun_crease_z(s)
+        wk, _ = _w_where(pts, w, lambda p: zc - p.z, ic)
+        if None in (wc, wi, wk):
+            raise RuntimeError(f"gun fairing: section limits not found at s={s:.3f}")
+        wi = wc - (wc - wi) * e
+        wk = wc + (wk - wc) * e
+        wr = wc + (wk - wc) * GUN_FAIR_ROLL
+        dk = 0.012 * e                       # width of the crease step
+        top, bot = [], []
+        for reg, u in samples:
+            if reg == "A":
+                x = wi + (wc - wi) * u
+                th = h * (1.0 - (1.0 - u) ** 2.2) ** 0.55
+            elif reg == "B":
+                x = wc + (wr - wc) * u
+                th = hs + (h - hs) * 0.5 * (1.0 + math.cos(math.pi * u))
+            elif reg == "C":
+                x = wr + (wk - dk - wr) * u
+                th = hs
+            else:
+                x = wk - dk + dk * u
+                th = hs * math.sqrt(max(0.0, 1.0 - u * u))
+            p, nrm = _at(pts, w, x)
+            top.append(p + nrm * (th - GUN_FAIR_EPS))
+            bot.append(p - nrm * 0.02)
+        rings.append(top + bot[::-1])
+    verts, faces = loft_rings(rings, True, True, True)
+    ob = mesh_object("GunFairing", verts, faces, coll, M.get("skin"), smooth=True, sharp_angle=40)
+    _fix(ob)
+    return ob
+
+
+def _vent_frame(pts, w, s, side):
+    """Arc position of the vent fairing's centre line at station s."""
+    _, ic = _w_where(pts, w, lambda p: side * p.x - GUN_FAIR_X)
+    wm, _ = _w_where(pts, w, lambda p: VENT_Z - p.z, ic)
+    if wm is None:
+        raise RuntimeError(f"vent fairing: no slope at z={VENT_Z} at s={s:.3f}")
+    return wm
+
+
+def build_vent_fairing(coll, bvh, side=-1):
+    """Flat-topped fairing on the outer slope of the right shoulder (see VENT_*), with a dark
+    slot cut into its blunt front face."""
+    sf, sm, st, s1 = VENT_S
+    stations = []
+    s = sf
+    while s < s1 - 1e-6:
+        stations.append(s)
+        s += 0.007 if s < sm else 0.03
+    stations.append(s1)
+    nu = 32
+    us = [math.sin(0.5 * math.pi * (2.0 * k / (nu - 1) - 1.0)) for k in range(nu)]
+    rings = []
+    for s in stations:
+        pts, w = _gun_section(bvh, s, side)
+        wm = _vent_frame(pts, w, s, side)
+        if s < sm:                          # blunt face, rounded top edge
+            g = (1.0 - ((sm - s) / (sm - sf)) ** 2.2) ** 0.5 if s > sf else 0.0
+        else:
+            g = 1.0
+        fade = 1.0 - _ss(st, s1, s)
+        h = VENT_H * g * fade
+        half = VENT_HALF * (0.6 + 0.4 * fade)
+        top, bot = [], []
+        for u in us:
+            p, nrm = _at(pts, w, wm + u * half, side)
+            th = h * max(0.0, 1.0 - abs(u) ** 5) ** 0.4
+            top.append(p + nrm * (th - GUN_FAIR_EPS))
+            bot.append(p - nrm * 0.02)
+        rings.append(top + bot[::-1])
+    verts, faces = loft_rings(rings, True, True, True)
+    ob = mesh_object("VentFairing", verts, faces, coll, M.get("skin"), smooth=True, sharp_angle=40)
+    _fix(ob)
+    # the dark opening in the front face: a box in the fairing's own frame, 0.19 m across the
+    # slope, from 1.5 to 8.8 cm off the skin, 0.22 m deep
+    sc = sf + 0.03
+    pts, w = _gun_section(bvh, sc, side)
+    wm = _vent_frame(pts, w, sc, side)
+    pc, nrm = _at(pts, w, wm, side)
+    pa, _ = _at(pts, w, wm + 0.01, side)
+    tng = (pa - pc).normalized()
+    v = []
+    for ds in (-0.05, 0.22):
+        for a in (-0.095, 0.095):
+            for b in (0.015, 0.088):
+                v.append(pc + tng * a + nrm * b + Vector((0.0, ds - 0.03, 0.0)))
+    f = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    cut = mesh_object("Cav_Vent", v, f, coll, M.get("intake_dark"), smooth=False)
+    _fix(cut)
+    boolean(ob, cut, 'DIFFERENCE', apply=True)
+    bpy.data.objects.remove(cut)
+    ob.data.set_sharp_from_angle(angle=math.radians(40))
+    return ob
+
+
 def surface_patch(name, coll, bvh, grid_fn, nu, nv, ray_dir, offset=0.002,
                   thickness=0.018, mat=None):
     """Patch on the skin: grid_fn(u, v) -> ray origin (world).  Rays cast
@@ -192,6 +430,15 @@ def surface_patch(name, coll, bvh, grid_fn, nu, nv, ray_dir, offset=0.002,
     me = ob.data
     if me.polygons and me.polygons[0].normal.dot(d) > 0:
         me.flip_normals()
+    # sharp rims: the Solidify edge must not bend the outer face's shading normals, or every
+    # door reads as a bevelled, outlined box instead of flush skin with a fine seam
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    for e in bm.edges:
+        if e.is_boundary:
+            e.smooth = False
+    bm.to_mesh(me)
+    bm.free()
     add_solidify(ob, thickness, -1.0)
     return ob
 
@@ -263,9 +510,14 @@ def build(ctx):
             if nrm.z > 0:                       # outward normal points down/outboard
                 nrm = -nrm
 
-            def gf(u, v, pa=pa, pb=pb, sa=sa, sb=sb, nrm=nrm):
+            def gf(u, v, pa=pa, pb=pb, sa=sa, sb=sb, nrm=nrm, name=name):
                 q = pa.lerp(pb, u)
-                return Vector((q.x, P(sa + (sb - sa) * v, 0, 0).y, q.z)) + nrm * 1.2
+                a, b_ = sa, sb
+                if name.startswith("MainGearDoor_Fwd"):        # raked, notched aft edge
+                    b_ = main_fwd_aft_s(u) - 0.005
+                elif not name.startswith("MainGearDoor_Inner"):  # hanging door: raked front edge
+                    a = main_split_s(u) + 0.005
+                return Vector((q.x, P(a + (b_ - a) * v, 0, 0).y, q.z)) + nrm * 1.2
             slope = math.degrees(math.atan2(abs(pb.z - pa.z), abs(pb.x - pa.x)))
             if hinge == "out":
                 lim = 90.0 - slope + lim_pad          # hangs (just past) vertical
@@ -282,8 +534,15 @@ def build(ctx):
         d.data.materials.append(bay_mat)
         d.modifiers["Solidify"].material_offset = 1
         doors[name] = (d, meta)
-    gun = surface_patch("GunDoor", coll, bvh,
-                        lambda u, v: P(5.05 + 0.75 * v, 1.22 + 0.16 * u, 2.0), 6, 10, (0, 0, -1))
+    # gun fairing on the left shoulder (the gun door is cast onto its nose), vent fairing on
+    # the right shoulder
+    bvh_f = _bvh(fus)
+    fairing = build_gun_fairing(coll, bvh_f)
+    objs["VentFairing"] = build_vent_fairing(coll, bvh_f, -1)
+    bvh_g = _bvh(fus, fairing)
+    # (1 cm larger all round than the gun cavity, so the closed door leaves no dark slot)
+    gun = surface_patch("GunDoor", coll, bvh_g,
+                        lambda u, v: P(5.05 + 0.76 * v, 1.215 + 0.17 * u, 2.0), 13, 28, (0, 0, -1))
     refuel = surface_patch("RefuelDoor", coll, bvh,
                            lambda u, v: P(5.55 + 0.42 * v, -0.11 + 0.22 * u, 3.0), 6, 8, (0, 0, -1))
     # ------------------------------------------------------------ cut wells
@@ -296,10 +555,13 @@ def build(ctx):
             poly = list(reversed(poly))
         cutters.append(_prism(f"Cav_MainGear_{tag}", helpers, poly, *MAIN_WELL_S, bay_mat))
     cutters.append(_plan_prism("Cav_NoseGear", helpers, nose_plan(), *NOSE_WELL_Z, bay_mat))
-    cutters.append(_cavity("Cav_Gun", helpers, 1.20, 1.40, 5.03, 5.82, 0.38, 1.2, M.get("intake_dark")))
+    cutters.append(_cavity("Cav_Gun", helpers, 1.225, 1.375, 5.06, 5.80, 0.38, 1.2, M.get("intake_dark")))
     cutters.append(_cavity("Cav_Refuel", helpers, -0.13, 0.13, 5.53, 6.00, 1.05, 1.6, bay_mat))
     for cut in cutters:
         boolean(fus, cut, 'DIFFERENCE', apply=True)
+        if cut.name == "Cav_Gun":
+            boolean(fairing, cut, 'DIFFERENCE', apply=True)
+            fairing.data.set_sharp_from_angle(angle=math.radians(40))
         if cut.name.startswith("Cav_MainGear_"):
             for n in ("Wing_", "WingFillet_"):
                 ob = ctx["objects"].get(n + cut.name[-1])
@@ -318,12 +580,15 @@ def build(ctx):
         set_hinge(d, p0, p1, meta["kind"], (0.0, meta["lim"]),
                   {"side": meta["side"], "door": meta["sub"], "want": list(meta["want"])})
         objs[name] = d
-    gz = _edge_z(gun, 1.38)              # hinge on the door's outboard edge, on the skin
-    set_hinge(gun, P(5.05, 1.38, gz), P(5.80, 1.38, gz), "gun_door", (0, 70),
+    # hinge on the door's outboard edge, on the fairing skin (it climbs over the nose)
+    g0 = bvh_g.ray_cast(P(5.05, 1.385, 2.0), Vector((0, 0, -1)), 5.0)[0]
+    g1 = bvh_g.ray_cast(P(5.81, 1.385, 2.0), Vector((0, 0, -1)), 5.0)[0]
+    set_hinge(gun, g0 + Vector((0, 0, 0.002)), g1 + Vector((0, 0, 0.002)), "gun_door", (0, 70),
               {"side": 1, "want": [0, 0, -1]})
     set_hinge(refuel, P(5.97, 0.11, 1.18), P(5.97, -0.11, 1.18), "refuel_door", (0, 100),
               {"side": 0, "want": [0, 0, -1]})
     objs["GunDoor"] = gun
+    objs["GunFairing"] = fairing
     objs["RefuelDoor"] = refuel
     # ---------------------------------------------------- bay interiors
     gear_mat = M.get("gear")
