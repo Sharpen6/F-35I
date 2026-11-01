@@ -24,6 +24,7 @@ import { UI, formatHours } from './ui/Menu.js';
 import { BindingsUI } from './ui/BindingsUI.js';
 import { Effects } from './ui/Effects.js';
 import { EngineSound } from './audio/EngineSound.js';
+import { Buildings } from './world/Buildings.js';       // graphics module: 3D buildings (sim/js/world)
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -155,7 +156,9 @@ class App {
     this.ui.buildMenu({
       spawns: this.terrain.spawns,
       settings: this.settings,
-      attribution: this.terrain.attribution || this.terrain.manifest?.attribution || '',
+      // the terrain's data credits, then each graphics module's (module.attribution)
+      attribution: [this.terrain.attribution || this.terrain.manifest?.attribution || '', ...this.modules.map((m) => m.attribution)]
+        .filter(Boolean).join(' '),
       model: 'Aircraft: the procedural F-35I Adir Blender model of this project (scripts/f35, scripts/pilot).',
     });
     if (!this.terrain.spawns[this.settings.spawn]) this.settings.spawn = Object.keys(this.terrain.spawns)[0];
@@ -245,6 +248,7 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+    this.addModule(new Buildings(ctx));
   }
 
   /**
