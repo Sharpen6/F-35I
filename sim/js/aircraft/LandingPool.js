@@ -2,9 +2,11 @@
 // is drawn on its own: a grid that follows the terrain (Terrain.heightAt) ahead of the lamp, added
 // on top of the ground (additive), lit per fragment from the lamp's beam:
 //     E = I(theta) cos(incidence) / r^2,   L = albedo E / pi
-// with I(theta) the beam pattern of lights.js (400,000 cd peak, 9 deg 1/e half width), the ground's
-// albedo assumed (runway asphalt with its paint ~0.12), and the same night visibility gain as the light
-// glows (AircraftLights.nightGain: the sim's night exposure stops far short of a dark-adapted eye).
+// with I(theta) the beam pattern of lights.js (400,000 cd peak, 9 deg 1/e half width, plus a faint
+// skirt ~20 deg wide), the ground's albedo assumed (runway asphalt with its paint ~0.12), and the
+// same night visibility gain as the light glows (AircraftLights.nightGain: the sim's night exposure
+// stops far short of a dark-adapted eye). Its display brightness rolls off softly toward uKnee
+// (~1.1), so the pool stays graded where a camera would not clip it to a flat white wedge.
 // By day it is invisible, as it should be. The beam (world position, direction, intensity, spread)
 // is also published on visual.lights.landing for a terrain shader that wants to light itself.
 
@@ -35,6 +37,8 @@ const POOL_FRAG = /* glsl */`
   uniform float uI0;           // peak intensity (scene units: cd / 30000)
   uniform float uSpread;       // 1/e half width (rad)
   uniform float uGain;         // albedo / pi x night gain
+  uniform float uExposure;     // the camera's exposure (for the knee below)
+  uniform float uKnee;         // display brightness the pool saturates toward
   varying vec3 vWorld;
   void main() {
     #include <logdepthbuf_fragment>
@@ -43,11 +47,15 @@ const POOL_FRAG = /* glsl */`
     float r = sqrt(r2);
     float c = clamp(dot(L / r, uBeam), -1.0, 1.0);
     float th = acos(c) / uSpread;
-    float I = uI0 * exp(-th * th);
+    // the beam: a core plus the faint wide skirt every lamp's reflector throws (soft edges)
+    float I = uI0 * (0.82 * exp(-th * th) + 0.18 * exp(-th * th * 0.2));
     float cosInc = max(0.0, -L.y / r);
-    vec3 col = vec3(1.0, 0.93, 0.80) * (I * cosInc / r2) * uGain;
-    if (max(col.r, col.g) < 1e-7) discard;
-    gl_FragColor = vec4(col, 1.0);
+    float v = I * cosInc / r2 * uGain * uExposure;
+    if (v < 1e-5) discard;
+    // a soft knee: the bright patch just ahead of the nose wheel stays a bright, graded pool (a
+    // camera's highlight roll-off) instead of a flat blown-out wedge
+    v = uKnee * (1.0 - exp(-v / uKnee));
+    gl_FragColor = vec4(vec3(1.0, 0.95, 0.86) * v / uExposure, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }`;
@@ -79,6 +87,7 @@ export class LandingPool {
     this.uniforms = {
       uLamp: { value: new THREE.Vector3() }, uBeam: { value: new THREE.Vector3(0, 0, -1) },
       uI0: { value: 400000 * CD }, uSpread: { value: THREE.MathUtils.degToRad(9) }, uGain: { value: 0 },
+      uExposure: { value: 1 }, uKnee: { value: 1.1 },
     };
     this.material = new THREE.ShaderMaterial({
       name: 'F35_LandingPool', uniforms: this.uniforms, vertexShader: POOL_VERT, fragmentShader: POOL_FRAG,
@@ -93,6 +102,7 @@ export class LandingPool {
     this.mesh.onBeforeRender = (renderer) => {
       const e = fxExposure.get(renderer);
       this.uniforms.uGain.value = this.albedo / Math.PI * AircraftLights.nightGain(e);
+      this.uniforms.uExposure.value = Math.max(e, 1e-3);
     };
     world.add(this.mesh);
     this._lastLamp = new THREE.Vector3(1e9, 0, 0);

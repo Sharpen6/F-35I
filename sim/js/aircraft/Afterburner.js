@@ -8,8 +8,13 @@
 //     yellow-white train inside the core, attached to it (each weighted by the core where it sits,
 //     so none floats past the visible flame).
 // No white ball, no pink or lavender tail: each channel saturates at uSat (a hot orange-yellow) and
-// the flame hides what is behind it by its opacity (1 - exp(-uKappa * luminance)), blended as
-// premultiplied colour + background * (1 - alpha) (a soot-light flame: mostly transparent).
+// the flame hides what is behind it by its opacity (1 - exp(-kappa * luminance)), blended as
+// premultiplied colour + background * (1 - alpha) (a soot-light flame: mostly transparent). By day
+// kappa is higher (uKappaDay 2 against uKappa 0.35 at night): the flame's display brightness is
+// compressed far below its real ratio to the sky (a core several times brighter than the sky), so
+// a transparent flame would come out as orange + blue sky = a pale, whitish puff, worst when seen
+// along its length. Hiding the sky in proportion keeps the core a saturated orange-yellow, and the
+// faint edges stay nearly transparent. The blue lip is fainter by day too.
 //
 // Brightness and the camera's exposure: the flame is a light source of fixed radiance, but the sim's
 // auto exposure (0.9 at noon, up to 40 at night) would turn it into a blown-out white blob at dusk
@@ -51,7 +56,8 @@ const PLUME_FRAG = /* glsl */`
   uniform float uExpComp;     // exposure compensation (see the header)
   uniform float uDay;         // 1 against a daylight sky, 0 at night (from the exposure)
   uniform vec3 uSat;          // radiance each channel saturates at (display, linear)
-  uniform float uKappa;       // opacity per unit of integrated luminance
+  uniform float uKappa;       // opacity per unit of integrated luminance (night)
+  uniform float uKappaDay;    // the same by day (see the header)
   uniform float uSpacing;     // shock-cell spacing (m)
   uniform int uSteps;
   varying vec3 vLocal;
@@ -87,7 +93,7 @@ const PLUME_FRAG = /* glsl */`
     vec3 col = (s < 0.4 ? mix(c1, c2, s / 0.4) : mix(c2, c3, clamp((s - 0.4) / 0.6, 0.0, 1.0))) * env * 1.8;
     // faint blue at the nozzle lip (the outer mixing layer right behind the exit)
     float lip = exp(-pow((rho - 0.85 * uR0) / (0.16 * uR0), 2.0)) * exp(-z / 0.30);
-    col += vec3(0.30, 0.42, 1.0) * lip * 0.55;
+    col += vec3(0.30, 0.42, 1.0) * lip * mix(0.55, 0.35, uDay);
     // shock diamonds: a train of Mach disks inside the core, spacing fixed by the nozzle pressure
     // ratio, each one as bright as the core around it (attached: none beyond the visible flame)
     float z0 = 0.62 * uSpacing;
@@ -134,7 +140,7 @@ const PLUME_FRAG = /* glsl */`
       acc += emission(p);
     }
     acc *= dt * uGain;
-    float alpha = 1.0 - exp(-uKappa * dot(acc, vec3(0.2126, 0.7152, 0.0722)));
+    float alpha = 1.0 - exp(-mix(uKappa, uKappaDay, uDay) * dot(acc, vec3(0.2126, 0.7152, 0.0722)));
     vec3 col = uSat * (vec3(1.0) - exp(-acc / uSat)) * uExpComp;
     gl_FragColor = vec4(col, alpha);
     #include <tonemapping_fragment>
@@ -197,7 +203,7 @@ export class Afterburner {
       uCamLocal: { value: new THREE.Vector3() },
       uLen: { value: 4.0 }, uCore: { value: 3.0 }, uR0: { value: this.r0 }, uRmax: { value: this.rMax },
       uAb: { value: 0 }, uTime: { value: 0 }, uGain: { value: 1.0 }, uScale: { value: new THREE.Vector3(1, 1, 1) },
-      uSat: { value: new THREE.Vector3(1.0, 0.56, 0.20) }, uKappa: { value: 0.35 },
+      uSat: { value: new THREE.Vector3(1.0, 0.56, 0.20) }, uKappa: { value: 0.35 }, uKappaDay: { value: 2.0 },
       uSpacing: { value: 0.8 }, uSteps: { value: this.steps }, uExpComp: { value: 1 }, uDay: { value: 1 },
     };
     // premultiplied "over": the tone-mapped flame colour + the background * (1 - opacity)

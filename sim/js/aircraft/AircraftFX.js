@@ -4,7 +4,8 @@
 //                   cone, the contrail above ~8 km
 //   TyreSmoke.js    puffs of rubber smoke when the wheels touch down
 //   LandingPool.js  the landing light's pool on the ground at night (the terrain ignores lights)
-// and sets the afterburner's ray-march steps for the quality setting. It reads the player's
+// and sets the afterburner's ray-march steps for the quality setting (the player's jet and the
+// wingmen's; the effects themselves are drawn for the player's jet only). It reads the player's
 // FlightModel state (app.fdm.state) and AircraftVisual (ctx.visual) and never changes them.
 //
 // Switches (URL): ?acfx=0 turns all of it off; ?vapour=0, ?tyresmoke=0, ?landingpool=0 one each.
@@ -71,6 +72,17 @@ export class AircraftFX {
     if (ab && ab.setSteps) ab.setSteps(Q.abSteps);
   }
 
+  /** The wingmen's burners (their visuals load later, on demand) take the same ray-march steps. */
+  _syncWingmen() {
+    const w = this.ctx.app && this.ctx.app.wingmen;
+    if (!w || !w.items) return;
+    const n = (FX_QUALITY[this.quality] || FX_QUALITY.high).abSteps;
+    for (const it of w.items) {
+      const ab = it.visual && it.visual.afterburner;
+      if (ab && ab.setSteps && ab.steps !== n) ab.setSteps(n);
+    }
+  }
+
   reset() {
     if (this.vapor) this.vapor.reset();
     this._fresh = true;
@@ -79,6 +91,7 @@ export class AircraftFX {
   update(f) {
     const app = this.ctx.app, v = this.ctx.visual;
     const st = app && app.fdm && app.fdm.state;
+    if (f.draw) this._syncWingmen();
     if (!this.on || !st || !v || !v.object3d) return;
     if (this._fresh) {
       if (this.smoke) this.smoke.reset(st);

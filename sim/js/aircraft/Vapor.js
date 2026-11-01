@@ -6,7 +6,8 @@
 //                       (high g at low level: the expansion over the wing cools the air below its dew
 //                       point); two layers, noise drifting aft
 //   vapour cone         the shock collar at Mach ~0.93-1.01 in humid air: a bell around the aft
-//                       fuselage, densest at its sharp aft edge (the normal shock evaporates it)
+//                       fuselage, densest at its sharp aft edge (the normal shock evaporates it),
+//                       streaks over a misty base, its outline soft (the mist thins away from the body)
 //   contrail            the engine's ice trail above ~8 km (ambient below about -38 C), starting a
 //                       few dozen metres behind the nozzle, spreading and fading over ~25 s
 // The amounts come from fxshared.condensation() (FlightModel state: load factor, dynamic pressure,
@@ -93,14 +94,16 @@ const CONE_FRAG = /* glsl */`
     #include <logdepthbuf_fragment>
     float s = vCone.x, phi = vCone.y;
     vec3 V = normalize(cameraPosition - vWorld);
-    // a shell of mist: denser where the line of sight runs along it (the silhouette)
-    float limb = 1.0 / max(abs(dot(normalize(vNormalW), V)), 0.35);
+    // the shell is the outer bound of a region of mist that is densest near the body: it fades
+    // out towards its silhouette (a soft, cloud-like outline, not a glassy rim)
+    float edge = smoothstep(0.04, 0.5, abs(dot(normalize(vNormalW), V)));
     float axial = smoothstep(0.05, 0.92, s) * (1.0 - smoothstep(0.965, 1.0, s));
-    // streaks along the flow, ragged towards the front, a dense collar at the shock (aft edge)
+    // a misty base with streaks along the flow, ragged towards the front, a dense collar at the
+    // shock (aft edge)
     vec2 nuv = vec2(phi * 11.0, s * 0.7 - uTime * 1.5);
     float n = texture2D(uNoise, nuv).r * 0.55 + texture2D(uNoise, nuv * vec2(2.3, 3.1) + 0.3).g * 0.45;
-    float d = uAmount * axial * smoothstep(0.42, 0.78, n + 0.32 * s * s);
-    float alpha = clamp(d * 0.55 * limb, 0.0, 0.9);
+    float d = uAmount * axial * (0.4 + 0.6 * smoothstep(0.42, 0.78, n + 0.32 * s * s));
+    float alpha = clamp(d * 0.62 * edge, 0.0, 0.85);
     if (alpha < 0.003) discard;
     vec3 col = vapourLight(V, 0.9);
     ${PREMULT_OUT_GLSL}
