@@ -160,7 +160,11 @@ otherwise tint the albedo. The current `data/aircraft` export predates this and 
   Frustum culling works per part (the plume's bounds follow its length; the glows are one draw).
   The effects add nothing while idle; in a hard turn up to 4 trail ribbons + 2 sheet draws, near
   Mach 1 two cone draws (~2k triangles), a touchdown one point draw (<= 160 points), the pool one
-  draw (512 triangles) at night with the gear down: a few draw calls, under 10k triangles.
+  draw (1,024 triangles) at night with the gear down: a few draw calls, under 10k triangles.
+  Measured in the whole app (`aircraft_scenes.mjs`, high, 41 shots against the commit before this
+  work): draw calls and triangles the same within the terrain's streaming noise (-12..+10 calls,
+  +0..4k triangles), GPU memory the same (~750-780 MB), fewer shader programs after all scenes (59
+  against 74).
 
 ## Files
 
@@ -178,7 +182,8 @@ Test page: `sim/dev/aircraft.html` (orbit camera, sliders for every control, lig
 view presets; `?view=rear34&ab=1&night=1` etc.). Tests: `node --import ./sim/tests/node-three.mjs
 sim/tests/aircraft.test.mjs` (rig playback) and `node sim/tests/aircraft_shots.mjs [outdir]`
 (Playwright screenshots, fails on console errors); `node --import ./sim/tests/node-three.mjs
-sim/tests/aircraft_fx.test.mjs` (beacon pattern, burner exposure, the condensation model);
+sim/tests/aircraft_fx.test.mjs` (beacon pattern, burner exposure, the condensation model, the
+pool's gain);
 `node sim/tests/aircraft_scenes.mjs --port 8150 [--only park_,ab_] [--shots chase,side]` (the
 jet in the whole app: parked at noon / 07:00 / sunset / night, take-off roll in burner by day,
 dusk and night, a 7 g turn at 300 m, Mach 0.98 at 100 m over the sea, a contrail at 10 km, a dusk
