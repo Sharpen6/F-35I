@@ -55,7 +55,7 @@ def status(pattern="", lines=6):
     out = {}
     for lg in logs[-3:]:
         with open(lg, errors="replace") as f:
-            txt = [l.rstrip() for l in f if l.startswith(("FRAME", "CLIP", "CYCLES", "HIST", "Traceback", "Error"))
+            txt = [l.rstrip() for l in f if l.startswith(("FRAME", "CLIP", "CYCLES", "HIST", "VIDEO", "Traceback", "Error"))
                    or "Error" in l]
         out[os.path.basename(lg)] = txt[-lines:]
     return out

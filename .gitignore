@@ -11,3 +11,8 @@ references/hdri/*_16k.*
 references/hdri/thumbs/
 *.part
 references/hdri/*.sun.json
+
+# making-of video: caches, layout checks and the full-size master (too big for git)
+renders/video/_cache/
+renders/video/check/
+renders/video/F-35I_Adir_making_of.mp4
