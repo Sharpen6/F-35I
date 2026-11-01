@@ -126,9 +126,11 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   one sampler) or `terrain.sunVisibilityAt(x, y, z)` on the CPU.
 * **City lights at night** (`uNight`): street lamps along street grids turned to the
   district's direction (from the field analysis) in built-up land, sodium orange and LED
-  white, main roads brighter; a lamp keeps its energy as a spot of at least one pixel, so it
-  stays a point from altitude, and lamps closer than ~2 pixels merge into the district's glow.
-  Tel Aviv - Jaffa is brightest, then Jerusalem. `?cityLights=0` turns them off.
+  white, main roads brighter, each lamp's pool of light stretched along its street so the
+  streets read as lit lines between darker blocks; a lamp keeps its energy as a spot of at
+  least one pixel, so it stays a point from altitude, and lamps closer than ~2 pixels merge
+  into the district's glow. Tel Aviv - Jaffa is brightest, then Jerusalem. `?cityLights=0`
+  turns them off.
 * **Samplers**: heights (core and far) are one packed R16UI texture, land cover (overview and
   far) one packed R8UI texture, all generated detail one texture array; the L0 material
   drops the far colour and far normal map. Every terrain program uses at most 12 texture

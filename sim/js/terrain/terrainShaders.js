@@ -685,7 +685,8 @@ vec3 l0Bicubic(vec2 uv) {
 // City lights at night: street lamps where the land is built up, along streets turned to the
 // district's street direction (field analysis) with irregular spacing (blocks of ~60-160 m)
 // and gentle bends; every fifth street is a main road with closer, brighter lamps. Sodium
-// orange and LED white per street, each lamp with a pool of light on the road. A lamp is drawn
+// orange and LED white per street, each lamp with a pool of light stretched along the road,
+// so the pools of a street join into a lit line between darker blocks. A lamp is drawn
 // as a spot of at least one pixel with its energy kept, so from altitude it stays a point; once
 // lamps are closer than about two pixels they merge into the district's glow. Tel Aviv - Jaffa
 // is the brightest, then Jerusalem; small towns are dimmer and patchier. The brightness is
@@ -700,21 +701,24 @@ float vnoise(vec2 p) {
 vec3 cityLights(vec2 xz, float built, vec2 dir, float rnd, float px) {
   float tlv = exp(-length(xz - vec2(-22900.0, -31600.0)) / 14000.0);
   float jlm = exp(-length(xz - vec2(17900.0, 3500.0)) / 9000.0);
-  float dens = built * (0.55 + 1.2 * tlv + 0.6 * jlm);
+  // brighter and dimmer districts (~0.5 km, mean 1), so the far glow is not one even carpet
+  float district = 0.4 + 1.2 * vnoise(xz / 450.0 + 3.7);
+  float dens = built * (0.55 + 1.2 * tlv + 0.6 * jlm) * district;
   float led = clamp(0.2 + 0.5 * tlv + 0.3 * jlm + 0.3 * (fract(rnd * 5.1) - 0.5), 0.0, 1.0);
   const vec3 SODIUM = vec3(1.0, 0.5, 0.15);
-  const vec3 LEDW = vec3(0.85, 0.9, 1.0);
+  const vec3 LEDW = vec3(1.0, 0.75, 0.52);                // ~4500 K street LEDs (linear)
   const float S = 32.0;                                   // lamp spacing along a street (m)
   const float FLUX = 1.5;                                 // per lamp (scene units * m^2)
   float B = S * (3.0 + floor(fract(rnd * 3.7) * 2.0));    // mean block size: 96 or 128 m
   float onP = min(dens * 0.75, 1.0);                      // share of lamps that are lit
   vec3 avg = mix(SODIUM, LEDW, led) * onP * FLUX * 5.0 / (S * B);   // lamps and pools, two streets a block
-  float detail = 1.0 - smoothstep(10.0, 20.0, px);
+  float detail = 1.0 - smoothstep(16.0, 32.0, px);        // streets ~5 px apart or more
   vec3 e = avg;
   if (detail > 0.0) {
     vec2 lo = vec2(dot(xz, dir), dot(xz, vec2(-dir.y, dir.x)));
     lo += 40.0 * vec2(vnoise(xz / 420.0), vnoise(xz / 420.0 + 7.3)) - 20.0;   // bends
-    float best = 1e9, bright = 0.0, isLed = 0.0;
+    float best = 1e9, bright = 0.0, isLed = 0.0, spB = S;
+    vec2 off = vec2(0.0);                                 // nearest lamp: across, along its street (m)
     for (int a = 0; a < 2; a++) {
       vec2 p = a == 0 ? lo : lo.yx;                       // streets along y, then along x
       float k0 = floor(p.x / B + 0.5);
@@ -726,10 +730,13 @@ vec3 cityLights(vec2 xz, float built, vec2 dir, float rnd, float px) {
         float sp = mix(S, 22.0, mainRd);
         float ph = hk.x * sp;
         float jj = floor((p.y - ph) / sp + 0.5);
-        float d = length(p - vec2(xs, jj * sp + ph));
+        vec2 dv = p - vec2(xs, jj * sp + ph);
+        float d = length(dv);
         if (d < best) {
           vec2 hl = hash22(vec2(jj, k * 1.37 + float(a) * 101.0));
           best = d;
+          off = dv;
+          spB = sp;
           bright = step(hl.x, mix(onP, 1.0, mainRd)) * mix(0.75, 1.25, mainRd) * (0.8 + 0.4 * hl.y);
           isLed = step(fract(hk.y * 13.7), mix(led, 0.6, mainRd));
         }
@@ -737,8 +744,11 @@ vec3 cityLights(vec2 xz, float built, vec2 dir, float rnd, float px) {
     }
     float rs = max(1.0, px * 0.8);                        // the lamp, filtered over the pixel
     float spot = exp(-best * best / (rs * rs)) / (3.1416 * rs * rs);
-    float pool = exp(-best * best / 140.0) / (3.1416 * 140.0);   // light on the road under it
-    vec3 pts = mix(SODIUM, LEDW, isLed) * bright * FLUX * (spot + pool * 1.2);
+    // the light on the road: stretched along the street so a street's pools join into a lit
+    // line (how a city's street grid reads from the air at night); widened to the pixel
+    vec2 sg = max(vec2(7.0, 0.6 * spB), vec2(px * 0.8));
+    float pool = exp(-dot(off / sg, off / sg)) / (3.1416 * sg.x * sg.y);
+    vec3 pts = mix(SODIUM, LEDW, isLed) * bright * FLUX * (0.8 * spot + 1.4 * pool);
     e = mix(avg, pts + avg * 0.2, detail);
   }
   return e;
