@@ -3,9 +3,16 @@
 A fully scripted (Python / `bpy`) 3D model of the Israeli Air Force F-35I Adir,
 built only from publicly available reference material (see [`docs/research.md`](docs/research.md)).
 
-**Status:** work in progress. `renders/progress/` holds the build history.
+**Status:** the model, rig, damage system and animation clips are done; a ~19 minute making-of video
+is assembled from the renders by [`scripts/video/make_video.py`](scripts/video/make_video.py).
+`renders/progress/` holds the build history and `blend/history/` a saved .blend for every milestone.
 
-![Damage state](renders/progress/008_damage_front_left.png)
+![F-35I Adir, front left](renders/history/14_fl34.jpg)
+
+**Animations** (MP4 in [`renders/animation/`](renders/animation), small GIF previews in
+[`renders/gifs/`](renders/gifs)): turntable, landing-gear retraction, canopy, pilot head look, cockpit
+start-up, flight controls, weapon bays, afterburner run-up, walk-around and a destruction sequence
+([`destruction_v6.mp4`](renders/animation/destruction_v6.mp4)).
 
 ## What is in the model
 * **Airframe:** fuselage with DSI inlets (compression bump and swept cowl lips traced from the front drawing), wings, canted twin tails, all-moving stabilators,
@@ -18,8 +25,10 @@ built only from publicly available reference material (see [`docs/research.md`](
   (two long nose-gear doors with sawtooth fronts that stay open beside the leg, as on the real jet),
   wheels that spin with the distance rolled, nose-wheel steering.
 * **Weapon bays:** both internal bays with doors, a GBU-31 JDAM and an AIM-120 AMRAAM in each.
-* **Pilot:** seated in the ejection seat, hands follow the side-stick and throttle, head looks
-  left / right / up / down and tilts.
+* **Pilot:** one smooth skinned body (flight suit and G-suit) on an armature, survival vest with LPU
+  collar and pouches, harness with Koch fittings, kneeboard, boots, gloved hands, and a helmet-mounted
+  display helmet with visor, oxygen mask and hose. Seated in the ejection seat, hands follow the
+  side-stick and throttle through IK, head looks left / right / up / down and tilts.
 * **Cockpit switches:** 24 switches, each moves its lever (and guard), lights its LED when the battery
   is on, and drives the system it commands (lights, display, gear, bays, canopy, hook ...).
 * **Paint and light:** dark grey under a satin clear coat, tuned against two photos rendered from their
@@ -46,7 +55,9 @@ built only from publicly available reference material (see [`docs/research.md`](
 | `blend/F-35I_Adir.blend` | The built model, ready to open in Blender 5.1 |
 | `blend/history/` | One blend per milestone with an index of what changed and the mesh counts ([`INDEX.md`](blend/history/INDEX.md)); `scripts/tools/blend_history.py add <name>` appends the current one |
 | `data/damage_model.json` | Components, hitboxes, intact attributes and ground attitudes, exported by the build |
-| `renders/` | Images and GIFs for the making-of video (`progress`, `turntable`, `gifs`, `animation`, `review`) |
+| `scripts/render/` | Background renders: `clips.py` (all animation clips), `launch.py` (start one from a running Blender), `chain.py` (run several in a row), `history_stills.py` (stills of every saved version) |
+| `scripts/video/` | `make_video.py` assembles the making-of in Blender's sequencer; `code_pages.py` renders the source-code and result-table pages it shows |
+| `renders/` | `progress` (numbered stills), `animation` (MP4), `gifs`, `history` (each saved version from three fixed cameras), `video` (pages and clips for the making-of, `chapters.txt`) |
 
 ## Build
 ```bash
@@ -93,6 +104,21 @@ destruct.impact((6, -1.5, 0.6), (-1, 0.1, -0.1), hp=120, frame=600)   # hit: sco
 destruct.break_off("wing_outer_L", frame=640)                         # outer left wing tears off
 destruct.flight_response(frame=640, mach=0.45, alt_m=1000)            # jet banks as the simulator says
 destruct.collapse_gear("main_gear_L", frame=900)                      # on the ground: leg folds
+```
+
+## Rendering the clips and the making-of video
+Clips render in a background Blender so the interactive session stays free:
+```python
+import launch                      # scripts/render on sys.path, inside Blender 5.1
+launch.clips(["gear_retract", "walkaround"], engine="CYCLES", res="1280x720", samples=48, suffix="_v6")
+launch.status()                    # tail of the newest log (renders/frames/log_*.txt)
+```
+The making-of is built from the renders without any 3D rendering (stills with a slow push-in, the
+clips, code pages, chapter cards, captions and cross-dissolves):
+```bash
+blender -b --factory-startup --python scripts/video/make_video.py -- --dry      # chapters + length
+blender -b --factory-startup --python scripts/video/make_video.py -- --stills 240,2400   # check frames
+blender -b --factory-startup --python scripts/video/make_video.py               # 1080p H.264
 ```
 
 ## Damage model in one paragraph
