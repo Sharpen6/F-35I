@@ -64,6 +64,13 @@ def main():
             continue
         bpy.ops.wm.open_mainfile(filepath=f)
         print("HIST open", os.path.basename(f), "sky fixed:", fix_sky(), flush=True)
+        if not any(o.type == 'LIGHT' for o in bpy.data.objects):
+            # the first backups predate the scene module (no sky, sun or apron): give them
+            # today's apron and light so every step of the evolution is lit the same way
+            from f35 import scene
+            root = bpy.data.collections.get("F-35I_Adir") or bpy.context.scene.collection
+            scene.build({"root": root, "objects": {}})
+            print("HIST scene added", flush=True)
         clips.setup_render(res, args.samples, 24, "CYCLES", ("4k",))
         sc = bpy.context.scene
         for ob in bpy.data.objects:
