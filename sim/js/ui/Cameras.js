@@ -45,8 +45,12 @@ export class CameraRig {
     this.camera = camera;
     this.heightAt = heightAt;
     this.mode = 'chase';
-    this.defaultFov = { cockpit: 62, chase: 55, orbit: 50, flyby: 45, tower: 40 };
+    this.defaultFov = { cockpit: 60, chase: 55, orbit: 50, flyby: 45, tower: 40 };
     this.fov = { ...this.defaultFov };
+    // cockpit: the default view looks this far below the rig's design eye line (6 deg down), so
+    // the canopy bow (9-17 deg above the eye, 0.5 m ahead) sits along the top of the picture with
+    // the clear view over the glare shield below it, as in F-35 cockpit videos
+    this.cockpitLookDown = 2.5 * DEG;
     // cockpit head
     this.head = { yaw: 0, pitch: 0, centering: false };
     this.gShift = new THREE.Vector3();
@@ -160,7 +164,7 @@ export class CameraRig {
     // eye point, base direction (the pilot's straight ahead) and head rotation
     const eye = ctx.eye || _v3.set(0, 1.08, -4.47);
     const fwd = ctx.eyeForward;
-    const basePitch = fwd ? Math.atan2(fwd.y, Math.hypot(fwd.x, fwd.z)) : -6 * DEG;
+    const basePitch = (fwd ? Math.atan2(fwd.y, Math.hypot(fwd.x, fwd.z)) : -6 * DEG) - this.cockpitLookDown;
     // head moves when looking around: lean to the side to look back, forward to look down
     const lean = _v1.set(
       -Math.sin(H.yaw) * 0.09 * Math.min(1, Math.abs(H.yaw) / (90 * DEG)),

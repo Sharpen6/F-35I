@@ -8,7 +8,9 @@
 //
 // URL parameters:
 //   stubs=1        stand-in modules from dev/stubs (flat field, box jet, simple kinematics)
-//   test=1         test hook window.__sim (scripted runs faster than real time, see tests/smoke.mjs)
+//   test=1         automation API window.__sim (js/test/TestApi.js): the render loop is paused, tests
+//                  step the simulation and draw frames on demand (tests/e2e.mjs, tests/smoke.mjs)
+//   bench=1        scripted 60 s flight with frame-rate statistics on screen (js/test/Bench.js)
 //   spawn=<name>   preselect a start point; autostart=1 starts flying at once
 //   time=<h>       time of day (local solar hours, e.g. 7, 12.5, 19)
 //   quality=low|medium|high, cam=cockpit|chase|orbit|flyby|tower, wingmen=0|1
@@ -26,6 +28,7 @@ import { EngineSound } from './audio/EngineSound.js';
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
 const TEST = params.get('test') === '1';
+const BENCH = params.get('bench') === '1';
 
 const PHYS_HZ = 120;
 const H = 1 / PHYS_HZ;
@@ -107,6 +110,8 @@ class App {
     this.drawPos = new THREE.Vector3();
     this.drawQuat = new THREE.Quaternion();
     this.testInput = null;
+    this.testPilot = null;                  // js/test/TestPilot.js, set by the test API or the bench
+    this.onFrame = null;                    // per displayed frame hook (the bench's statistics)
     this.live = !TEST;
     this.fps = 0;
     this._fpsN = 0;
@@ -155,9 +160,11 @@ class App {
     this.selectSpawn(this.settings.spawn);
     this.setQuality(this.settings.quality, true);
     this.toMenu();
-    if (TEST) { window.__sim.ready = true; }
+    if (TEST) { await this._testApi; window.__sim.ready = true; }
     requestAnimationFrame(this._frame);
-    if (params.get('autostart') === '1') this.startFlight();
+    if (BENCH) {
+      import('./test/Bench.js').then((m) => m.runBench(this)).catch((e) => console.error('bench:', e));
+    } else if (params.get('autostart') === '1') this.startFlight();
   }
 
   _createRenderer() {
@@ -170,9 +177,7 @@ class App {
       preserveDrawingBuffer: TEST,
     });
     r.outputColorSpace = THREE.SRGBColorSpace;
-    r.toneMapping = THREE.ACESFilmicToneMapping;
-    r.shadowMap.enabled = true;
-    r.shadowMap.type = THREE.PCFShadowMap;
+    // tone mapping, exposure, shadow maps, fog and scene.environment belong to the Environment
     r.setSize(window.innerWidth, window.innerHeight);
     document.getElementById('view').appendChild(r.domElement);
     r.domElement.tabIndex = 0;
@@ -190,10 +195,19 @@ class App {
   _setupSim() {
     const { FlightModel, F35I_CONFIG } = this.mods;
     const info = this.visual.info || {};
-    // gear contacts: the FDM's defaults are the modelled stance (the rig's parked tyre points)
+    // gear contacts = the modelled stance: the rig's parked tyre bottom (oleo at its static
+    // compression, round tyre) raised by the tyre's deflection under the jet's weight. That is the
+    // Blender ground line (rig groundStance, 1.45 deg nose-up), the FDM's own default contacts and
+    // the FCS's ground pitch; the names (nose / left / right) are the rig's, so state.wheels maps
+    // onto the visual's struts.
     let config = F35I_CONFIG;
     if (config && this.mods.configWithRig && Array.isArray(info.gearContacts) && info.gearContacts.every((g) => g.posParked)) {
-      config = this.mods.configWithRig(F35I_CONFIG, { gearContacts: info.gearContacts.map((g) => ({ name: g.name, pos: g.posParked, radius: g.radius })) });
+      config = this.mods.configWithRig(F35I_CONFIG, {
+        gearContacts: info.gearContacts.map((g) => {
+          const p = g.posParked;
+          return { name: g.name, pos: [p[0], p[1] + (Number.isFinite(g.tyreDeflection) ? g.tyreDeflection : 0), p[2]], radius: g.radius };
+        }),
+      });
     }
     this.fdm = new FlightModel(config, this.terrain);
     this.input = new Input(this.renderer.domElement);
@@ -438,12 +452,13 @@ class App {
     if (this._fpsT >= 0.5) { this.fps = this._fpsN / this._fpsT; this._fpsN = 0; this._fpsT = 0; }
     if (!this.live) return;                 // test mode: window.__sim drives the frames
     this.tick(dt);
+    if (this.onFrame) this.onFrame(raw);
   }
 
   /** One displayed frame: input, fixed simulation steps, then drawing. */
   tick(dt) {
     const f = this.input.update(dt);
-    this._applyTestInput(f);
+    this._applyTestInput(f, dt);
     this._handleEdges(f);
     const flying = this.state === 'flying' && !this.ui.overlay;
     if (flying) {
@@ -455,11 +470,24 @@ class App {
     this._render(dt, f, flying ? this.acc / H : 1);
   }
 
-  _applyTestInput(f) {
+  /** Test / bench inputs over the pilot's: the scripted pilot first, then window.__sim.setInput. */
+  _applyTestInput(f, dt = H) {
+    if (this.testPilot && this.state === 'flying' && !this.ui.overlay) {
+      const o = this.testPilot.update(this.fdm.state, dt);
+      const t = this.testInput || (this.testInput = {});
+      t.pitch = o.pitch; t.roll = o.roll; t.yaw = o.yaw; t.throttle = o.throttle; t.brake = o.brake;
+      t.gear = o.gearHandle; t.parkingBrake = o.parkingBrake; t.speedbrake = o.speedbrake; t.nws = o.nwsEnable;
+    }
     const t = this.testInput;
     if (!t) return;
     for (const k of ['pitch', 'roll', 'yaw', 'brake']) if (t[k] != null) f[k] = t[k];
-    if (t.throttle != null) { this.input.levers.throttle = t.throttle; f.throttle = t.throttle; }
+    const L = this.input.levers;
+    if (t.throttle != null) { L.throttle = clamp(t.throttle, 0, 1); f.throttle = L.throttle; }
+    if (t.gear != null) f.gearHandle = L.gearHandle = !!t.gear;
+    if (t.parkingBrake != null) f.parkingBrake = L.parkingBrake = !!t.parkingBrake;
+    if (t.speedbrake != null) { L.speedbrake = !!t.speedbrake; f.speedbrake = L.speedbrake ? 1 : 0; }
+    if (t.canopy != null) f.canopy = L.canopy = !!t.canopy;
+    if (t.nws != null) f.nwsEnable = L.nwsEnable = !!t.nws;
   }
 
   /** One fixed physics step (1/120 s). */
@@ -630,17 +658,28 @@ class App {
     L.anticoll = this.lights.ext;
     L.formation = this.lights.ext && night ? 0.8 : 0;
     L.landing = this.lights.landing && (st.gear || 0) > 0.9;
-    // struts: the FDM's travel from its static point, on top of the rig's parked pose
+    // struts: the FDM's strut (oleo + tyre) compresses by staticCompression under the jet's
+    // weight, the modelled oleo by the rig's staticCompression (the tyre is a rigid round mesh).
+    // Up to the static point the oleo takes its share of the FDM's travel, beyond it all of it, so
+    // the struts stand at the parked pose when the FDM sits at rest and are fully out in the air.
     const wheels = st.wheels || [];
     if (c.wheels.length !== wheels.length) c.wheels = wheels.map((w) => ({ name: w.name, compression: 0, steer: 0 }));
     for (let i = 0; i < wheels.length; i++) {
       const w = wheels[i], o = c.wheels[i];
       o.name = w.name;
-      const rigStatic = this._rigStatic[w.name] ?? 0;
-      o.compression = Number.isFinite(w.staticCompression) ? w.compression - w.staticCompression + rigStatic : w.compression;
+      o.compression = this._strutFromFdm(w);
       o.steer = w.steer;
     }
     return c;
+  }
+
+  /** Modelled oleo compression (m from fully extended) for one of the FDM's state.wheels. */
+  _strutFromFdm(w) {
+    const c = Math.max(0, w.compression || 0);
+    const rs = this._rigStatic[w.name] ?? 0;
+    const cs = w.staticCompression;
+    if (!(Number.isFinite(cs) && cs > 0)) return c;
+    return c <= cs ? c * rs / cs : rs + (c - cs);
   }
 
   _onCrash(st) {
@@ -658,76 +697,13 @@ class App {
       this.cams.orbit.pitch = 16 * DEG;
     }
   }
-
-  // ------------------------------------------------------------------------------ test hook
-  installTestHook() {
-    const app = this;
-    window.__sim = {
-      ready: false,
-      error: null,
-      get state() { return app.state; },
-      spawns: () => Object.keys(app.terrain?.spawns || {}),
-      app,
-      /** Start flying at a spawn (as the Fly button does). */
-      start(name, opts = {}) {
-        if (name) app.selectSpawn(name);
-        if (opts.time != null) app.setTimeOfDay(opts.time, true);
-        if (opts.camera) app.settings.camera = opts.camera;
-        app.startFlight();
-        return this.summary();
-      },
-      setInput(o) { app.testInput = o ? { ...(app.testInput || {}), ...o } : null; },
-      camera(mode) { app.cams.setMode(mode); app.settings.camera = mode; },
-      time(h) { app.setTimeOfDay(h, true); },
-      /**
-       * Run the simulation for `seconds` of simulated time (fast), then draw one frame
-       * (draw = false: no drawing at all, the cameras and the terrain streaming still follow).
-       */
-      advance(seconds, draw = true) {
-        const n = Math.round(seconds / H);
-        for (let i = 0; i < n; i++) {
-          const f = app.input.update(H);
-          app._applyTestInput(f);
-          app._handleEdges(f);
-          if (app.state === 'flying' && !app.ui.overlay) app._step(f);
-          // keep the cameras' smoothing and the crash logic current; draw the last frame only
-          if (i % 12 === 11 || i === n - 1) app._render(H * 12, f, 1, draw && i === n - 1);
-        }
-        if (n === 0) app._render(0, app.input.update(0), 1, draw);
-        return this.summary();
-      },
-      /**
-       * Let `ms` of wall time pass without simulating (terrain tiles stream in: the terrain is
-       * updated but not drawn, as SwiftShader needs seconds per frame), then draw one frame.
-       */
-      async settle(ms = 1500) {
-        const t0 = performance.now();
-        while (performance.now() - t0 < ms) {
-          app._render(0.016, app.input.update(0), 1, false);
-          app.env.update(app.camera, 0.04);       // exposure adaptation (the camera stands still)
-          await new Promise((r) => setTimeout(r, 40));
-        }
-        app._render(0.016, app.input.update(0), 1);
-        return this.summary();
-      },
-      render() { app._render(0.016, app.input.update(0), 1); },
-      setLive(on) { app.live = !!on; app.last = performance.now(); },
-      summary() {
-        const s = app.fdm?.state;
-        if (!s) return { state: app.state };
-        return {
-          state: app.state, camera: app.cams.mode, ias_kt: +(s.ias / KT).toFixed(1), alt_m: +s.altitude.toFixed(1),
-          agl_m: +(s.agl || 0).toFixed(1), onGround: !!s.onGround, gear: +(s.gear ?? 0).toFixed(3),
-          throttle: +app.input.levers.throttle.toFixed(3), pitch_deg: +((s.pitch || 0) / DEG).toFixed(1),
-          heading_deg: +((s.heading || 0) / DEG).toFixed(1), crashed: !!s.crashed, crashReason: s.crashReason || '',
-          rpm: s.engine ? +(+s.engine.rpm || 0).toFixed(1) : null, ab: s.engine ? +(+s.engine.ab || 0).toFixed(2) : null,
-          wingmen: app.wingmen ? app.wingmen.count : 0, fps: +app.fps.toFixed(1),
-        };
-      },
-    };
-  }
 }
 
 const app = new App();
-if (TEST) app.installTestHook();
+if (TEST) {
+  window.__sim = { ready: false, error: null };
+  app._testApi = import('./test/TestApi.js')
+    .then((m) => m.installTestApi(app, { H, KT, DEG }))
+    .catch((e) => { window.__sim.error = `test API: ${e.message}`; });
+}
 app.init();
