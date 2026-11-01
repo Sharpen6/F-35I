@@ -246,7 +246,7 @@ class App {
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
     // terrain quality tiers (ground detail, terrain shadow map size): Terrain.js TERRAIN_QUALITY
-    this.addModule(this.terrain.module);
+    if (this.terrain.module) this.addModule(this.terrain.module);
   }
 
   /**
