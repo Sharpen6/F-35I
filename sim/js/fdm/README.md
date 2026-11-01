@@ -17,7 +17,7 @@ visual.setControls(fdm.state.controls);
 ```
 
 Tests: run `node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs` from the repo root. The
-`--only takeoff,landing` option runs a subset. The suite has 104 checks and takes a few seconds. Each check
+`--only takeoff,landing` option runs a subset. The suite has 106 checks and takes a few seconds. Each check
 prints its value, its band and the reason for the band. The exit code is 1 if any check fails.
 
 | file | contents |
@@ -291,10 +291,14 @@ and yaw are inverted together as a 2×2 system.
 * **After lift-off.** The attitude mode is kept while the stick stays aft. It hands over to the air
   laws when the stick is released, after 10 s, when the gear moves up, or above 230 KCAS. Lift-off
   comes at about 160 KIAS.
-* **Stick ratchet.** A pull still held at the hand-over means "keep this attitude", not "pull to the
-  AoA limit" (which is what the same stick asks of the C\* law): the air law only sees the stick
-  beyond what was held, and the reference follows the stick down as it is released. Holding full
-  aft stick through gear up used to zoom the jet to 60-90° pitch; now it keeps the climb path.
+* **Stick ratchet.** A pull still held at the hand-over set an attitude; the same stick asks the C\*
+  law for g (full aft: the AoA limit). The air law only sees the stick beyond what was held, the
+  reference follows the stick down as it is released and fades out over `ratchetTau` (3 s), so the
+  held pull comes in smoothly. Full aft stick held through gear up used to jolt the jet to 23°/s of
+  pitch rate within a second (a pull let go a second later still threw the nose to 29°); now the
+  pitch rate builds to 6.6°/s over 1.5 s, and a pull let go a second after gear up adds about 2°.
+  Held on, a pull is a pull, as in the air. (Ratcheted for good, the held stick was ignored: the
+  jet flew its lift-off path and the nose sank while the pilot held it back.)
 * **Ground roll and yaw.** Roll is half authority, direct; the pedals drive the rudders and the nose
   wheel.
 
@@ -426,7 +430,7 @@ All the DESIGN.md fields are present.
 | takeoff MIL (pull at 150 KIAS) | lift-off 162 KIAS after a 589 m roll, rotates to 12.1° | 150-165 KIAS; energy estimate ~600 m with T/W 0.69 and spool-up from idle |
 | takeoff max A/B (pull at 140 KIAS) | lift-off 161 KIAS after a 357 m roll, 12.1° | T/W 1.06, ~380 m |
 | takeoff MIL, half aft stick | lift-off 162 KIAS, 10.3° (before: 265 KIAS) | a partial pull rotates too |
-| full aft stick held through gear up (+2 s), 15 s | max pitch 12.1°, max AoA 11.2° (before: 72° / 25°) | no zoom at the hand-over to C\* |
+| full aft stick through gear up (+2 s) | pitch rate ≤ 6.6°/s in the 1.5 s after the hand-over (before: 23°/s); let go 1 s after gear up: max pitch 13.8°, AoA 11.2° (before: 29° / 21.5°); 0.35 aft held on: +20.6° of pitch in 6 s | a smooth hand-over to C\*, which then answers the stick |
 | max A/B with the parking brake left on | 565 m roll (1.58 × 357 m); warning on the ground only (before: 0.98 ×, warning in the air) | the brake drags once the wheels slide |
 | full stick at 25° AoA, ~111 KIAS | 90° of bank in 3.05 s, peak 37°/s, β ≤ 6.2° (before: 3.38 s, 33°/s) | coordinated within the rudder authority |
 | hands-off final, 140 KCAS / 13° AoA, gear down, 45 % fuel | path within 0.02° of -3° for 10 s (before: 0.23°); +1.9 kt in 20 s | no 1 g bias in the hold |
@@ -456,7 +460,7 @@ All the DESIGN.md fields are present.
 | top speed, acceleration | `engine.milThrust`/`maxThrust`, `milLapse`/`abLapse`/`abMach`, `engine.inlet.loss` (Mach 1.6 cap), `aero.CD0` |
 | turn performance, energy bleed | `aero.K`, `kHighCL` |
 | takeoff and landing speeds | `aero.CL` (table), `aero.flaps.dCL`, `schedules.flapsFullCas`/`flapsUpCas` |
-| rotation | `fcs.takeoffPitch` (12°), `rotateStick` (0.6: raw stick for the full attitude), `rotationRate` (8°/s), `kTheta`, `kiGround`; `aero.Cm_de` (authority); `mass.cg` (nose-wheel share) |
+| rotation | `fcs.takeoffPitch` (12°), `rotateStick` (0.6: raw stick for the full attitude), `rotationRate` (8°/s), `kTheta`, `kiGround`; `aero.Cm_de` (authority); `mass.cg` (nose-wheel share); `takeoffModeTime`/`takeoffModeMaxCas`, `ratchetTau` (the hand-over to C\*) |
 | stick feel | `fcs.cstarUp`/`cstarDown` (g per stick), `cstarUpPA`/`cstarDownPA` (gear down), `stickShapePitch`/`stickShapeRoll` (centre softness), `rollRateMax`, `tauP`/`tauQ`/`tauR`, `pitchJerkShare` (crisp vs damped at low speed) |
 | limits | `fcs.nMax`/`nMin`, `alphaMax`/`alphaMaxHigh`/`alphaMin`, `pitchRateMax`; `limits.overstressG` (crash) |
 | hands-off holds | `fcs.kGamma`/`kiGamma`, `bankCompKnee`/`bankCompLead`/`bankCompRate`, `kPhi`, `bankSnap` |

@@ -166,6 +166,7 @@ function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAft
   const z0 = st.position.z;
   const inp = { ...base(), throttle, parkingBrake: parking };
   let t = 0, rot = false, lo = null, maxPitch = 0, maxAlpha = 0, warnGround = false, warnAir = false;
+  let hand = null, qHand = 0, pitchHand = null;   // the take-off -> air law hand-over; max |q| (deg/s) in the 1.5 s after
   while (t < 90 && !st.crashed) {
     if (st.ias_kt >= vr) rot = true;
     inp.pitch = rot && (!lo || t - lo.t < hold) ? stick : 0;
@@ -176,13 +177,15 @@ function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAft
     const w = st.warnings.includes('PARKING BRAKE');
     if (st.onGround) warnGround ||= w; else warnAir ||= w;
     if (rot && !lo && !st.onGround) lo = { t, ias: st.ias_kt, dist: z0 - st.position.z };
+    if (lo && hand === null && st.fcsMode === 'air') { hand = t; pitchHand = st.pitch * R2D; }
+    if (hand !== null && t - hand <= 1.5) qHand = Math.max(qHand, Math.abs(st.q) * R2D);
     if (lo) {
       maxPitch = Math.max(maxPitch, st.pitch * R2D);
       maxAlpha = Math.max(maxAlpha, st.alpha * R2D);
       if (t - lo.t > hold) break;
     }
   }
-  return { st, lo, maxPitch, maxAlpha, warnGround, warnAir };
+  return { st, lo, maxPitch, maxAlpha, warnGround, warnAir, qHand, pitchHand };
 }
 
 tests.handling = () => {
@@ -194,12 +197,21 @@ tests.handling = () => {
     check('lift-off with half aft stick', r.lo ? r.lo.ias : 999, 148, 172, 'KIAS', 'a partial pull still rotates to ~10 deg (it used to fly off at ~260 kt)');
   }
   {
-    // full aft stick held through gear up (+2 s) and for 15 s: the take-off -> C* hand-over is
-    // ratcheted, the jet keeps its climb path instead of pulling to the AoA limit
+    // full aft stick held through gear up (+2 s): the take-off -> C* hand-over is ratcheted and the
+    // held pull comes in over fcs.ratchetTau.  It used to jolt: 23 deg/s of pitch rate within a
+    // second, and a pull let go a second after gear up still threw the nose up to 29 deg.
     const r = takeoffRun({ stick: 1, hold: 15, gearUpAfter: 2 });
-    info(`full aft stick held 15 s, gear up at +2 s: max pitch ${r.maxPitch.toFixed(1)} deg, max AoA ${r.maxAlpha.toFixed(1)} deg, climbing ${r.st.vs.toFixed(1)} m/s`);
-    check('max pitch, stick held through gear up', r.maxPitch, 8, 20, 'deg', 'no zoom: it used to reach 60-90 deg');
-    check('max AoA, stick held through gear up', r.maxAlpha, 5, 15, 'deg', 'the climb path is held, far from the 25 deg limit');
+    const q = takeoffRun({ stick: 1, hold: 3, gearUpAfter: 2 });
+    info(`full aft stick through gear up at +2 s: pitch rate up to ${r.qHand.toFixed(1)} deg/s in the 1.5 s after the hand-over`
+      + ` (held on for 15 s it pulls on, as the C* law does: ${r.maxPitch.toFixed(0)} deg); let go 1 s after gear up: max pitch ${q.maxPitch.toFixed(1)} deg, AoA ${q.maxAlpha.toFixed(1)} deg`);
+    check('pitch rate after the hand-over, stick held through gear up', r.qHand, 0, 8, 'deg/s', 'the held pull comes in smoothly (it was 23 deg/s at once)');
+    check('max pitch, stick let go 1 s after gear up', q.maxPitch, 8, 18, 'deg', 'no jolt at the hand-over (it reached 29 deg)');
+    check('max AoA, stick let go 1 s after gear up', q.maxAlpha, 5, 15, 'deg', 'far from the 25 deg limit');
+    // a part pull held on after gear up is a pull: the nose comes up (with the pull ratcheted for good
+    // the jet flew its lift-off path and the nose sank while the stick was held back)
+    const p = takeoffRun({ stick: 0.35, hold: 8, gearUpAfter: 2 });
+    info(`0.35 aft stick held 8 s, gear up at +2 s: pitch ${p.pitchHand.toFixed(1)} deg at the hand-over, ${p.st.pitch * R2D > 0 ? (p.st.pitch * R2D).toFixed(1) : '-'} deg at the end`);
+    check('pitch change after the hand-over, part pull held on', p.st.pitch * R2D - p.pitchHand, 2, 40, 'deg', 'the C* law answers a held pull, smoothly');
   }
   {
     // parking brake left on with full afterburner: it brakes once the wheels slide; the warning only

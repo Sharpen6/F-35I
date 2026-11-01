@@ -209,6 +209,12 @@ export const F35I_CONFIG = {
     groundLawSpeed: [15, 35],                      // m/s: direct stick-to-stabilator below, attitude law above
     groundRollGain: 0.5,
     takeoffModeTime: 10, takeoffModeMaxCas: 230 * 0.514444,
+    // s: a pull still held when the take-off law hands over to C* comes in over this time constant
+    // (fcs.js).  Taken away for good, a held pull flew the path the jet had just after lift-off and
+    // the nose sank while the pilot held it back (a scripted climb needed 150 s instead of 85); all
+    // at once it was the old jolt (23 deg/s of pitch rate within a second).  3 s: under 7 deg/s in
+    // the first 1.5 s, and a pull let go a second after the hand-over adds about 2 deg of pitch.
+    ratchetTau: 3,
     // The nozzle's lower lip clears the runway up to ~15 deg on statically compressed mains (16 deg
     // with the struts extended, ~13.5 deg with them 0.2 m further in): 14 deg leaves the on-speed
     // 13 deg AoA approach a flare.

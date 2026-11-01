@@ -20,8 +20,9 @@
 //               also steer the nose wheel (gear.js).
 // Takeoff:      after lift-off the attitude mode is kept while the stick stays pulled, then the air
 //               laws take over.  The stick still held at that moment is "ratcheted": the C* law
-//               only sees stick beyond what was held (and the reference follows the stick down as it
-//               is released), so the jet keeps its climb path instead of pulling to the AoA limit.
+//               only sees stick beyond what was held, the reference follows the stick down as it is
+//               released and fades out over ratchetTau (3 s), so a held pull comes in smoothly
+//               instead of pulling the jet toward the AoA limit at once.
 
 import { clamp, wrapPi, smoothstep, D2R } from './tables.js';
 import { G0 } from './atmosphere.js';
@@ -88,11 +89,15 @@ export class FlightControlSystem {
       this.bankHold = false;
       this.spRef = 0;
     } else if (prevMode !== 'air') {
-      // Ground / take-off attitude law -> C*: a pull still held means "keep this attitude", not
-      // "pull to the AoA limit" (which is what the same stick asks of the C* law).  Ratchet it.
+      // Ground / take-off attitude law -> C*: a pull still held meant "this attitude"; the same
+      // stick asks the C* law for g (full aft: the AoA limit).  Ratchet it, and let the pull come in
+      // over ratchetTau: a pull let go soon after changes little, a pull held on pitches the nose
+      // up gradually (held for good, the jet flew the path it had just after lift-off and the nose
+      // sank while the stick was held back).
       this.spRef = Math.max(0, sp);
     }
-    // pitch stick seen by the air law: beyond the ratchet; the ratchet follows the stick down
+    // pitch stick seen by the air law: beyond the ratchet; the ratchet fades and follows the stick down
+    if (this.spRef > 0 && c.ratchetTau > 0) this.spRef *= Math.exp(-h / c.ratchetTau);
     this.spRef = Math.min(this.spRef, Math.max(0, sp));
     const spA = sp - this.spRef;
 

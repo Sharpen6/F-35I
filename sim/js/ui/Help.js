@@ -69,7 +69,7 @@ export const CONTROLS = [
   {
     title: 'Flying the F-35I',
     rows: [
-      ['take-off', 'MIL or afterburner, release the parking brake (Shift+B); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (G) once climbing'],
+      ['take-off', 'MIL or afterburner, release the parking brake (Shift+B); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (G) once climbing, then centre the stick: the jet holds the climb (a pull held on keeps the nose coming up)'],
       ['fly-by-wire', 'the stick commands g (pitch rate when slow) and roll rate; let go and the jet holds its flight path and bank; the FCS limits AoA to 25 deg and g to +9 / -3'],
       ['landing', 'gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (T) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft); idle and brakes (B) after touchdown'],
       ['helmet display', 'speed (KIAS) left, altitude (ft) right with radar altitude below 5,000 ft, magnetic heading on top; the circle with wings is where the jet is going, the W is where the nose points; dive rungs are dashed with minus numbers'],

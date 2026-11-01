@@ -139,7 +139,7 @@ looks around. Bindings are kept per controller in the browser's local storage.
 
 | | |
 | --- | --- |
-| take-off | MIL or afterburner, release the parking brake (`Shift`+`B`); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (`G`) once climbing |
+| take-off | MIL or afterburner, release the parking brake (`Shift`+`B`); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (`G`) once climbing, then centre the stick: the jet holds the climb (a pull held on keeps the nose coming up) |
 | fly-by-wire | the stick commands g (pitch rate when slow) and roll rate; let go and the jet holds its flight path and bank; the FCS limits AoA to 25 deg and g to +9 / -3 |
 | landing | gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (`T`) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft); idle and brakes (`B`) after touchdown |
 | crash | the cause is shown (hard landing, gear up, water, terrain, over-g ...); `R` starts again. A firm touchdown without a flare shows HARD LANDING; above about 15 ft/s (4.6 m/s) the gear collapses |
