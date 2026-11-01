@@ -311,18 +311,22 @@ def build(ctx):
         # so text reads correctly from both sides
         u = -fwd if side > 0 else fwd          # text reads left-to-right from outside
         u_bird = fwd                            # emblems face the nose on both sides
+        # disc ~0.44 m on the IAF jets (c34, c20, ref_05, c51, ref_03), its centre ~0.32 m under the chine
         out.append(decal(f"Roundel_Fus_{tag}", coll, fus, P(2.80, side * 1.2, 0.02), u, (0, 0, 1), ray,
-                         0.56, 0.56, roundel))
+                         0.46, 0.46, roundel))
         out.append(decal(f"Serial_{tag}", coll, fus, P(2.10, side * 1.2, 0.38), u, (0, 0.10, 1), ray,
                          0.62, 0.232, serial))
         # stencils (photos: F-35A c34 for the left side, Adir 926 at Red Flag for the right side)
+        # left: the arrow points at the rescue door's upper-aft corner; right: the box over s ~3.5
         if side > 0:
-            out.append(decal_on("Rescue_L", coll, fus, 3.85, side, 0.34, 0.66, 0.3025, rescue[side], nu=24, nv=14))
+            out.append(decal_on("Rescue_L", coll, fus, 3.97, side, 0.34, 0.66, 0.3025, rescue[side], nu=24, nv=14))
         else:
-            out.append(decal_on("Rescue_R", coll, fus, 3.92, side, 0.20, 0.60, 0.2625, rescue[side], nu=24,
+            out.append(decal_on("Rescue_R", coll, fus, 3.48, side, 0.20, 0.60, 0.2625, rescue[side], nu=24,
                                 nv=14))
-        out.append(decal_on(f"EjectWarn_{tag}", coll, fus, 4.20, side, 0.68, 0.26, 0.2925, seat))
-        out.append(decal_on(f"EjectWarn_Intake_{tag}", coll, fus, 4.95, side, -0.42, 0.30, 0.3375, intake))
+        out.append(decal_on(f"EjectWarn_{tag}", coll, fus, 3.82, side, 0.68, 0.26, 0.2925, seat))
+        # JET INTAKE: on the forebody / bump side ahead of the inlet lip, aft of the door (not on the cowl)
+        out.append(decal_on(f"EjectWarn_Intake_{tag}", coll, fus, 4.10 if side > 0 else 4.00, side,
+                            -0.20 if side > 0 else -0.15, 0.30, 0.3375, intake))
         band = obj.get("Canopy_Frame") or bpy.data.objects.get("Canopy_Frame")
         if band is not None:                          # on the frame band (photo c34): opens with the canopy
             from .canopy import sill_z, glass_edge_z

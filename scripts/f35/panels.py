@@ -514,9 +514,12 @@ def layout(pt):
     pt.patch("side", trap, G, 0.55)
     pt.line("side", trap, closed=True)
     pt.line("side", [(1.50, -0.43), (2.46, -0.43)], rivets=(0.018, 0.034))
-    pt.line("side", [(2.56, 0.10), (3.30, 0.13), (3.40, -0.02), (3.32, -0.28), (2.62, -0.30),
-                     (2.54, -0.10)], closed=True, tape=True)
-    pt.line("side", [(2.5, -0.38), (3.7, -0.38), (3.85, -0.48)])
+    # left side only: the rescue / ladder door, two stacked hexagons (the upper one 5 cm further
+    # aft), its top ~0.08 m under the chine (c34, c20, ref_05, ref_07); the right side has none
+    pt.line("side", hexa(3.20, 3.80, -0.05, 0.30, 0.06), mirror=False, closed=True, side=1)
+    pt.line("side", hexa(3.15, 3.75, -0.40, -0.05, 0.06), mirror=False, closed=True, side=1)
+    pt.line("side", [(2.5, -0.38), (3.10, -0.38)], mirror=False, side=1)
+    pt.line("side", [(2.5, -0.38), (3.7, -0.38), (3.85, -0.48)], mirror=False, side=-1)
     # the canopy frame band reads a shade lighter than the fuselage side in the photos (c34, c51,
     # c09): a light coating over the band and the rear frame, in side view between the sill and
     # the glass edge, back to the frame's aft edge
@@ -536,7 +539,7 @@ def layout(pt):
     pt.line("side", [(4.52, 0.30), (4.74, -0.05), (4.92, -0.42)], tape=True)
 
     # ---- mid fuselage sides below the wing root (photo c51) -------------
-    pt.line("side", hexa(5.62, 6.45, -0.38, -0.12, 0.08), closed=True, tape=True)
+    pt.line("side", hexa(5.72, 6.55, -0.28, 0.05, 0.08), closed=True, tape=True)     # c51, c20
     pt.line("side", hexa(6.50, 8.55, -0.42, -0.06, 0.14), closed=True)
     pt.line("side", hexa(6.95, 8.65, -0.64, -0.48, 0.07), closed=True)
     pt.line("side", [(4.95, -0.05), (5.50, -0.05)])
