@@ -57,14 +57,17 @@ self.onmessage = async (ev) => {
   }
   if (m.type !== 'cells') return;
   try {
+    const t0 = performance.now();
     const t = await getTile(m.ix, m.iz);
+    const t1 = performance.now();
     const cells = [], transfer = [];
     for (const [cx, cz] of m.cells) {
       const r = generateCell(t, cx, cz, { shrubs: m.shrubs !== false });
       cells.push({ cx, cz, count: r.count, pos: r.pos, data: r.data });
       transfer.push(r.pos.buffer, r.data.buffer);
     }
-    self.postMessage({ type: 'cells', ix: m.ix, iz: m.iz, cells }, transfer);
+    // waitMs: the tile's loading + analysis this request waited for; cellMs: the placement itself
+    self.postMessage({ type: 'cells', ix: m.ix, iz: m.iz, cells, waitMs: t1 - t0, cellMs: performance.now() - t1 }, transfer);
   } catch (e) {
     self.postMessage({ type: 'error', ix: m.ix, iz: m.iz, cells: m.cells, message: String(e && e.message || e) });
   }

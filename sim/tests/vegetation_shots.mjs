@@ -93,11 +93,16 @@ async function startServer() {
 async function main() {
   mkdirSync(OUT, { recursive: true });
   const server = await startServer();
-  const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+  const extra = process.env.VEG_CHROME_ARGS ? process.env.VEG_CHROME_ARGS.split(' ') : [];
   const problems = [];
   const results = [];
-  try {
-    const page = await browser.newPage({ viewport: { width: W, height: H } });
+  let browser = null, page = null;
+  // a fresh browser and page with the app loaded (again after a crash: the renderer is the first
+  // process the kernel kills when the machine runs out of memory)
+  async function open() {
+    if (browser) await browser.close().catch(() => {});
+    browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', ...extra] });
+    page = await browser.newPage({ viewport: { width: W, height: H } });
     page.on('console', (m) => {
       if (m.type() === 'error') problems.push(`console: ${m.text()}`);
       else if (/vegetation|scatter/i.test(m.text())) log('page:', m.text());
@@ -112,37 +117,63 @@ async function main() {
     await page.waitForFunction(() => window.__sim && (window.__sim.ready || window.__sim.error), null, { timeout: 300000 });
     const err = await page.evaluate(() => window.__sim.error);
     if (err) throw new Error(`app did not load: ${err}`);
+  }
+
+  async function shoot(name, sc) {
+    const t1 = Date.now();
+    await page.evaluate(([name, sc]) => {
+      const sim = window.__sim, app = sim.app;
+      let sp = sc.spawn;
+      if (typeof sp === 'object') {
+        const g = app.terrain.heightAt(sp.x, sp.z);
+        app.terrain.spawns[`veg_${name}`] = {
+          label: `vegetation scene ${name}`, x: sp.x, y: g + sp.agl, z: sp.z, heading_deg: sp.heading,
+          on_ground: false, speed_ms: sp.speed, gear: 0, ground_y: g,
+        };
+        sp = `veg_${name}`;
+      }
+      const opts = { camera: sc.camera };
+      if (sc.time != null) opts.time = sc.time;
+      sim.start(sp, opts);
+      return sim.step(Math.round((sc.fly || 0) * 120));
+    }, [name, sc]);
+    let st = await page.evaluate((ms) => window.__sim.settle(ms), SETTLE);
+    // the trees stream in the background: wait until the module has nothing left to do (90 s at most)
+    for (let i = 0; i < 90; i++) {
+      const idle = await page.evaluate(() => {
+        const m = (window.__sim.app.modules || []).find((x) => x && x.isScatter);
+        return !m || m.idle();
+      });
+      if (idle) break;
+      st = await page.evaluate(() => window.__sim.settle(1000));
+    }
+    const info = await page.evaluate(() => window.__sim.renderInfo());
+    const timing = await page.evaluate(() => window.__sim.timing());
+    const mod = await page.evaluate(() => {
+      const m = (window.__sim.app.modules || []).find((x) => x && x.isScatter);
+      return m ? m.statsJSON() : null;
+    });
+    const file = join(OUT, `${TAG}${name}.png`);
+    await page.screenshot({ path: file });
+    results.push({ name, scene: sc, summary: st, renderInfo: info, lastRenderMs: timing.lastRenderMs, vegetation: mod });
+    log(`${name}: ${info.calls} calls, ${(info.triangles / 1e6).toFixed(2)} M tris, ${timing.lastRenderMs} ms, agl ${st.agl_m} m, ${((Date.now() - t1) / 1000).toFixed(0)} s${mod ? `, veg ${JSON.stringify(mod)}` : ''}`);
+  }
+
+  try {
+    await open();
     for (const [name, sc] of Object.entries(SCENES)) {
       if (ONLY && !ONLY.includes(name)) continue;
-      const t1 = Date.now();
-      const s = await page.evaluate(([name, sc]) => {
-        const sim = window.__sim, app = sim.app;
-        let sp = sc.spawn;
-        if (typeof sp === 'object') {
-          const g = app.terrain.heightAt(sp.x, sp.z);
-          app.terrain.spawns[`veg_${name}`] = {
-            label: `vegetation scene ${name}`, x: sp.x, y: g + sp.agl, z: sp.z, heading_deg: sp.heading,
-            on_ground: false, speed_ms: sp.speed, gear: 0, ground_y: g,
-          };
-          sp = `veg_${name}`;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await shoot(name, sc);
+          break;
+        } catch (e) {
+          if (attempt >= 2 || !/crash|closed/i.test(String(e.message))) throw e;
+          log(`${name}: ${String(e.message).split('\n')[0]}; again with a new browser`);
+          problems.push(`${name}: renderer crashed (attempt ${attempt + 1})`);
+          await open();
         }
-        const opts = { camera: sc.camera };
-        if (sc.time != null) opts.time = sc.time;
-        sim.start(sp, opts);
-        return sim.step(Math.round((sc.fly || 0) * 120));
-      }, [name, sc]);
-      const st = await page.evaluate((ms) => window.__sim.settle(ms), SETTLE);
-      const info = await page.evaluate(() => window.__sim.renderInfo());
-      const timing = await page.evaluate(() => window.__sim.timing());
-      const mod = await page.evaluate(() => {
-        const m = (window.__sim.app.modules || []).find((x) => x && x.isScatter);
-        return m ? m.statsJSON() : null;
-      });
-      const file = join(OUT, `${TAG}${name}.png`);
-      await page.screenshot({ path: file });
-      results.push({ name, scene: sc, summary: st, renderInfo: info, lastRenderMs: timing.lastRenderMs, vegetation: mod });
-      log(`${name}: ${info.calls} calls, ${(info.triangles / 1e6).toFixed(2)} M tris, ${timing.lastRenderMs} ms, agl ${st.agl_m} m, ${((Date.now() - t1) / 1000).toFixed(0)} s${mod ? `, veg ${JSON.stringify(mod)}` : ''}`);
-      void s;
+      }
     }
     const mem = await page.evaluate(() => window.__sim.gpuMemory());
     const timing = await page.evaluate(() => window.__sim.timing());
@@ -150,7 +181,7 @@ async function main() {
     writeFileSync(join(OUT, `${TAG}stats.json`), JSON.stringify({ when: new Date().toISOString(), quality: QUALITY, params: PARAMS, size: [W, H], results, gpuMemory: mem, timing, problems }, null, 1));
     if (problems.length) log('PROBLEMS:', problems.slice(0, 8).join(' | '));
   } finally {
-    await browser.close();
+    if (browser) await browser.close().catch(() => {});
     server.kill();
   }
 }

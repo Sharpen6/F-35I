@@ -23,8 +23,8 @@
 
 import * as THREE from 'three';
 import { SPECIES, SPECIES_COUNT } from './vegetation/species.js';
-import { buildAllTrees, VARIANTS } from './vegetation/meshes.js';
-import { bakeImpostors } from './vegetation/impostors.js';
+import { buildTree, VARIANTS } from './vegetation/meshes.js';
+import { ImpostorBaker, bakeImpostors } from './vegetation/impostors.js';
 import { MESH_VERT, MESH_FRAG, IMPOSTOR_VERT, IMPOSTOR_FRAG, DECAL_VERT, DECAL_FRAG } from './vegetation/shaders.js';
 import { CELL_M, CELLS, TILES, CORE_HALF, REC_U8 } from './vegetation/placement.js';
 
@@ -42,6 +42,7 @@ export const VEG_QUALITY = {
 const MAX_INFLIGHT = 2;
 const CELLS_PER_REQUEST = 48;
 const UPLOAD_BUDGET = 200000;     // instances per frame (a new start point fills up in a few frames)
+const INIT_BUDGET_MS = 6;         // start-up work per frame while flying (behind the menu: 40)
 const RELEASE_MARGIN = 500;       // m beyond the wanted radius before a cell is dropped
 const WORLD_CELLS = TILES * CELLS;
 
@@ -84,20 +85,27 @@ export class Scatter {
     this._nearDirty = true;
     this._meshScale = 1;
     this._frame = 0;
-    this.stats = { cells: 0, cellsPending: 0, instances: 0, capacity: 0, highWater: 0, near: 0, nearTris: 0, bakeMs: 0, atlasMB: 0, workerMs: 0 };
+    this.stats = { cells: 0, cellsPending: 0, instances: 0, capacity: 0, highWater: 0, near: 0, nearTris: 0, bakeMs: 0, atlasMB: 0, workerMs: 0, tileMs: 0, replies: 0, initMs: 0, startMs: 0 };
     this.tuning = { tintGain: 0.72, wind: 1, brightness: 1, shadowStrength: 0.75 };
   }
 
   // ------------------------------------------------------------------------------ module API
   setQuality(name) {
     const q = VEG_QUALITY[name] ? name : 'high';
-    const prev = this.Q;
     this.qualityName = q;
     this.Q = VEG_QUALITY[q];
-    if (!this.ready) return;
-    if (prev.capacity !== this.Q.capacity) this._buildImpostorBuffer();
-    if (prev.atlas !== this.Q.atlas) this._bake();
-    if (prev.density !== this.Q.density || prev.shrubs !== this.Q.shrubs || prev.capacity !== this.Q.capacity) this._reuploadAll();
+    this._lastWant.set(1e9, 0, 1e9);
+    if (this.ready) this._applyQuality();      // otherwise at the end of the start-up
+  }
+
+  /** Rebuilds what the quality changes: buffers, near meshes, atlas, the uploaded instances. */
+  _applyQuality() {
+    const B = this._built || {}, Q = this.Q;
+    if (B.meshCap !== Q.meshCap) this._buildNearMeshes();
+    if (B.capacity !== Q.capacity) this._buildImpostorBuffer();
+    if (B.atlas !== Q.atlas) this._bake();
+    if (B.density !== Q.density || B.shrubs !== Q.shrubs || B.capacity !== Q.capacity) this._reuploadAll();
+    this._built = { ...Q };
     this._lastWant.set(1e9, 0, 1e9);
     this._nearDirty = true;
   }
@@ -111,6 +119,7 @@ export class Scatter {
 
   reset() {
     // a new start point: forget the queue (the wanted set is rebuilt from the new position)
+    for (const c of this._queue) c.inQueue = false;
     this._queue.length = 0;
     this._lastWant.set(1e9, 0, 1e9);
     this._nearDirty = true;
@@ -118,18 +127,12 @@ export class Scatter {
 
   update(f) {
     if (!this.enabled || this.failed) { this.group.visible = false; return; }
-    if (!this.ready) {
-      if (!f.draw) return;      // the bake needs the GPU: wait for a drawn frame
-      try { this._init(); } catch (e) {
-        console.error('vegetation: initialisation failed', e);
-        this.failed = true;
-        return;
-      }
-    }
+    if (!this._worker) this._startWorker();
     this._frame++;
     const cam = f.camera.getWorldPosition(this._camPos);
     if (cam.distanceToSquared(this._lastWant) > 60 * 60 || this._frame % 30 === 0) this._updateWanted(cam);
     this._pump();
+    if (!this.ready && !this._initStep()) return;     // the start-up, a few ms per frame
     this._uploadSome(cam);
     if (cam.distanceToSquared(this._lastNear) > 15 * 15 || this._nearDirty) this._rebuildNear(cam);
     this._updateUniforms(cam);
@@ -153,14 +156,68 @@ export class Scatter {
     return {
       enabled: this.enabled, ready: this.ready, quality: this.qualityName, cells: s.cells, pending: s.cellsPending,
       instances: s.instances, highWater: s.highWater, capacity: s.capacity, near: s.near,
-      nearTris: s.nearTris, bakeMs: Math.round(s.bakeMs), atlasMB: +s.atlasMB.toFixed(1),
+      nearTris: s.nearTris, bakeMs: Math.round(s.bakeMs), atlasMB: +s.atlasMB.toFixed(1), initMs: Math.round(s.initMs), startMs: Math.round(s.startMs),
+      workerMs: Math.round(s.workerMs), tileMs: Math.round(s.tileMs), replies: s.replies, inflight: this._inflight, queued: this._queue.length,
+      idle: this.idle(),
     };
   }
 
+  /** Nothing left to do for the current position (tests wait for it before a screenshot). */
+  idle() {
+    return !this.enabled || this.failed || (this.ready && !this._queue.length && !this._inflight && !this._uploads.length && !this._nearDirty);
+  }
+
   // ------------------------------------------------------------------------------ set-up
-  _init() {
+  /** Runs the start-up for INIT_BUDGET_MS; true once it is done. */
+  _initStep() {
     const t0 = performance.now();
-    this._trees = buildAllTrees(1);
+    const budget = this.app && this.app.state === 'flying' ? INIT_BUDGET_MS : 40;
+    try {
+      if (!this._initIter) this._initIter = this._initSteps();
+      while (!this.ready && performance.now() - t0 < budget) {
+        if (this._initIter.next().done) break;
+      }
+    } catch (e) {
+      console.error('vegetation: initialisation failed', e);
+      this.failed = true;
+      this.group.visible = false;
+      return false;
+    }
+    this.stats.initMs += performance.now() - t0;
+    return this.ready;
+  }
+
+  /**
+   * The start-up in small steps (a generator, resumed every frame): the tree meshes one by one,
+   * materials and buffers, the programs (compiled in parallel where the browser can), the
+   * impostor atlas one model at a time, its mips a few layers at a time.
+   */
+  *_initSteps() {
+    const t0 = performance.now();
+    this._trees = [];
+    for (let sp = 0; sp < SPECIES_COUNT; sp++) {
+      for (let v = 0; v < VARIANTS; v++) { this._trees.push(buildTree(sp, v, 1)); yield; }
+    }
+    this._makeUniforms();
+    this._makeMaterials(this._uniforms);
+    this._buildImpostorBuffer();
+    this._buildNearMeshes();
+    yield;
+    const baker = new ImpostorBaker(this.renderer, this._trees, this._bakeOptions());
+    let compiled = false;
+    this._compile(baker).then(() => { compiled = true; }, (e) => { console.warn('vegetation: compile', e); compiled = true; });
+    while (!compiled) yield;
+    while (baker.renderModel()) yield;
+    while (!baker.finishSome(6)) yield;
+    this._setAtlas(baker.result(), baker.ms);
+    this._built = { ...this.Q };
+    this.ready = true;
+    this._applyQuality();       // in case the quality changed meanwhile
+    this.stats.startMs = performance.now() - t0;
+    console.info(`vegetation: ready after ${this.stats.startMs.toFixed(0)} ms (${this.stats.initMs.toFixed(0)} ms of work, impostor bake ${this.stats.bakeMs.toFixed(0)} ms, atlas ${this.stats.atlasMB.toFixed(1)} MB)`);
+  }
+
+  _makeUniforms() {
     const U = this._uniforms = {
       uSpA: { value: SPECIES.map((s) => new THREE.Vector4(s.tint, s.translucency, s.sway, s.far)) },
       uSpB: { value: SPECIES.map((s) => new THREE.Vector4(s.fluff, s.specular, s.shadow, 0)) },
@@ -173,28 +230,30 @@ export class Scatter {
       uHCore: { value: this.terrain.textures.hCore },
       uShadow: { value: new THREE.Vector4(this.Q.shadow, this.tuning.shadowStrength, 0.3, 1) },
     };
-    this._bake();
-    this._makeMaterials(U);
-    this._buildImpostorBuffer();
-    this._buildNearMeshes();
-    this._startWorker();
-    this._precompile();
-    this.ready = true;
-    console.info(`vegetation: ready in ${(performance.now() - t0).toFixed(0)} ms (impostor bake ${this.stats.bakeMs.toFixed(0)} ms, atlas ${this.stats.atlasMB.toFixed(1)} MB)`);
+    return U;
   }
 
-  _bake() {
-    const t0 = performance.now();
-    const old = this._atlas;
-    this._atlas = bakeImpostors(this.renderer, this._trees, {
+  _bakeOptions() {
+    return {
       size: this.Q.atlas, spB: this._uniforms.uSpB.value,
       refHeights: SPECIES.map((s) => (s.height[0] + s.height[1]) / 2), variants: VARIANTS,
-    });
-    this._uniforms.uAtlasA.value = this._atlas.albedo;
-    this._uniforms.uAtlasN.value = this._atlas.normal;
+    };
+  }
+
+  /** The whole atlas at once (a quality change). */
+  _bake() {
+    const a = bakeImpostors(this.renderer, this._trees, this._bakeOptions());
+    this._setAtlas(a, a.ms);
+  }
+
+  _setAtlas(atlas, ms) {
+    const old = this._atlas;
+    this._atlas = atlas;
+    this._uniforms.uAtlasA.value = atlas.albedo;
+    this._uniforms.uAtlasN.value = atlas.normal;
     if (old) { old.albedo.dispose(); old.normal.dispose(); }
-    this.stats.bakeMs = performance.now() - t0;
-    this.stats.atlasMB = this._atlas.bytes / 1048576;
+    this.stats.bakeMs = ms;
+    this.stats.atlasMB = atlas.bytes / 1048576;
   }
 
   _makeMaterials(U) {
@@ -266,6 +325,7 @@ export class Scatter {
   }
 
   _buildNearMeshes() {
+    for (const m of this._nearMeshes || []) { this.group.remove(m); m.geometry.dispose(); }
     this._nearMeshes = [];
     const cap = this.Q.meshCap;
     this._nearCap = cap;
@@ -284,7 +344,7 @@ export class Scatter {
       mesh.frustumCulled = false;
       mesh.renderOrder = 1;
       mesh.receiveShadow = true;
-      mesh.castShadow = false;
+      mesh.castShadow = !!this._casting;      // see _updateUniforms
       mesh.customDepthMaterial = this._depthMat;
       mesh.matrixAutoUpdate = false;
       mesh.visible = false;
@@ -303,8 +363,17 @@ export class Scatter {
     this._worker.postMessage({ type: 'init', baseUrl, runways });
   }
 
-  /** Compiles the three programs now (no hitch when the first trees arrive). */
-  _precompile() {
+  /**
+   * Compiles the programs ahead (in parallel where the browser has KHR_parallel_shader_compile):
+   * the bake program as it renders into the bake target, then the three drawn ones.
+   */
+  _compile(baker) {
+    const r = this.renderer;
+    if (!r.compileAsync) return Promise.resolve();
+    const prev = r.getRenderTarget();
+    r.setRenderTarget(baker.rt);
+    const bake = r.compileAsync(baker.scene, baker.cam);
+    r.setRenderTarget(prev);
     const tmp = new THREE.Scene();
     const geo = this._nearMeshes[0].geometry;
     for (const [g, mat] of [[geo, this._meshMat], [this._impGeom, this._impMat], [this._impGeom, this._decalMat]]) {
@@ -313,7 +382,7 @@ export class Scatter {
       m.receiveShadow = true;
       tmp.add(m);
     }
-    try { this.renderer.compile(tmp, this.camera, this.scene); } catch (e) { console.warn('vegetation precompile', e); }
+    return Promise.all([bake, r.compileAsync(tmp, this.camera, this.scene)]);
   }
 
   // ------------------------------------------------------------------------------ streaming
@@ -394,6 +463,9 @@ export class Scatter {
 
   _onWorker(m) {
     this._inflight = Math.max(0, this._inflight - 1);
+    this.stats.replies++;
+    this.stats.workerMs += m.cellMs || 0;
+    this.stats.tileMs = Math.max(this.stats.tileMs, m.waitMs || 0);
     if (m.type === 'error') {
       console.warn(`vegetation: tile ${m.ix},${m.iz}: ${m.message}`);
       for (const [cx, cz] of m.cells) {

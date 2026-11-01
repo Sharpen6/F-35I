@@ -183,10 +183,22 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `quality=low` / `medium` / `high` | graphics |
 | `cam=cockpit` / `chase` / `orbit` / `flyby` / `tower` | first camera |
 | `wingmen=0` / `1` | wingmen off / on |
+| `vegetation=0` | no trees, orchards, palms or shrubs (see Vegetation) |
 | `stubs=1` | stand-in modules from `dev/stubs` (no data needed) |
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
 | `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
+
+## Vegetation
+
+Trees, orchards, palms and shrubs over the core of the map: `js/terrain/Scatter.js`, a graphics
+module, with `js/terrain/vegetation/` (placement worker, procedural species meshes, impostor
+atlas, shaders); the details in [`js/terrain/VEGETATION.md`](js/terrain/VEGETATION.md). Placed
+at run time from the terrain's own land cover (ESA WorldCover), imagery and heights: citrus
+orchards in rows on the coastal plain, the KKL pine forests, olives on the hill terraces, garden
+and street trees in the towns, eucalyptus windbreaks, date palms in the rift; nothing on runways,
+roads, roofs or water. Near trees are meshes, far ones impostors (one draw), with ground shadows.
+Off with `vegetation=0` or the menu option; range and density follow the quality.
 
 ## Files (the app shell)
 
@@ -207,6 +219,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `js/test/TestPilot.js` | scripted pilot (take-off and climb, approach and landing) for the tests and the benchmark |
 | `js/test/Bench.js`, `stats.js` | the `?bench=1` benchmark; frame statistics, GPU memory estimate |
 | `tests/smoke.mjs`, `tests/e2e.mjs` | Playwright smoke test, end-to-end test |
+| `tests/vegetation_shots.mjs` | screenshots and frame statistics of the vegetation scenes (see `js/terrain/VEGETATION.md`) |
 
 The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terrain` and
 `js/world` (terrain rendering and queries), `js/aircraft` (the jet), `js/fdm` (flight model).
@@ -342,6 +355,9 @@ then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
   cover: © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021)
   processed by ESA WorldCover consortium (CC BY 4.0). Airports: OurAirports (public domain).
   The menu shows the attribution of the data set it loaded.
+* **Vegetation**: placed from the terrain's ESA WorldCover 2021 land cover and Sentinel-2
+  imagery (credited above, CC BY 4.0); the tree and palm meshes and their impostor textures are
+  made procedurally at start-up (`js/terrain/vegetation`), no model or image files.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here.
