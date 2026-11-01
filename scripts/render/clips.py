@@ -58,10 +58,13 @@ def path(prop, points):
 
 
 def clear_rig_animation():
-    """Drop the rig's action but keep its drivers (they live in the same AnimData)."""
+    """Drop the rig's action but keep its drivers (they live in the same AnimData), and put the
+    jet back on its gear in the static attitude."""
+    from f35.geom import stance_matrix
     arm = rig()
     if arm.animation_data:
         arm.animation_data.action = None
+    arm.matrix_world = stance_matrix()
 
 
 def look_at(ob, target):

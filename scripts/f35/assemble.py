@@ -59,6 +59,7 @@ def build_all(parts):
     if "rig" in parts:
         from . import rig
         rig.build(ctx)
+        apply_stance()
     if "damage" in parts and "rig" in parts:
         from . import destruct
         info["damage"] = destruct.build(ctx)
@@ -68,3 +69,13 @@ def build_all(parts):
     info["objects"] = len(bpy.data.objects)
     info["seconds"] = round(time.time() - t0, 1)
     return info
+
+
+def apply_stance():
+    """Seat the level-built airframe on its gear: the rig root (everything is parented to it by
+    now) takes the static nose-up attitude; the ground and the scene stay put."""
+    from .geom import stance_matrix
+    arm = bpy.data.objects.get("F35I_Rig")
+    if arm is not None:
+        arm.matrix_world = stance_matrix()
+        bpy.context.view_layer.update()

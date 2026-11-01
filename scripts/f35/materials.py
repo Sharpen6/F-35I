@@ -252,8 +252,11 @@ def skin_material():
             else:
                 links.new(v, n.inputs[i])
         return n.outputs[0]
+    # RAM tape and caulk differ from the paint mostly in sheen: a touch lighter, rougher and
+    # without the satin coat, so a frame reads darker or lighter depending on the light (ref_06
+    # against ref_05 / c51)
     dark = _m('MULTIPLY', _m('SUBTRACT', 1.0, _m('MULTIPLY', line, 0.45)),
-              _m('SUBTRACT', 1.0, _m('MULTIPLY', tape, 0.22)))
+              _m('ADD', 1.0, _m('MULTIPLY', tape, 0.10)))
     fac = _m('MULTIPLY', dark, _m('ADD', 1.0, _m('MULTIPLY', light, 0.30)))
     pmul = nodes.new("ShaderNodeMix")
     pmul.data_type = 'RGBA'
@@ -313,14 +316,17 @@ def skin_material():
     rmix.data_type = 'FLOAT'
     rmix.inputs["B"].default_value = 0.95
     links.new(msk.outputs["Result"], rmix.inputs["Factor"])
-    rpan = _m('ADD', rr.outputs["Result"], _m('SUBTRACT', _m('MULTIPLY', line, 0.12), _m('MULTIPLY', light, 0.06)))
+    rpan = _m('ADD', rr.outputs["Result"], _m('SUBTRACT', _m('ADD', _m('MULTIPLY', line, 0.12),
+                                                              _m('MULTIPLY', tape, 0.30)),
+                                                     _m('MULTIPLY', light, 0.06)))
     links.new(rpan, rmix.inputs["A"])
     links.new(rmix.outputs["Result"], b.inputs["Roughness"])
     b.inputs["Metallic"].default_value = 0.15
     b.inputs["Specular IOR Level"].default_value = 0.5
     # satin top coat (sky sheen at glancing angles) and a little sheen; soot burns both away
     clean = _m('SUBTRACT', 1.0, msk.outputs["Result"])
-    links.new(_m('MULTIPLY', clean, 0.6), b.inputs["Coat Weight"])
+    links.new(_m('MULTIPLY', _m('MULTIPLY', clean, 0.6), _m('SUBTRACT', 1.0, _m('MULTIPLY', tape, 0.9))),
+              b.inputs["Coat Weight"])
     b.inputs["Coat Roughness"].default_value = 0.3
     b.inputs["Coat IOR"].default_value = 1.5
     links.new(_m('MULTIPLY', clean, 0.15), b.inputs["Sheen Weight"])
@@ -362,24 +368,26 @@ FABRICS = {
 
 
 SWITCHABLE = {
-    # name: (base colour, emission colour, strength when on)
+    # name: (base colour, emission colour, strength when on[, roughness])
     "landing_light": ((0.85, 0.85, 0.82), (1.0, 0.96, 0.88), 60.0),
     "nav_red":       ((0.45, 0.02, 0.02), (1.0, 0.03, 0.02), 25.0),
     "nav_green":     ((0.02, 0.40, 0.08), (0.05, 1.0, 0.25), 25.0),
     "nav_white":     ((0.80, 0.80, 0.80), (1.0, 1.0, 0.97), 20.0),
-    "formation":     ((0.20, 0.22, 0.12), (0.55, 1.0, 0.35), 6.0),
-    "beacon":        ((0.40, 0.02, 0.02), (1.0, 0.08, 0.04), 40.0),
+    # electroluminescent strips: pale matte grey-green when off (photos ref_06, c51)
+    "formation":     ((0.12, 0.17, 0.14), (0.55, 1.0, 0.35), 6.0, 0.40),
+    # anti-collision lenses sit flush and read as dark smoked glass when off
+    "beacon":        ((0.035, 0.035, 0.04), (1.0, 0.08, 0.04), 40.0, 0.05),
 }
 
 
-def switchable(name, base, emit, strength):
+def switchable(name, base, emit, strength, rough=0.08):
     """Emission = object property 'on' (0..1) x strength, so the rig can
     switch every light individually."""
     mat = _new("F35_" + name)
     nt = mat.node_tree
     b = _bsdf(mat)
     b.inputs["Base Color"].default_value = (*base, 1.0)
-    b.inputs["Roughness"].default_value = 0.08
+    b.inputs["Roughness"].default_value = rough
     b.inputs["Emission Color"].default_value = (*emit, 1.0)
     attr = nt.nodes.new("ShaderNodeAttribute")
     attr.attribute_type = 'OBJECT'
@@ -438,7 +446,7 @@ def _make(name):
         "gear":      dict(color=(0.82, 0.83, 0.82), rough=0.4, metal=0.1),
         "chrome":    dict(color=(0.8, 0.8, 0.82), rough=0.12, metal=1.0),
         "tyre":      dict(color=(0.02, 0.02, 0.02), rough=0.85),
-        "hub":       dict(color=(0.55, 0.56, 0.57), rough=0.35, metal=0.8),
+        "hub":       dict(color=(0.66, 0.67, 0.68), rough=0.50, metal=0.0),     # painted light grey
         "light_red": dict(color=(0.6, 0.0, 0.0), rough=0.2, emission=(1, 0.05, 0.02), emission_strength=4),
         "light_green": dict(color=(0.0, 0.6, 0.0), rough=0.2, emission=(0.05, 1, 0.1), emission_strength=4),
         "light_white": dict(color=(0.9, 0.9, 0.9), rough=0.2, emission=(1, 1, 0.95), emission_strength=3),

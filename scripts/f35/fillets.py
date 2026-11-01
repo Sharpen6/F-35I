@@ -27,8 +27,8 @@ from mathutils.bvhtree import BVHTree
 from .geom import P, get_collection, mesh_object, loft_rings
 from . import materials as M
 
-FILLET_S = (7.45, 11.35)        # first / last station
-FILLET_FULL = (8.25, 10.85)     # full radius between these stations
+FILLET_S = (6.90, 11.35)        # first / last station: starts under the inboard root LE so the
+FILLET_FULL = (7.60, 10.85)     # inlet side fairs into the wing (photos c10, c22, c53, ref_07)
 FILLET_R = 0.50                 # size, as the radius of the equivalent circular fillet (m)
 FILLET_K = 0.12                 # Bezier handle length (fraction of the tangent distance)
 N_ARC = 14                      # points on each section curve

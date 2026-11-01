@@ -719,9 +719,10 @@ def build(ctx):
     bpy.context.view_layer.update()
     for src_name, lst in prep["variants"].items():
         src = bpy.data.objects[src_name]
+        bone = src.parent_bone if (src.parent is arm and src.parent_type == 'BONE') else "Root"
         for kid in [k for k in src.children if k.name.startswith(("Eagle_", "Roundel_", "Serial_", "Rescue_",
                                                                   "EjectWarn_"))]:
-            _pk(kid, arm, "Root")
+            _pk(kid, arm, bone)                    # a rudder decal keeps following the rudder
             holders = [(ob, comp) for ob, comp, kind in lst if kind == "frag" and _inside(kid, ob)]
             if not holders:
                 continue

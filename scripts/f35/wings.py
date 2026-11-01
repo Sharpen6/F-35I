@@ -32,11 +32,33 @@ def tc(hw):
     return 0.052 - 0.017 * f
 
 
-# moving surfaces (hw ranges, chord fractions)
-LEF_HW = (2.45, 5.28)
-LEF_FRAC = 0.17
-FLAP_HW = (1.98, 4.25)
-FLAP_FRAC = 0.78
+# moving surfaces.  Drawing ref_09 and photo ref_06 (901 from above): the LEF is a strip of constant
+# streamwise chord with its hinge parallel to the LE; the flaperon also keeps a constant chord, its
+# hinge parallel to the forward-swept TE, and runs out to about 0.55 m from the tip.
+LEF_HW = (2.35, 5.28)
+LEF_CHORD = 0.37
+FLAP_HW = (1.89, 4.80)
+FLAP_CHORD = 0.73
+
+
+def lef_hinge(hw):
+    return le(hw) + LEF_CHORD
+
+
+def flap_hinge(hw):
+    return te(hw) - FLAP_CHORD
+
+
+def root_le_sharp(hw):
+    """Inboard of the LEF the fixed root edge is as thin as the LEF edge and runs on from the inlet
+    shoulder chine (photos c10, c22, c53, ref_07): ease the thickness in over the first 0.45 m."""
+    a, b = 2.45, 2.65
+    if hw <= a:
+        return 0.45, 1.0
+    if hw >= b:
+        return 0.0, 0.0
+    f = (hw - a) / (b - a)
+    return 0.45, 1.0 - f * f * (3 - 2 * f)
 
 
 def build(ctx):
@@ -54,13 +76,13 @@ def build(ctx):
         fr = Frame((HW_ROOT, Z_WING), (1, 0, 0), (0, 0, 1), mirror=(side < 0))
         wing = lifting_surface(f"Wing_{tag}", coll, fr, us,
                                lambda u: le(HW_ROOT + u), lambda u: te(HW_ROOT + u),
-                               lambda u: tc(HW_ROOT + u), M.get("skin"), n_chord=44)
+                               lambda u: tc(HW_ROOT + u), M.get("skin"), n_chord=44,
+                               le_sharp=lambda u: root_le_sharp(HW_ROOT + u))
         # leading-edge flap
         a, b = LEF_HW[0] - HW_ROOT, LEF_HW[1] - HW_ROOT
 
         def hinge_lef(uu):
-            hw = HW_ROOT + uu
-            return le(hw) + LEF_FRAC * (te(hw) - le(hw))
+            return lef_hinge(HW_ROOT + uu)
         poly = [(a, le(HW_ROOT + a) - 0.4), (b, le(HW_ROOT + b) - 0.4),
                 (b, hinge_lef(b)), (a, hinge_lef(a))]
         lef = split_surface(wing, poly, fr, helpers, f"LEF_{tag}", gap=0.008)
@@ -72,8 +94,7 @@ def build(ctx):
         a, b = FLAP_HW[0] - HW_ROOT, FLAP_HW[1] - HW_ROOT
 
         def hinge_flap(uu):
-            hw = HW_ROOT + uu
-            return le(hw) + FLAP_FRAC * (te(hw) - le(hw))
+            return flap_hinge(HW_ROOT + uu)
         poly = [(a, hinge_flap(a)), (b, hinge_flap(b)),
                 (b, te(HW_ROOT + b) + 0.4), (a, te(HW_ROOT + a) + 0.4)]
         flp = split_surface(wing, poly, fr, helpers, f"Flaperon_{tag}", gap=0.008)

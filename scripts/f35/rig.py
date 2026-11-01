@@ -278,6 +278,9 @@ def build(ctx):
         elif drv == "wheel_spin":
             sign = 1.0 if (spec["tail"] - spec["head"]).x >= 0 else -1.0
             _driver(pb, "rotation_euler", 1, f"{sign}*dist/{spec['radius']:.4f}", arm)
+        if spec.get("slide"):
+            # the oleo closes along the strut (bone +Y points down it) as the gear starts up
+            _driver(pb, "location", 1, f"-{spec['slide']:.4f}*(1 - {SS}(0.86, 1.0, gear))", arm)
         if "ik" in spec:
             tgt, pole, chain = spec["ik"]
             c = pb.constraints.new('IK')

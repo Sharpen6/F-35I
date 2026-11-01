@@ -209,10 +209,12 @@ def pcd_image(name="PCD_Display", w=1600, h=640):
     return c.to_image(name)
 
 
-def roundel_image(name="IAF_Roundel", size=512, star=(0.62, 0.68, 0.78),
+def roundel_image(name="IAF_Roundel", size=512, star=None,
                   disc=(0.86, 0.88, 0.90)):
     """Israeli Air Force roundel (low-visibility style seen on F-35I photos):
-    light disc with a Star of David (two overlapping triangles)."""
+    light disc with a Star of David (two overlapping triangles).  star=None leaves the star
+    transparent, so the skin (with its coat and sheen) shows through, as on the real jets
+    where the star is the airframe grey."""
     c = Canvas(size, size, (0, 0, 0))
     c.px[:, :, 3] = 0.0
     cx = cy = size / 2
@@ -233,7 +235,11 @@ def roundel_image(name="IAF_Roundel", size=512, star=(0.62, 0.68, 0.78),
             m &= cross >= 0
         return m
     star_m = tri(0.0) | tri(math.pi)
-    c.px[star_m, :3] = star
+    if star is None:
+        c.px[star_m, :3] = disc          # keep the colour under the soft alpha edge
+        c.px[star_m, 3] = 0.0
+    else:
+        c.px[star_m, :3] = star
     return c.to_image(name)
 
 

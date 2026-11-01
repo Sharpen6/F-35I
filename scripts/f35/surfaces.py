@@ -38,18 +38,27 @@ def naca_thickness(x, t):
 
 
 def lifting_surface(name, collection, frame, u_list, le_fn, te_fn, tc_fn,
-                    material, n_chord=36, te_gap=0.0015, flip=False):
-    """Closed mesh for a lifting surface sampled at spanwise stations."""
+                    material, n_chord=36, te_gap=0.0015, flip=False, le_sharp=None):
+    """Closed mesh for a lifting surface sampled at spanwise stations.
+
+    le_sharp(u) -> (d, w): over the first d metres behind the leading edge the half thickness is
+    eased in (h * (1 - (1 - x/d)^2), smooth at x = d), blended by weight w; this gives a thin edge
+    with a small nose radius while keeping the section's maximum thickness."""
     xs = [0.5 - 0.5 * math.cos(math.pi * i / (n_chord - 1)) for i in range(n_chord)]
     rings = []
     for u in u_list:
         le, te = le_fn(u), te_fn(u)
         c = te - le
         t = tc_fn(u)
+        d, w = le_sharp(u) if le_sharp else (0.0, 0.0)
         upper = []
         lower = []
         for x in xs:
-            h = max(naca_thickness(x, t) * c, te_gap * 0.5 if x > 0.99 else 0.0)
+            h = naca_thickness(x, t) * c
+            if w > 0.0 and d > 0.0 and x * c < d:
+                f = 1.0 - (1.0 - x * c / d) ** 2
+                h *= 1.0 - w * (1.0 - f)
+            h = max(h, te_gap * 0.5 if x > 0.99 else 0.0)
             upper.append(frame.world(u, le + x * c, h))
             lower.append(frame.world(u, le + x * c, -h))
         ring = list(reversed(upper)) + lower[1:-1]

@@ -41,10 +41,12 @@ OUTER_DOOR_X = (0.465, 1.085)
 # from its hinge line on the bottom corner (|x| = NOSE_WELL_X) to the centre
 # line, from just behind the EOTS window to the strut.  Front edge sawtoothed,
 # aft edge raked so the free edge is slightly longer than the hinge edge.
-NOSE_WELL_X = (0.43, 0.40)         # hinge line |x| at the front / aft end, near the edge of the flat bottom
-                                   # (door chord ~0.4 m as measured on c51; further out the doors pick up
-                                   # the curve of the bottom corner and look bulky when open)
-NOSE_WELL_S = (2.45, 4.70)
+NOSE_WELL_X = (0.50, 0.42)         # hinge line |x| at the front / aft end.  At the front the hinge sits up
+                                   # on the curved bottom corner, so the hinge line climbs towards the nose
+                                   # and the open doors leave about a wheel diameter of daylight above the
+                                   # nose tyre (c14, c28, c47, c51, ref_05); head-on the hinges are ~1 m
+                                   # apart (c22, c29)
+NOSE_WELL_S = (2.30, 4.62)
 NOSE_WELL_Z = (-1.20, 0.04)        # cutter bottom (below the skin) / well roof
 NOSE_TEETH = 2                     # sawtooth teeth across each door's front edge
 NOSE_TOOTH = 0.10

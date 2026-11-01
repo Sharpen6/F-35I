@@ -19,13 +19,20 @@ import bmesh
 from mathutils import Vector, Matrix
 
 from .geom import P, get_collection, mesh_object, cylinder, uv_sphere, add_modifier_bevel, loft_rings
+from .geom import ground_z_airframe
 from . import materials as M
 
 # --------------------------------------------------------------- key points
+# Tyres sit statically loaded: the axle is lower than the free radius (photos c22, c29, c51, c53:
+# loaded mains ~0.8 m, nose ~0.55 m tall), so the tyre bottoms dip under the apron, which reads
+# as the flat contact patch.  The ground under each wheel comes from the stance (geom).
+NG_DEFLECT, MG_DEFLECT = 0.030, 0.045
 # nose gear
-NG_T = (0.0, 4.45, -0.42)          # trunnion centre
-NG_C = (0.0, 4.25, -1.4615)        # wheel centre (ground at z = -1.76); wheelbase 6.02 m
 NG_R, NG_RIM, NG_W = 0.2985, 0.127, 0.191     # 23.5x7.5R10 tyre
+NG_T = (0.0, 4.45, -0.42)          # trunnion centre
+NG_C = (0.0, 4.25, ground_z_airframe(4.25) + NG_R - NG_DEFLECT)     # wheel centre; wheelbase 6.02 m
+NG_TRAIL = 0.10                    # axle aft of the piston axis (single trailing arm, c51, ref_05)
+NG_SLIDE = 0.229                   # oleo closes this much as the leg retracts, so it stows as before
 NG_STOW_C = (0.0, 3.40, -0.28)     # wheel centre when stowed
 NG_B = (0.0, 3.80, -0.08)          # drag-brace airframe pivot
 NG_E = (0.0, 5.00, -0.15)          # actuator airframe pivot
@@ -35,8 +42,9 @@ NG_E = (0.0, 5.00, -0.15)          # actuator airframe pivot
 # high enough (inside the wing-root fillet) that the stowed leg clears the
 # closed doors.
 MG_T = (1.90, 10.12, 0.25)
-MG_C = (2.17, 10.27, -1.328)       # wheel track 4.34 m
 MG_R, MG_RIM, MG_W = 0.432, 0.216, 0.279      # 34x11.0R17 tyre
+MG_C = (2.17, 10.27, ground_z_airframe(10.27) + MG_R - MG_DEFLECT)     # wheel track 4.34 m
+MG_SLIDE = 0.095                   # oleo closes this much as the leg retracts (stows as before)
 MG_AXLE_OFF = 0.215                # strut centreline inboard of wheel centre
 MG_OLEO = 1.15                     # oleo body length below the trunnion (piston below it)
 MG_STOW_C = (1.20, 8.85, 0.13)     # wheel centre stowed (target), above/outboard of the weapon bay roof
@@ -217,61 +225,73 @@ def _bone(spec_list, name, head, tail, parent, objects=(), roll_axis=None, **kw)
 
 
 def build_nose(coll, bones):
+    """Nose leg as in the photos (c20, c29, c50, c51, ref_04, ref_05): a boxy white steering
+    housing with the lamps on its front, a short chrome piston, a compact yoke and one curved
+    trailing arm down the aircraft's LEFT side to a cantilevered axle; the right face of the wheel
+    is clear, and the torque links sit behind the strut with the knee pointing aft."""
     T = W(NG_T)
     C = W(NG_C)
-    u = (C - T).normalized()                     # strut axis (down)
-    L = (C - T).length
     X = Vector((1, 0, 0))
     fwd = Vector((0, -1, 0))
+    Cp = C + fwd * NG_TRAIL                      # where the piston axis meets the axle height
+    u = (Cp - T).normalized()                    # strut axis (down)
+    L = (Cp - T).length
     fwd_perp = (fwd - u * u.dot(fwd)).normalized()
     gear, chrome, dark = M.get("gear"), M.get("chrome"), M.get("intake_dark")
     strut_objs, steer_objs = [], []
-    # trunnion + upper (outer) cylinder + steering collar
+    # trunnion + upper (outer) cylinder
     strut_objs.append(cylinder("NG_Trunnion", T - X * 0.17, T + X * 0.17, 0.05, None, coll, gear))
     strut_objs.append(cylinder("NG_UpperStrut", T - u * 0.06, T + u * 0.50, 0.072, 0.068, coll, gear))
-    strut_objs.append(cylinder("NG_SteerCollar", T + u * 0.34, T + u * 0.45, 0.088, None, coll, gear))
-    # steering actuators (small cylinders either side of the collar)
-    for sd in (1, -1):
-        p0 = T + u * 0.30 + X * (sd * 0.10) - fwd_perp * 0.03
-        strut_objs.append(cylinder(f"NG_SteerAct_{'L' if sd > 0 else 'R'}", p0, p0 + fwd_perp * 0.16,
-                                   0.022, None, coll, gear, segments=10))
-    # taxi + landing lights on the front of the upper strut
+    # boxy steering housing (~0.24 m wide) just under the well
+    hb0, hb1 = T + u * 0.12, T + u * 0.40
+    strut_objs.append(bar("NG_SteerHousing", hb0 - fwd_perp * 0.01, hb1 - fwd_perp * 0.01, 0.24, 0.17,
+                          fwd_perp, coll, gear, bevel=0.02))
+    # taxi + landing lights on the front of the housing
     lamps = []
-    for k, (dz, dx) in enumerate(((0.16, 0.0), (0.25, 0.0))):
-        base = T + u * dz + fwd_perp * 0.085 + X * dx
+    for k, dz in enumerate((0.19, 0.31)):
+        base = T + u * dz + fwd_perp * 0.075
         look = (fwd_perp * 0.9 - u * 0.15 * (k + 1)).normalized()
-        strut_objs.append(cylinder(f"NG_LampBody{k}", base, base + look * 0.05, 0.042, 0.046, coll, gear,
+        strut_objs.append(cylinder(f"NG_LampBody{k}", base, base + look * 0.04, 0.045, 0.047, coll, gear,
                                    segments=16))
-        lens = cylinder(f"NG_LampLens{k}", base + look * 0.05, base + look * 0.056, 0.040, None, coll,
+        lens = cylinder(f"NG_LampLens{k}", base + look * 0.04, base + look * 0.046, 0.042, None, coll,
                         M.get("landing_light"), segments=16)
         lens["light"] = "landing"
         strut_objs.append(lens)
         lamps.append(lens)
-    # lower (sliding) strut, fork, axle, torque links -> steer group
-    crown_d = L - (NG_R + 0.065)
-    crown = T + u * crown_d
-    steer_objs.append(cylinder("NG_Piston", T + u * 0.44, crown + u * 0.01, 0.050, None, coll, chrome))
-    steer_objs.append(bar("NG_ForkCrown", crown - X * 0.125, crown + X * 0.125, 0.11, 0.07, u,
-                          coll, gear, bevel=0.01))
-    for sd in (1, -1):
-        top = crown + X * (sd * 0.112)
-        bot = C + X * (sd * 0.112)
-        steer_objs.append(bar(f"NG_ForkLeg_{'L' if sd > 0 else 'R'}", top, bot, 0.075, 0.032, X,
-                              coll, gear, bevel=0.006))
-    steer_objs.append(cylinder("NG_Axle", C - X * 0.13, C + X * 0.13, 0.028, None, coll, gear, segments=12))
-    # torque links (front)
-    k_up = T + u * 0.47 + fwd_perp * 0.065
-    knee = T + u * ((0.47 + crown_d) / 2) + fwd_perp * 0.17
-    k_lo = crown - u * 0.02 + fwd_perp * 0.06
+    # lower (sliding) part -> steer group: piston, yoke, trailing arm, axle, torque links
+    yoke_d = L - (NG_R + 0.07)
+    yoke = T + u * yoke_d
+    steer_objs.append(cylinder("NG_Piston", T + u * 0.44, yoke + u * 0.01, 0.050, None, coll, chrome))
+    # compact yoke under the piston, offset to the left so nothing passes the tyre's right edge
+    steer_objs.append(bar("NG_Yoke", yoke - X * 0.06, yoke + X * 0.165, 0.13, 0.08, u, coll, gear, bevel=0.012))
+    ax = 0.150                                   # arm centre plane, outside the tyre's left face
+    arm_pts = [yoke + X * ax + u * 0.02,
+               yoke + X * ax + u * 0.16 - fwd * 0.03,
+               C + X * ax - u * 0.12 + fwd * 0.005,
+               C + X * ax]
+    for k in range(3):
+        steer_objs.append(bar(f"NG_TrailArm{k}", arm_pts[k], arm_pts[k + 1], 0.085 - 0.008 * k, 0.045, X, coll,
+                              gear, bevel=0.008))
+    steer_objs.append(cylinder("NG_ArmBoss", C + X * (ax - 0.03), C + X * (ax + 0.035), 0.060, None, coll, gear,
+                               segments=20))
+    steer_objs.append(cylinder("NG_Axle", C - X * 0.06, C + X * (ax - 0.02), 0.030, None, coll, gear,
+                               segments=12))
+    lug = C + X * (ax + 0.01) + fwd * 0.06
+    steer_objs.append(cylinder("NG_TowLug", lug, lug + fwd * 0.07, 0.018, 0.015, coll, gear, segments=10))
+    # torque links behind the strut, knee pointing aft
+    k_up = T + u * 0.47 - fwd_perp * 0.065
+    knee = T + u * ((0.47 + yoke_d) / 2) - fwd_perp * 0.17
+    k_lo = yoke - u * 0.02 - fwd_perp * 0.06
     steer_objs.append(bar("NG_TorqueLink_U", k_up, knee, 0.05, 0.03, X, coll, gear, bevel=0.005))
     steer_objs.append(bar("NG_TorqueLink_L", knee, k_lo, 0.05, 0.03, X, coll, gear, bevel=0.005))
     steer_objs.append(cylinder("NG_TorqueKnee", knee - X * 0.035, knee + X * 0.035, 0.018, None, coll,
                                chrome, segments=10))
-    # wheel
-    wheel = build_wheel("NG_Wheel", coll, C, X, NG_R, NG_RIM, NG_W)
+    # wheel: hub face on the right, where nothing covers it
+    wheel = build_wheel("NG_Wheel", coll, C, X, NG_R, NG_RIM, NG_W, outboard=-1.0)
     # ----------------------------------------------------- retraction solve
+    # the oleo closes by NG_SLIDE first, so the stowed wheel lands where it always did
     Cs = W(NG_STOW_C)
-    d1 = (C - T)
+    d1 = (C - u * NG_SLIDE) - T
     d2 = (Cs - T)
     axis, ang, R = solve_trunnion(T, d1, X, d2, X)
     # drag brace: B (airframe) -> K -> D (strut)
@@ -299,7 +319,7 @@ def build_nose(coll, bones):
     # ------------------------------------------------------------- bones
     _bone(bones, "NG_Strut", T, T + axis * 0.3, "Root", strut_objs + hinge_pins[:0],
           drive="gear_leg", angle=math.degrees(ang), unit="nose")
-    _bone(bones, "NG_Steer", T + u * 0.40, T + u * 0.80, "NG_Strut", steer_objs, drive="nws")
+    _bone(bones, "NG_Steer", T + u * 0.40, T + u * 0.80, "NG_Strut", steer_objs, drive="nws", slide=NG_SLIDE)
     _bone(bones, "NG_Wheel", C, C + X * 0.2, "NG_Steer", wheel, drive="wheel_spin", radius=NG_R)
     _bone(bones, "NG_BraceTgt", Dw, Dw + X * 0.08, "NG_Strut")
     _bone(bones, "NG_BracePole", K + n * 0.8, K + n * 0.8 + X * 0.08, "Root")
@@ -311,7 +331,7 @@ def build_nose(coll, bones):
     _bone(bones, "NG_ActBarrel", Ew, Ew + dirEF * barrel_len, "Root", [barrel], track="NG_ActF")
     _bone(bones, "NG_ActRod", Fw, Fw - dirEF * rod_len, "NG_Strut", [rod], track="NG_ActE")
     info = {"axis": axis, "angle": math.degrees(ang), "T": T, "R": R,
-            "stowed_wheel": rot_about(C, T, R), "brace": (Bw, Dw, Lk),
+            "stowed_wheel": rot_about(C - u * NG_SLIDE, T, R), "brace": (Bw, Dw, Lk),
             "act": (Ew, Fw, barrel_len, rod_len, act_len), "lamps": [o.name for o in lamps]}
     return info
 
@@ -336,7 +356,7 @@ def build_main(coll, bones, side):
     tilt = math.radians(MG_STOW_TILT)
     a2 = Vector((side * math.cos(tilt), 0.0, math.sin(tilt)))
     Ss = Cs - a2 * MG_AXLE_OFF
-    axis, ang, R = solve_trunnion(T, S - T, a1, Ss - T, a2)
+    axis, ang, R = solve_trunnion(T, S - u * MG_SLIDE - T, a1, Ss - T, a2)     # oleo closed when stowed
     # trunnion along the solved hinge axis, running up into the wing root
     ax_up = axis if axis.z > 0 else -axis
     strut_objs.append(cylinder(f"MG_Trunnion_{tag}", T - ax_up * 0.12, T + ax_up * 0.07, 0.058, None,
@@ -361,29 +381,30 @@ def build_main(coll, bones, side):
                                segments=24))
     strut_objs.append(cylinder(f"MG_Gland_{tag}", T + u * (oleo - 0.04), T + u * (oleo + 0.04), 0.102, None,
                                coll, gear, segments=24))
-    strut_objs.append(cylinder(f"MG_Piston_{tag}", T + u * oleo, S + u * 0.02, 0.066, None, coll, chrome,
-                               segments=20))
-    strut_objs.append(cylinder(f"MG_Knuckle_{tag}", S - a1 * 0.08, S + a1 * 0.10, 0.088, None, coll, gear,
-                               segments=20))            # axle fitting at the foot of the piston
-    strut_objs.append(cylinder(f"MG_Axle_{tag}", S, C + a1 * 0.17, 0.045, None, coll, gear, segments=14))
-    strut_objs.append(cylinder(f"MG_Brake_{tag}", C - a1 * 0.115, C - a1 * 0.03, 0.16, None, coll,
-                               M.get("intake_dark"), segments=24))
+    oleo_objs = []                               # slide up the strut as the leg retracts
+    oleo_objs.append(cylinder(f"MG_Piston_{tag}", T + u * oleo, S + u * 0.02, 0.066, None, coll, chrome,
+                              segments=20))
+    oleo_objs.append(cylinder(f"MG_Knuckle_{tag}", S - a1 * 0.08, S + a1 * 0.10, 0.088, None, coll, gear,
+                              segments=20))            # axle fitting at the foot of the piston
+    oleo_objs.append(cylinder(f"MG_Axle_{tag}", S, C + a1 * 0.17, 0.045, None, coll, gear, segments=14))
+    oleo_objs.append(cylinder(f"MG_Brake_{tag}", C - a1 * 0.115, C - a1 * 0.03, 0.16, None, coll,
+                              M.get("intake_dark"), segments=24))
     # torque links (aft side), from the gland down to the axle fork
     t_up = T + u * (oleo + 0.05) + aft_p * 0.11
     knee = T + u * ((oleo + 0.05 + Ls - 0.07) / 2) + aft_p * 0.20
     t_lo = S - u * 0.07 + aft_p * 0.10
     nrm = u.cross(aft_p)
     strut_objs.append(bar(f"MG_TorqueLink_U_{tag}", t_up, knee, 0.06, 0.035, nrm, coll, gear, bevel=0.006))
-    strut_objs.append(bar(f"MG_TorqueLink_L_{tag}", knee, t_lo, 0.06, 0.035, nrm, coll, gear, bevel=0.006))
-    strut_objs.append(cylinder(f"MG_TorqueKnee_{tag}", knee - nrm * 0.04, knee + nrm * 0.04, 0.02, None,
-                               coll, chrome, segments=10))
+    oleo_objs.append(bar(f"MG_TorqueLink_L_{tag}", knee, t_lo, 0.06, 0.035, nrm, coll, gear, bevel=0.006))
+    oleo_objs.append(cylinder(f"MG_TorqueKnee_{tag}", knee - nrm * 0.04, knee + nrm * 0.04, 0.02, None,
+                              coll, chrome, segments=10))
     # brake line down the front of the strut
     fwd_p = -aft_p
     pts = [T + u * 0.45 + fwd_p * 0.11, T + u * (oleo - 0.06) + fwd_p * 0.11, S - u * 0.12 + fwd_p * 0.09,
            C - a1 * 0.09 + fwd_p * 0.12]
     for k in range(len(pts) - 1):
-        strut_objs.append(cylinder(f"MG_BrakeLine{k}_{tag}", pts[k], pts[k + 1], 0.009, None, coll,
-                                   chrome, segments=6, cap=False))
+        (oleo_objs if k == 2 else strut_objs).append(
+            cylinder(f"MG_BrakeLine{k}_{tag}", pts[k], pts[k + 1], 0.009, None, coll, chrome, segments=6, cap=False))
     # wheel (outboard face shows the hub)
     wheel = build_wheel(f"MG_Wheel_{tag}", coll, C, a1, MG_R, MG_RIM, MG_W)
     # drag brace (forward)
@@ -415,7 +436,8 @@ def build_main(coll, bones, side):
     # ------------------------------------------------------------- bones
     _bone(bones, f"MG_Strut_{tag}", T, T + axis * 0.3, "Root", strut_objs, drive="gear_leg",
           angle=math.degrees(ang), unit="main")
-    _bone(bones, f"MG_Wheel_{tag}", C, C + a1 * 0.2, f"MG_Strut_{tag}", wheel, drive="wheel_spin",
+    _bone(bones, f"MG_Oleo_{tag}", T + u * 0.6, T + u * 0.9, f"MG_Strut_{tag}", oleo_objs, slide=MG_SLIDE)
+    _bone(bones, f"MG_Wheel_{tag}", C, C + a1 * 0.2, f"MG_Oleo_{tag}", wheel, drive="wheel_spin",
           radius=MG_R)
     _bone(bones, f"MG_BraceTgt_{tag}", Dw, Dw + pin_axis * 0.08, f"MG_Strut_{tag}")
     _bone(bones, f"MG_BracePole_{tag}", K + n * 0.8, K + n * 0.8 + pin_axis * 0.08, "Root")
@@ -428,7 +450,7 @@ def build_main(coll, bones, side):
     _bone(bones, f"MG_ActRod_{tag}", Fw, Fw - dirEF * rod_len, f"MG_Strut_{tag}", [rod],
           track=f"MG_ActE_{tag}")
     info = {"axis": axis, "angle": math.degrees(ang), "T": T, "R": R,
-            "stowed_wheel": rot_about(C, T, R), "brace": (Bw, Dw, Lk),
+            "stowed_wheel": rot_about(C - u * MG_SLIDE, T, R), "brace": (Bw, Dw, Lk),
             "act": (Ew, Fw, barrel_len, rod_len, act_len)}
     return info
 

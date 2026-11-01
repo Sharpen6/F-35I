@@ -282,7 +282,7 @@ def build_antennas(coll, skin):
     return out
 
 
-def build_lights(coll, skin):
+def build_lights(coll, skin, objs=None):
     out = []
     # position lights: red port (left, +x), green starboard, white tail
     for name, sign, mat in (("NavLight_L", 1, "nav_red"), ("NavLight_R", -1, "nav_green")):
@@ -307,12 +307,89 @@ def build_lights(coll, skin):
             ob = strip_on_skin(f"FormLight_{tag}{k}", coll, M.get("formation"), p, n, (0, 1, 0.12), ln, 0.035)
             ob["light"] = "formation"
             out.append(ob)
-    # anti-collision beacons (spine + belly)
+    # anti-collision beacons (spine + belly): flush lenses, a few mm proud
     for name, (p, n) in (("Beacon_Top", skin.top(6.70, 0.0)), ("Beacon_Bottom", skin.bottom(6.30, 0.0))):
         if p is not None:
-            ob = uv_sphere(name, p + n * 0.012, (0.05, 0.07, 0.03), coll, M.get("beacon"), seg=16, rings=8)
+            ob = uv_sphere(name, p, (0.05, 0.07, 0.008), coll, M.get("beacon"), seg=16, rings=8)
             ob["light"] = "beacon"
             out.append(ob)
+    if objs:
+        out += _fin_strips(coll, objs) + _wingtip_lights(coll, objs)
+    return out
+
+
+def _cast_on(target, origin, ray, dist=4.0):
+    """Hit point and outward normal (world) of a ray from origin along ray on one object."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    bvh = BVHTree.FromObject(target, dg)
+    mw = target.matrix_world
+    inv = mw.inverted()
+    ray = Vector(ray).normalized()
+    hit, nrm, _, _ = bvh.ray_cast(inv @ Vector(origin), (inv.to_3x3() @ ray).normalized(), dist)
+    if hit is None:
+        return None, None
+    n = (mw.to_3x3().inverted().transposed() @ nrm).normalized()
+    if n.dot(ray) > 0:
+        n = -n
+    return mw @ hit, n
+
+
+def _keep_parent(ob, parent):
+    mw = ob.matrix_world.copy()
+    ob.parent = parent
+    ob.matrix_world = mw
+
+
+def _fin_strips(coll, objs):
+    """Formation-light strip on each fin's outer face: parallel to the leading edge and about 0.21 m
+    aft of it, from about 47 to 74 % of the span (photos ref_06 of 901, ref_07 of 919, c48, c51)."""
+    from . import tails as T
+    out = []
+    for side, tag in ((1, "L"), (-1, "R")):
+        fin = objs.get(f"Fin_{tag}")
+        if fin is None:
+            continue
+        span = Vector((side * math.sin(T.FIN_CANT), 0, math.cos(T.FIN_CANT)))
+        nrm = Vector((side * math.cos(T.FIN_CANT), 0, -math.sin(T.FIN_CANT)))
+        u = 1.45
+        le = T.FIN_LE[0] + (T.FIN_LE[1] - T.FIN_LE[0]) * u / T.FIN_SPAN
+        c = P(le + 0.21, side * T.FIN_ROOT[0], T.FIN_ROOT[1]) + span * u
+        p, n = _cast_on(fin, c + nrm * 0.4, -nrm)
+        if p is None:
+            continue
+        along = span + Vector((0, (T.FIN_LE[1] - T.FIN_LE[0]) / T.FIN_SPAN, 0))
+        ob = strip_on_skin(f"FormLight_Fin_{tag}", coll, M.get("formation"), p, n, along, 0.85, 0.04, h=0.003)
+        ob["light"] = "formation"
+        _keep_parent(ob, fin)
+        out.append(ob)
+    return out
+
+
+def _wingtip_lights(coll, objs):
+    """Position lights in the wingtip edges at about 40 % of the tip chord: red on the left tip,
+    green on the right (photos c04, c10 lit; ref_09 drawing)."""
+    from . import wings as WG
+    out = []
+    for side, tag, mat in ((1, "L", "nav_red"), (-1, "R", "nav_green")):
+        wing = objs.get(f"Wing_{tag}")
+        if wing is None:
+            continue
+        s = 10.66
+        hw = WG.HW_TIP - 0.06
+        top, _ = _cast_on(wing, P(s, side * hw, 3.0), (0, 0, -1), 6.0)
+        bot, _ = _cast_on(wing, P(s, side * hw, -3.0), (0, 0, 1), 6.0)
+        if top is None or bot is None:
+            continue
+        zc = 0.5 * (top.z + bot.z)
+        tip, _ = _cast_on(wing, Vector((side * (WG.HW_TIP + 1.0), s - 7.835, zc)), (-side, 0, 0), 2.0)
+        if tip is None:
+            continue
+        t = max(0.012, 0.42 * (top.z - bot.z))
+        ob = uv_sphere(f"WingTipLight_{tag}", tip - Vector((side * 0.004, 0, 0)), (0.022, 0.11, t), coll,
+                       M.get(mat), seg=16, rings=8)
+        ob["light"] = "nav"
+        _keep_parent(ob, wing)
+        out.append(ob)
     return out
 
 
@@ -514,7 +591,7 @@ def build(ctx):
                + build_antennas(coll, skin)
                + build_gun(coll) + build_receptacle(coll)):
         objs[ob.name] = ob
-    for ob in build_lights(lights, skin) + build_flame(lights):
+    for ob in build_lights(lights, skin, ctx["objects"]) + build_flame(lights):
         objs[ob.name] = ob
     hook = build_tailhook(coll, skin)
     if hook:

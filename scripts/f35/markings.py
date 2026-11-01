@@ -24,9 +24,11 @@ from .textures import Canvas, roundel_image, _FONT
 from . import materials as M
 
 SERIAL = "901"
-STAR_BLUE = (0.12, 0.20, 0.42)
-DISC = (0.80, 0.83, 0.86)
+# low-vis roundel: a light blue-grey disc (about 1.7-2x the skin in photos ref_01, ref_06, ref_08)
+# with the star left open, so it is the airframe grey (sRGB values: the decal images are 8-bit)
+DISC = (0.60, 0.65, 0.69)
 MARK_WHITE = (0.82, 0.84, 0.86)
+WING_ROUNDEL = (10.35, 3.70, 0.47)     # station, half span, decal size (disc = 0.96 x size)
 
 
 # ---------------------------------------------------------------- painting
@@ -45,7 +47,7 @@ def _alpha_from_rgb(c):
 # stroke font for the serial: digits as polylines on a 4 x 7 grid
 _DIGITS = {
     "0": [[(0, 0.6), (0, 6.4), (0.6, 7), (3.4, 7), (4, 6.4), (4, 0.6), (3.4, 0), (0.6, 0), (0, 0.6)]],
-    "1": [[(1.2, 1.0), (2.4, 0), (2.4, 7)], [(1.2, 7), (3.6, 7)]],
+    "1": [[(1.2, 1.0), (2.4, 0), (2.4, 7)]],
     "2": [[(0, 1.0), (0.8, 0), (3.2, 0), (4, 0.9), (4, 2.6), (0, 7), (4, 7)]],
     "3": [[(0, 0.6), (0.6, 0), (3.4, 0), (4, 0.6), (4, 2.8), (3.3, 3.5), (1.4, 3.5)],
           [(3.3, 3.5), (4, 4.2), (4, 6.4), (3.4, 7), (0.6, 7), (0, 6.4)]],
@@ -70,33 +72,52 @@ def serial_image(text, name, w=768, h=288, col=MARK_WHITE):
     y0 = (h - gh) / 2
     for k, ch in enumerate(text):
         for poly in _DIGITS.get(ch, []):
-            _stroke(c, [(x0 + k * adv + px * sc, y0 + py * sc) for px, py in poly], sc * 0.95, col)
+            _stroke(c, [(x0 + k * adv + px * sc, y0 + py * sc) for px, py in poly], sc * 1.45, col)
     _alpha_from_rgb(c)
     return c.to_image(name)
 
 
-def eagle_image(name, size=1024, col=MARK_WHITE, t=None):
-    """Original stylised bird-of-prey head (outline style used on IAF jets)."""
+# Squadron emblems: original stylised line drawings on a 100 x 100 grid (y down), the head facing
+# +x, which the decals turn towards the nose.  The photos (ref_04, ref_05, ref_06, ref_07) show a
+# perched eagle filling most of each fin and a flying eagle with raised wings on the inlet sides.
+_PERCHED = [
+    [(46, 31), (49, 22), (55, 15), (63, 11), (71, 10), (78, 11), (84, 14), (89, 18), (93, 24), (94, 30), (91, 35),
+     (89, 30), (85, 28)],                                                         # head and hooked beak
+    [(85, 28), (80, 29), (75, 28)], [(88, 31), (84, 34), (78, 35)],               # gape, jaw
+    [(78, 35), (77, 44), (75, 54), (71, 64), (65, 72), (58, 78), (52, 81)],     # breast
+    [(46, 31), (42, 36), (45, 37), (40, 42), (35, 50), (30, 60), (26, 70), (22, 80), (17, 91)],   # nape, back
+    [(52, 34), (60, 41), (64, 51), (63, 61), (58, 70), (49, 78), (38, 86), (27, 93)],              # folded wing
+    [(53, 46), (57, 54), (55, 63)], [(42, 63), (50, 67)], [(37, 71), (45, 75)], [(32, 79), (40, 83)],
+    [(17, 91), (22, 97), (27, 93)],                                               # tail
+    [(55, 80), (55, 87)], [(64, 75), (66, 87)],                                   # legs
+    [(51, 90), (53, 87), (58, 87), (60, 90)], [(62, 90), (64, 87), (69, 87), (71, 90)],          # talons
+    [(40, 91), (86, 91)],                                                         # perch
+    [(63, 16), (71, 16), (82, 21)],                                               # brow
+]
+_PERCHED_EYE = (73.0, 21.5, 2.6)
+_FLYING = [
+    [(42, 58), (52, 52), (62, 48), (70, 46), (76, 42), (82, 40), (88, 41), (92, 45), (94, 50), (91, 54), (89, 49),
+     (85, 50)],                                                                   # back, head, beak
+    [(90, 52), (86, 56), (80, 58), (74, 64), (64, 70), (52, 71), (44, 67), (42, 64)],             # throat, belly
+    [(42, 58), (28, 55), (23, 61), (28, 68), (42, 64)],                           # tail
+    [(66, 47), (70, 37), (73, 26), (74, 15), (73, 6), (68, 1), (66, 8), (61, 3), (60, 10), (55, 6), (55, 14),
+     (50, 11), (51, 20), (47, 24), (52, 28), (48, 33), (53, 37), (50, 42), (56, 46), (57, 50)],  # near wing
+    [(48, 54), (44, 42), (40, 31), (35, 21), (29, 12), (26, 17), (22, 11), (21, 20), (17, 16), (19, 25), (15, 23),
+     (21, 32), (27, 40), (33, 47), (40, 55)],                                     # far wing
+    [(58, 70), (60, 80)], [(66, 68), (69, 79)],                                   # legs
+    [(57, 83), (60, 80), (63, 83)], [(66, 82), (69, 79), (72, 82)],               # talons
+]
+_FLYING_EYE = (84.0, 45.0, 2.0)
+
+
+def emblem_image(name, polys, eye, size=1024, col=MARK_WHITE, t=2.6):
     c = Canvas(size, size, (0, 0, 0))
     s = size / 100.0
-    t = t or 2.6 * s
-
-    def S(pts):
-        return [(x * s, y * s) for x, y in pts]
-    # back of head/neck -> crown -> brow -> hooked upper beak
-    upper = [(18, 94), (15, 80), (16, 66), (21, 52), (29, 40), (39, 30), (51, 23), (62, 20), (71, 21),
-             (78, 24), (84, 28), (89, 32), (93, 37), (96, 43), (96, 50), (93, 54), (91, 50), (88, 47)]
-    gape = [(88, 47), (80, 47), (71, 45)]
-    lower = [(88, 47), (85, 51), (78, 53), (71, 52)]
-    throat = [(71, 52), (64, 58), (57, 67), (52, 78), (49, 90), (48, 97)]
-    brow = [(56, 28), (64, 25), (72, 26), (78, 30)]
-    nare = [(84, 36), (87, 38)]
-    feathers = [[(28, 62), (36, 70), (31, 78)], [(36, 52), (44, 60), (40, 69)], [(26, 78), (33, 86), (28, 94)],
-                [(42, 72), (47, 80), (43, 90)]]
-    for poly in [upper, gape, lower, throat, brow, nare] + feathers:
-        _stroke(c, S(poly), t)
-    c.circle(68 * s, 33 * s, 3.4 * s, col)              # eye
-    c.circle(68.6 * s, 33 * s, 1.5 * s, (0, 0, 0))
+    for poly in polys:
+        _stroke(c, [(x * s, y * s) for x, y in poly], t * s)
+    ex, ey, er = eye
+    c.circle(ex * s, ey * s, er * s, col)
+    c.circle((ex + 0.5) * s, (ey + 0.2) * s, er * 0.42 * s, (0, 0, 0))
     _alpha_from_rgb(c)
     c.px[:, :, :3] = np.where(c.px[:, :, 3:4] > 0, np.array(col, dtype=np.float32), 0.0)
     return c.to_image(name)
@@ -273,9 +294,10 @@ def build(ctx):
     coll = get_collection("Markings", root)
     obj = ctx["objects"]
     fus = obj["Fuselage"]
-    roundel = decal_material("F35_Decal_Roundel", roundel_image("IAF_Roundel", 512, STAR_BLUE, DISC))
+    roundel = decal_material("F35_Decal_Roundel", roundel_image("IAF_Roundel", 512, None, DISC))
     serial = decal_material("F35_Decal_Serial", serial_image(SERIAL, "IAF_Serial"))
-    eagle = decal_material("F35_Decal_Eagle", eagle_image("Sqn_Eagle"))
+    eagle_fin = decal_material("F35_Decal_Eagle", emblem_image("Sqn_Eagle_Perched", _PERCHED, _PERCHED_EYE))
+    eagle = decal_material("F35_Decal_Eagle_Flying", emblem_image("Sqn_Eagle_Flying", _FLYING, _FLYING_EYE))
     rescue = {1: decal_material("F35_Decal_Rescue_L", rescue_image("Rescue_Stencil_L", 1)),
               -1: decal_material("F35_Decal_Rescue_R", rescue_image("Rescue_Stencil_R", -1))}
     seat = decal_material("F35_Decal_EjectSeat", danger_triangle_image("Danger_EjectSeat", ("EJECTION", "SEAT")))
@@ -307,24 +329,34 @@ def build(ctx):
             zw = 0.5 * (sill_z(2.68) + glass_edge_z(2.68))     # middle of the frame band
             out.append(decal_on(f"Stencil_CanopyWarn_{tag}", coll, band, 2.68, side, zw, 0.64, 0.065,
                                 canopy_warn, nu=28, nv=6))
-        # wings: upper + lower roundels
+        # wings: upper + lower roundels, a 0.45 m disc at about 47 % chord (photos ref_06 of 901 from
+        # above, ref_07 of 919 from below); the upper ones sit on a lighter patch (panels.layout)
         wing = obj.get(f"Wing_{tag}")
         if wing is not None:
-            out.append(decal(f"Roundel_WingTop_{tag}", coll, wing, P(10.35, side * 3.0, 0.6), (side, 0, 0),
-                             (0, -1, 0), (0, 0, -1), 1.0, 1.0, roundel))
-            out.append(decal(f"Roundel_WingBot_{tag}", coll, wing, P(10.35, side * 3.0, -0.2), (-side, 0, 0),
-                             (0, -1, 0), (0, 0, 1), 1.0, 1.0, roundel))
-        # fins: eagle on the outer face
+            out.append(decal(f"Roundel_WingTop_{tag}", coll, wing, P(WING_ROUNDEL[0], side * WING_ROUNDEL[1], 0.6),
+                             (side, 0, 0), (0, -1, 0), (0, 0, -1), WING_ROUNDEL[2], WING_ROUNDEL[2], roundel))
+            out.append(decal(f"Roundel_WingBot_{tag}", coll, wing, P(WING_ROUNDEL[0], side * WING_ROUNDEL[1], -0.2),
+                             (-side, 0, 0), (0, -1, 0), (0, 0, 1), WING_ROUNDEL[2], WING_ROUNDEL[2], roundel))
+        # fins: a perched eagle over most of the outer face, aft of the formation-light strip (LE + 0.21 m)
+        # and running onto the rudder (its part is a second decal that moves with the rudder), and the
+        # serial low on the fin near mid-chord (photos ref_06 of 901, ref_07 of 919)
         fin = obj.get(f"Fin_{tag}")
         if fin is not None:
-            cant = math.radians(20.0)
-            span = Vector((side * math.sin(cant), 0, math.cos(cant)))
-            nrm = Vector((side * math.cos(cant), 0, -math.sin(cant)))
-            centre = P(13.32, side * 1.42, 0.35) + span * 1.35
-            out.append(decal(f"Eagle_Fin_{tag}", coll, fin, centre + nrm * 0.3, u_bird, span, -nrm, 1.36, 1.36,
-                             eagle))
-        # inlet side eagle (smaller)
-        out.append(decal(f"Eagle_Inlet_{tag}", coll, fus, P(6.85, side * 2.0, -0.18), u_bird, (0, 0, 1), ray,
+            from .tails import FIN_CANT, FIN_ROOT
+            span = Vector((side * math.sin(FIN_CANT), 0, math.cos(FIN_CANT)))
+            nrm = Vector((side * math.cos(FIN_CANT), 0, -math.sin(FIN_CANT)))
+            root = P(0.0, side * FIN_ROOT[0], FIN_ROOT[1])
+            centre = root + Vector((0, 13.52, 0)) + span * 1.02
+            for part, target in (("", fin), ("_Rudder", obj.get(f"Rudder_{tag}"))):
+                if target is not None:
+                    out.append(decal(f"Eagle_Fin{part}_{tag}", coll, target, centre + nrm * 0.3, u_bird, span, -nrm,
+                                     1.40, 1.40, eagle_fin, nu=32, nv=32))
+            sc = root + Vector((0, 12.45, 0)) + span * 0.36
+            out.append(decal(f"Serial_Fin_{tag}", coll, fin, sc + nrm * 0.3, u, span, -nrm, 0.68, 0.255, serial,
+                             nu=24, nv=10))
+        # inlet side eagle (smaller): under the forward formation strip, just ahead of the fastened
+        # access panel (photos ref_04, ref_05, ref_07 of three IAF jets)
+        out.append(decal(f"Eagle_Inlet_{tag}", coll, fus, P(5.10, side * 2.0, -0.18), u_bird, (0, 0, 1), ray,
                          0.55, 0.55, eagle))
     out = [o for o in out if o is not None]
     ctx["objects"].update({o.name: o for o in out})

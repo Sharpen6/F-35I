@@ -50,7 +50,8 @@ IMG_NAMES = {"top": "F35_Panels_Top", "bottom": "F35_Panels_Bottom", "side": "F3
 R, G, B = 0, 1, 2
 
 LINE_W = 1.35                  # panel line width (px)
-TAPE_W = 7.0                   # sealant tape band width (px)
+TAPE_W = 11.0                  # sealant tape band width along door outlines (px, ~3.3 cm; ref_03 4-5 cm)
+FRAME_W = 21.0                 # RAM tape frames over the upper fuselage seams (px, ~6.3 cm)
 
 
 def images():
@@ -266,6 +267,22 @@ class Painter:
                 for run in self.trace(kind, offset_polyline(vp, off), sd):
                     self.dots(run, pitch)
 
+    def frame(self, kind, pts, mirror=True, step=0.09, amp=0.014, width=FRAME_W, value=0.8, rivets=None,
+              side=1):
+        """RAM tape frame over a seam (photos ref_05, ref_06 of 901, c14, c51, c53): the seam itself
+        (R) under a band whose edges step every ~9 cm (G), stepped on both sides."""
+        self.line(kind, pts, mirror=mirror, rivets=rivets, side=side)
+        sq = square_wave(list(pts), step, amp)
+        if kind == "side":
+            variants = [(sq, 1), (sq, -1)] if mirror else [(sq, side)]
+        else:
+            variants = [(sq, 1)]
+            if mirror:
+                variants.append(([(a, -b) for a, b in sq], 1))
+        for vp, sd in variants:
+            for run in self.trace(kind, vp, sd, step=0.006):
+                self.stroke(run, G, width, value)
+
     def patch(self, kind, poly, c=B, value=0.5, mirror=True, side=1):
         """Filled coating patch, drawn directly in its own map (no ray cast)."""
         polys = []
@@ -339,6 +356,27 @@ def sawtooth(pts, teeth, amp):
             out.append((a0 + (a1 - a0) * t0 + na * amp, b0 + (b1 - b0) * t0 + nb * amp))
             t1 = (i + 1) / n
             out.append((a0 + (a1 - a0) * t1, b0 + (b1 - b0) * t1))
+    return out
+
+
+def square_wave(pts, step, amp):
+    """Polyline -> a square wave about it: runs of `step` length offset alternately by +amp and
+    -amp, joined by short square shoulders."""
+    out = []
+    k = 0
+    for (a0, b0), (a1, b1) in zip(pts, pts[1:]):
+        L = math.hypot(a1 - a0, b1 - b0)
+        if L < 1e-6:
+            continue
+        ta, tb = (a1 - a0) / L, (b1 - b0) / L
+        na, nb = -tb, ta
+        n = max(1, int(round(L / step)))
+        for i in range(n):
+            o = amp if k % 2 == 0 else -amp
+            t0, t1 = i / n, (i + 1) / n
+            out.append((a0 + (a1 - a0) * t0 + na * o, b0 + (b1 - b0) * t0 + nb * o))
+            out.append((a0 + (a1 - a0) * t1 + na * o, b0 + (b1 - b0) * t1 + nb * o))
+            k += 1
     return out
 
 
@@ -509,25 +547,25 @@ def layout(pt):
     pt.line("side", [(10.6, 0.22), (14.9, 0.22)], rivets=(0.025, 0.04))
 
     # ---- top: forebody, spine, shoulders --------------------------------
+    # The upper fuselage panels are outlined by stair-stepped RAM tape frames from just aft of the
+    # canopy over both shoulders and along the spine to the aft deck (photos ref_05, ref_06 of 901,
+    # c14, c51, c53).  They read darker or lighter than the paint depending on the light.
     pt.line("top", rect(1.55, 1.90, -0.22, 0.22), mirror=False, closed=True)
-    pt.line("top", [(5.10, 0.30), (11.2, 0.30)], rivets=(0.03, 0.035))
+    pt.frame("top", [(5.10, 0.30), (11.2, 0.30)], rivets=(0.045, 0.035))
     for s in (6.6, 8.0, 9.4):
-        pt.line("top", [(s, -0.30), (s, 0.30)], mirror=False)
+        pt.frame("top", [(s, -0.30), (s, 0.30)], mirror=False)
     pt.line("top", [(4.95, 0.52), (4.95, 1.48)], saw=(5, 0.06), tape=True)
-    pt.line("top", [(5.0, 0.80), (10.8, 0.86)], rivets=(0.03, 0.035))
+    pt.frame("top", [(5.0, 0.80), (10.8, 0.86)], rivets=(0.045, 0.035))
     for s in (6.4, 7.9, 9.5):
-        pt.line("top", [(s, 0.32), (s, 1.45)])
+        pt.frame("top", [(s, 0.32), (s, 1.45)])
     pt.line("top", [(5.05, 1.40), (6.80, 1.55), (8.20, 1.66)], rivets=(-0.03, 0.035))
     # inlet top: line parallel to the cowl lip
     pt.line("top", [(4.62, 0.98), (4.82, 1.50)], tape=True)
-    # "checker" repair squares on the left shoulder (seen on many jets)
-    for (s, x) in ((6.55, 1.02), (6.70, 1.14), (6.85, 1.02), (7.00, 1.14), (6.70, 0.90), (7.15, 1.02)):
-        pt.patch("top", rect(s, s + 0.13, x, x + 0.11), B, 0.45)
 
     # ---- top: engine bay and aft deck ------------------------------------
-    pt.line("top", [(11.2, 0.62), (13.9, 0.62)], rivets=(0.03, 0.04))
+    pt.frame("top", [(11.2, 0.62), (13.9, 0.62)], rivets=(0.045, 0.04))
     for s in (11.2, 12.5):
-        pt.line("top", [(s, -0.62), (s, 0.62)], mirror=False)
+        pt.frame("top", [(s, -0.62), (s, 0.62)], mirror=False)
     pt.line("top", [(13.9, -0.62), (13.9, 0.62)], saw=(6, 0.07), mirror=False, tape=True)
     pt.line("top", [(11.2, 0.62), (11.2, 1.25), (12.6, 1.30)])
 
@@ -540,24 +578,27 @@ def layout(pt):
     pt.line("bottom", [(8.62, 1.30), (10.60, 1.30)])
 
     # ---- wings: control-surface hinge lines, spar lines, LE strip --------
+    # The close top view ref_06 shows only the LEF and flaperon outlines, the roundel patch and a
+    # small U-shaped panel on the fixed tip TE; the spar lines are kept very faint on the underside.
     for kind in ("top", "bottom"):
         a, b = WG.LEF_HW
-        hl = [(WG.le(hw) + WG.LEF_FRAC * (WG.te(hw) - WG.le(hw)), hw) for hw in np.linspace(a, b, 12)]
-        pt.line(kind, hl)
+        pt.line(kind, [(WG.lef_hinge(hw), hw) for hw in np.linspace(a, b, 12)])
         for hw in (a, b):
-            pt.line(kind, [(WG.le(hw) - 0.05, hw), (WG.le(hw) + WG.LEF_FRAC * (WG.te(hw) - WG.le(hw)), hw)])
+            pt.line(kind, [(WG.le(hw) - 0.05, hw), (WG.lef_hinge(hw), hw)])
         a, b = WG.FLAP_HW
-        fl = [(WG.le(hw) + WG.FLAP_FRAC * (WG.te(hw) - WG.le(hw)), hw) for hw in np.linspace(a, b, 12)]
-        pt.line(kind, fl)
+        pt.line(kind, [(WG.flap_hinge(hw), hw) for hw in np.linspace(a, b, 12)])
         for hw in (a, b):
-            pt.line(kind, [(WG.le(hw) + WG.FLAP_FRAC * (WG.te(hw) - WG.le(hw)), hw), (WG.te(hw) + 0.05, hw)])
-        sp = [(WG.le(hw) + 0.48 * (WG.te(hw) - WG.le(hw)), hw) for hw in np.linspace(1.95, 4.9, 12)]
-        pt.line(kind, sp, rivets=(0.03, 0.04))
-        sp2 = [(WG.le(hw) + 0.68 * (WG.te(hw) - WG.le(hw)), hw) for hw in np.linspace(1.95, 4.9, 12)]
-        pt.line(kind, sp2)
-        pt.line(kind, [(WG.le(2.45), 2.45), (WG.te(2.45), 2.45)])
-        pt.line(kind, [(WG.le(3.60) + 0.2 * (WG.te(3.6) - WG.le(3.6)), 3.6),
-                       (WG.le(3.60) + 0.68 * (WG.te(3.6) - WG.le(3.6)), 3.6)])
+            pt.line(kind, [(WG.flap_hinge(hw), hw), (WG.te(hw) + 0.05, hw)])
+        h0, h1 = WG.FLAP_HW[1] + 0.07, WG.FLAP_HW[1] + 0.42
+        pt.line(kind, [(WG.te(h0) + 0.05, h0), (WG.te(h0) - 0.38, h0), (WG.te(h1) - 0.38, h1),
+                       (WG.te(h1) + 0.05, h1)])
+    sp = [(WG.le(hw) + 0.48 * (WG.te(hw) - WG.le(hw)), hw) for hw in np.linspace(1.95, 4.6, 12)]
+    pt.line("bottom", sp, value=0.45)
+    # lighter rectangular patch under each upper-wing roundel (ref_06: about 0.95 x 0.5 m)
+    from .markings import WING_ROUNDEL
+    ws, wx, _ = WING_ROUNDEL
+    pt.patch("top", rect(ws - 0.25, ws + 0.25, wx - 0.475, wx + 0.475), B, 0.80)
+    for kind in ("top", "bottom"):
         # lighter leading-edge strip
         le_pts = [(WG.le(hw), hw) for hw in np.linspace(1.80, 5.37, 30)]
         strip = [(s - 0.02, hw) for s, hw in le_pts] + [(s + 0.09, hw) for s, hw in reversed(le_pts)]
