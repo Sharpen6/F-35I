@@ -115,7 +115,7 @@ const BLOOM_UP_FRAG = /* glsl */`
   }`;
 
 // ------------------------------------------------------------------------------------------
-// sun visibility: how much of the disc shows in the HDR frame (1 x 1 target, 25 samples)
+// sun visibility: how much of the disc shows in the HDR frame (1 x 1 target, 21 samples)
 
 const SUN_VIS_FRAG = /* glsl */`
   precision highp float;
@@ -522,8 +522,11 @@ export class Post {
   }
 
   /**
-   * Moves the transparent objects near the camera (bounds < 150 m, within 800 m; not the
-   * transmissive glass, which samples the opaque frame) to layer 31 only, and lists the lights.
+   * Moves the transparent objects near the camera that do not write depth (bounds < 150 m, within
+   * 800 m; not the transmissive glass, which samples the opaque frame) to layer 31 only, and lists
+   * the lights. They are out of this frame's shadow pass too: glass, plumes and sprites should not
+   * cast shadows anyway. Transparent materials that write depth (foliage cards, say) stay in the
+   * main pass: they cast their shadows and their depth already stops the clouds in front of them.
    */
   _liftNear(scene, camera) {
     const list = this._near || (this._near = []);
@@ -537,7 +540,7 @@ export class Post {
       const m = o.material;
       if (!m) return;
       // decals (polygon offset) lie on opaque surfaces whose depth already stops the clouds
-      const lift = (x) => x.transparent && !(x.transmission > 0) && !x.polygonOffset;
+      const lift = (x) => x.transparent && !x.depthWrite && !(x.transmission > 0) && !x.polygonOffset;
       if (Array.isArray(m)) { if (!m.length || !m.every(lift)) return; }
       else if (!lift(m)) return;
       let r = 1, d;
