@@ -16,6 +16,7 @@
 //   quality=low|medium|high, cam=cockpit|chase|orbit|flyby|tower, wingmen=0|1
 //   depth=log|reversed   depth buffer (default log: the cockpit and a 400 km horizon in one view)
 //   post=0         no HDR post-processing (js/env/Post.js): draw straight to the canvas (fallback)
+//   clouds=clear|few|scattered|broken|cirrus   weather for this session (js/env/Clouds.js; default: the menu's)
 
 import * as THREE from 'three';
 import { Input } from './input/Input.js';
@@ -25,6 +26,7 @@ import { UI, formatHours } from './ui/Menu.js';
 import { BindingsUI } from './ui/BindingsUI.js';
 import { Effects } from './ui/Effects.js';
 import { EngineSound } from './audio/EngineSound.js';
+import { Clouds } from './env/Clouds.js';      // lighting: cumulus and cirrus, weather presets
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -258,6 +260,7 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+    if (!STUBS) this.addModule(new Clouds(ctx));          // lighting: clouds (?clouds=, menu Weather), drawn by Post
   }
 
   /**
