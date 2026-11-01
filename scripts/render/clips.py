@@ -550,12 +550,14 @@ def encode_mp4_blender(frames_dir, n, mp4_path, fps):
     sc.frame_start, sc.frame_end = 1, n
     sc.view_settings.view_transform = 'Standard'
     se = sc.sequence_editor_create()
-    strips = getattr(se, "strips", None) or se.sequences
+    strips = se.strips if hasattr(se, "strips") else se.sequences
     st = strips.new_image("frames", first, 1, 1)
     for f in range(2, n + 1):
         st.elements.append(f"{f:04d}.png")
     r = sc.render
     r.use_sequencer = True
+    if hasattr(r.image_settings, "media_type"):          # Blender 5: video is a media type
+        r.image_settings.media_type = 'VIDEO'
     r.image_settings.file_format = 'FFMPEG'
     r.ffmpeg.format = 'MPEG4'
     r.ffmpeg.codec = 'H264'
