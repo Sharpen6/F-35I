@@ -6,8 +6,10 @@
 // (204.8 km, 100 m on high), both computed in a worker (horizonWorker.js) and stored as one
 // R8 texture array (one sampler unit). A point is lit when the sun stands above its horizon
 // (soft over the sun's disc). Recomputed when the sun's azimuth moves by more than 0.5 deg
-// (2 deg when the sun is high and shadows are short) or the camera moves 6 km; the old maps
-// stay in use meanwhile. The sun's elevation can change freely without recomputing.
+// (2 deg when the sun is high and shadows are short) or the camera moves 1/8 of the near map
+// (6.4 km on high); the old maps stay in use meanwhile, unless the sun is more than 5 deg of
+// azimuth away from them (a time jump): then there are no terrain shadows until the new maps
+// arrive. The sun's elevation can change freely without recomputing.
 //
 // For other modules (trees, buildings, the aircraft): terrain.horizon.uniforms plus
 // HORIZON_GLSL give terrainSunVisibility(worldXZ, h, localUp) in any shader (one sampler),
@@ -122,15 +124,18 @@ export class HorizonMap {
   /** Per frame: asks for new maps when the sun or the camera moved enough. */
   update(cam, sunDir) {
     const U = this.uniforms;
-    U.uHorizonNear.value.w = this.enabled && this.maps ? 1 : 0;
-    if (!this.enabled || !this.ready || this.busy) return;
     const hx = sunDir.x, hz = sunDir.z;
     const hl = Math.hypot(hx, hz);
+    const last = this._last;
+    // maps made for a sun more than 5 deg of azimuth away (after a time jump) would cast the
+    // wrong shadows: none until the new ones arrive
+    const fresh = !!last && hl > 1e-4 && (hx * last.ax + hz * last.az) / hl > Math.cos(5 * Math.PI / 180);
+    U.uHorizonNear.value.w = this.enabled && this.maps && fresh ? 1 : 0;
+    if (!this.enabled || !this.ready || this.busy) return;
     if (hl < 1e-4 || sunDir.y < -0.05) { this.pending = false; return; }       // overhead or night
     const ax = hx / hl, az = hz / hl;
     const Q = HORIZON_QUALITY[this.quality];
     const elev = Math.atan2(sunDir.y, hl);
-    const last = this._last;
     let want = !last || last.n !== Q.n;
     if (!want) {
       const dAz = Math.acos(Math.min(1, ax * last.ax + az * last.az));

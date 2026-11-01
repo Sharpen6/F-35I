@@ -120,7 +120,8 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   horizon (soft over the sun's disc), so hills shade valleys at sunrise and sunset and the
   Judean desert's cliffs shade the Dead Sea shore. Recomputed when the sun's azimuth moves
   0.5 deg (2 deg with a high sun) or the camera moves 1/8 of the near map; the old maps stay
-  in use meanwhile (a few hundred ms on a desktop CPU). Other modules can use
+  in use meanwhile (a few hundred ms on a desktop CPU), except after a time jump of more than
+  5 deg of sun azimuth, when the terrain casts no shadow until the new maps are there. Other modules can use
   `HORIZON_GLSL` + `terrain.horizon.uniforms` (`terrainSunVisibility(xz, h, up)` in GLSL,
   one sampler) or `terrain.sunVisibilityAt(x, y, z)` on the CPU.
 * **City lights at night** (`uNight`): street lamps along street grids turned to the
