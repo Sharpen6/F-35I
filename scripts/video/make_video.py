@@ -100,25 +100,33 @@ PROGRESS = {
     "045": "Flight sim first look: the jet in the browser over 100 km of central Israel",
 }
 CLIPS = [  # (file stem, title, caption)
-    ("turntable_v6", "Turntable", "Final paint, sky and the new pilot"),
-    ("gear_retract_v6", "Landing gear", "Retraction: legs fold, wheels turn, doors sequence"),
-    ("canopy_open_v6", "Canopy", "Canopy opens on its forward hinge"),
-    ("pilot_look_v6", "Pilot", "Head look: left, right, up and down"),
-    ("startup_v6", "Start-up", "Battery, IPP, displays, lights, engine start: every switch is live"),
-    ("controls_v6", "Flight controls", "Stabilators, flaperons, rudders and leading-edge flaps on the stick"),
-    ("weapon_bays_v6", "Weapon bays", "Bay doors and the stores inside"),
-    ("afterburner_v5", "Afterburner", "Throttle from idle to full reheat and back"),
-    ("walkaround_v6", "Walk-around", "A slow walk round the parked jet"),
+    ("turntable_v8", "Turntable", "Final paint, sky and the new pilot"),
+    ("gear_retract_v8", "Landing gear", "Retraction: legs fold, wheels turn, doors sequence"),
+    ("canopy_open_v8", "Canopy", "Canopy opens on its forward hinge"),
+    ("pilot_look_v8", "Pilot", "Head look: left, right, up and down"),
+    ("startup_v8", "Start-up", "Battery, IPP, displays, lights, engine start: every switch is live"),
+    ("controls_v8", "Flight controls", "Stabilators, flaperons, rudders and leading-edge flaps on the stick"),
+    ("weapon_bays_v8", "Weapon bays", "Bay doors and the stores inside"),
+    ("afterburner_v8", "Afterburner", "Throttle from idle to full reheat and back"),
+    ("walkaround_v8", "Walk-around", "A slow walk round the parked jet"),
 ]
 FALLBACK = {  # older takes used when a clip has not been rendered yet
-    "turntable_v6": "turntable_v5",
-    "gear_retract_v6": "gear_retract_v4", "canopy_open_v6": "canopy_open_v4", "pilot_look_v6": "pilot_look_v4",
-    "controls_v6": "controls_v4", "weapon_bays_v6": "weapon_bays_v4",
+    "turntable_v8": "turntable_v6", "gear_retract_v8": "gear_retract_v6", "canopy_open_v8": "canopy_open_v7",
+    "pilot_look_v8": "pilot_look_v7", "startup_v8": "startup_v7", "controls_v8": "controls_v6",
+    "weapon_bays_v8": "weapon_bays_v6", "afterburner_v8": "afterburner_v5", "walkaround_v8": "walkaround_v6",
+    "destruction_v8": "destruction_v6", "sim_first_flight_v1_1080p": "sim_first_flight_v1",
 }
 VERSIONS = [  # (title, [clip stems oldest -> newest])
-    ("Turntable, five versions", ["turntable_v2", "turntable_v3", "turntable_v4", "turntable_v5", "turntable_v6"]),
-    ("Gear retraction, four versions", ["gear_retract", "gear_retract_v3", "gear_retract_v4", "gear_retract_v6"]),
-    ("Pilot look, three versions", ["pilot_look", "pilot_look_v4", "pilot_look_v6"]),
+    ("Turntable, six versions", ["turntable_v2", "turntable_v3", "turntable_v4", "turntable_v5", "turntable_v6",
+                                 "turntable_v8"]),
+    ("Gear retraction, five versions", ["gear_retract", "gear_retract_v3", "gear_retract_v4", "gear_retract_v6",
+                                        "gear_retract_v8"]),
+    ("Pilot look, five versions", ["pilot_look", "pilot_look_v4", "pilot_look_v6", "pilot_look_v7", "pilot_look_v8"]),
+    ("Start-up, three versions", ["startup_v6", "startup_v7", "startup_v8"]),
+]
+SIM_FILMS = [  # (clip stem, caption): flights filmed in the browser sim on the PC (sim/tests/pc_capture.py)
+    ("sim_first_flight_v1_1080p", "First filmed flight: Tel Nof take-off, the Tel Aviv coast, Jerusalem at sunset, "
+                                  "the Dead Sea"),
 ]
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp", ".exr")
 
@@ -386,8 +394,8 @@ def build(tl, only=None):
     # title
     tl.card("F-35I  ADIR", "A procedural Blender model: built, rigged, animated and broken.  The making-of.",
             seconds=8.0)
-    tl.movie(clip("turntable_v6"), "Built entirely from Python scripts: no hand modelling")
-    tl.movie(clip("afterburner_v5"))
+    tl.movie(clip("turntable_v8"), "Built entirely from Python scripts: no hand modelling")
+    tl.movie(clip("afterburner_v8"))
     if want(1):
         tl.chapter(1, "Research", "Public photos, a 3-view drawing and published dimensions")
         tl.card("Published dimensions", body=DIMENSIONS, seconds=10.0)
@@ -416,6 +424,8 @@ def build(tl, only=None):
         tl.chapter(4, "Detail work", "Review renders against the photos, then fix, then review again")
         for p in sorted(glob.glob(R("renders", "progress", "*.*"))):
             num = os.path.basename(p)[:3]
+            if num >= "045":                      # the flight sim stills have their own chapter (9)
+                continue
             tl.image(p, 8.5, f"{num}  ·  {PROGRESS.get(num, os.path.basename(p)[4:-4].replace('_', ' '))}")
         tl.end_chapter()
     if want(5):
@@ -441,7 +451,7 @@ def build(tl, only=None):
                 tl.image(p, 7.0, PROGRESS[num])
         for p in sorted(glob.glob(R("renders", "video", "tables", "*.png"))):
             tl.image(p, 9.0, None, push=0.02)
-        tl.movie(clip("destruction_v6"), "Two hits: the left wing tip tears off, then the left main gear folds")
+        tl.movie(clip("destruction_v8"), "Two hits: the left wing tip tears off, then the left main gear folds")
         tl.end_chapter()
     if want(8):
         tl.chapter(8, "Then and now", "The first version against the latest, then the same clips version after version")
@@ -457,12 +467,26 @@ def build(tl, only=None):
             for s in stems:
                 tl.movie(clip(s), f"{title}  ·  {s.replace('_', ' ')}")
         tl.end_chapter()
+    if want(9):
+        tl.chapter(9, "Flying it", "A browser flight simulator over 100 x 100 km of central Israel, flown on the PC")
+        tl.card("The world", body=(
+            "Heights: Copernicus DEM, 25 m in the core, 200 m out to the horizon\n"
+            "Colour and land cover: ESA WorldCover and its Sentinel-2 mosaic\n"
+            "Runways from OurAirports, checked against the imagery\n"
+            "The jet: this Blender model, exported with its moving parts"), seconds=9.0)
+        for p in sorted(glob.glob(R("renders", "progress", "04[5-9]_*")) + glob.glob(R("renders", "progress", "05[0-9]_*"))):
+            num = os.path.basename(p)[:3]
+            tl.image(p, 7.0, f"{num}  ·  {PROGRESS.get(num, os.path.basename(p)[4:-4].replace('_', ' '))}")
+        for stem, cap in SIM_FILMS:
+            tl.movie(clip(stem), cap)
+        tl.end_chapter()
     # credits
     tl.card("F-35I  ADIR", "Code, renders and every saved version: github.com/Sharpen6/F-35I", seconds=6.0)
     tl.card("Credits", body=(
         "Photos: U.S. Air Force (public domain), IAF / Maj. Ofer (CC BY 4.0),\n"
         "IDF Spokesperson's Unit (CC BY-SA 3.0), 3-view drawing from Wikimedia Commons\n"
         "Sky: Poly Haven, Kloofendal 48d Partly Cloudy (CC0)\n"
+        "Terrain: Copernicus DEM GLO-30 (ESA), ESA WorldCover 2021 (CC BY 4.0), OurAirports\n"
         "Modelled, rigged, animated and rendered in Blender 5.1"), seconds=10.0)
     return tl.f - 1
 
