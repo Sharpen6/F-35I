@@ -53,6 +53,12 @@ VIEWS = {
     # nose leg under its doors: front-left and low (as c51 / c53), and side on (as c48)
     "ng_fl":   ((2.4, -6.6, -1.05), (0.0, -3.7, -0.95), 45),
     "ng_side": ((5.0, -3.8, -1.0), (0.0, -3.8, -0.95), 50),
+    # left main gear at wheel height, side on and from the front-left
+    "mg_side": ((6.5, 2.4, -1.2), (2.0, 2.4, -0.9), 45),
+    "mg_fl":   ((4.6, -1.9, -1.3), (1.9, 2.2, -0.9), 40),
+    # shoulders from ahead and above: gun fairing (left) and vent fairing (right)
+    "gunf":    ((4.0, -2.6, 3.0), (0.9, 1.6, 0.8), 40),
+    "ventf":   ((-4.0, -2.6, 3.0), (-0.9, 1.6, 0.8), 40),
 }
 
 HIDE_PREFIX = ("HB_", "Hitbox", "Smoke", "Vapour", "Cut_", "CompareCam", "PrevCam", "MatchCam")
