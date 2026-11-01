@@ -45,7 +45,14 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
   ejection seat (the seat bucket set for a 1.78 m pilot, eyes at the design eye), strapped in by the seat's
   harness over the life-preserver lobes, the connector's lead plugged into the seat. The hands hold the
   side-stick and throttle through IK, the boots rest on the rudder pedals, and the head looks left, right,
-  up and down and tilts.
+  up and down and tilts. Inside the jet the pilot is decimated to a quarter of its vertices; faces of
+  different materials keep their borders, so the zones stay crisp.
+
+  ![The pilot, studio views](renders/progress/039_pilot_v5_studio.jpg)
+
+  Turntable: [`pilot_turntable_v5.mp4`](renders/animation/pilot_turntable_v5.mp4)
+  ([GIF](renders/gifs/pilot_turntable_v5.gif)); how it evolved:
+  [`040_pilot_versions.jpg`](renders/progress/040_pilot_versions.jpg).
 * **Cockpit switches:** 24 switches, each moves its lever (and guard), lights its LED when the battery
   is on, and drives the system it commands (lights, display, gear, bays, canopy, hook ...).
 * **Paint and light:** dark grey under a satin clear coat, tuned against two photos rendered from their
