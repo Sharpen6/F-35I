@@ -29,7 +29,7 @@ export function makeAtmosphereParams(visibilityKm = 60) {
     ozoneAbsorption: [0.650e-6, 1.881e-6, 0.085e-6],
     ozoneCenter: 25000,
     ozoneWidth: 15000,
-    groundAlbedo: 0.13,
+    groundAlbedo: 0.2,           // mean of the region (bright loess and limestone, fields, towns); the local value is in Environment
     visibilityKm,
   };
 }

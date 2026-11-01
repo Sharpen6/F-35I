@@ -15,6 +15,8 @@
 //   time=<h>       time of day (local solar hours, e.g. 7, 12.5, 19)
 //   quality=low|medium|high, cam=cockpit|chase|orbit|flyby|tower, wingmen=0|1
 //   depth=log|reversed   depth buffer (default log: the cockpit and a 400 km horizon in one view)
+//   post=0         no HDR post-processing (js/env/Post.js): draw straight to the canvas (fallback)
+//   clouds=clear|few|scattered|broken|cirrus   weather for this session (js/env/Clouds.js; default: the menu's)
 
 import * as THREE from 'three';
 import { Input } from './input/Input.js';
@@ -25,11 +27,14 @@ import { BindingsUI } from './ui/BindingsUI.js';
 import { Effects } from './ui/Effects.js';
 import { EngineSound } from './audio/EngineSound.js';
 import { Buildings } from './world/Buildings.js';       // graphics module: 3D buildings (sim/js/world)
+import { Clouds } from './env/Clouds.js';      // lighting: cumulus and cirrus, weather presets
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
 const TEST = params.get('test') === '1';
 const BENCH = params.get('bench') === '1';
+// HDR frame + bloom + glare + tone mapping (js/env/Post.js); ?post=0 draws straight to the canvas
+const POST = params.get('post') !== '0';
 
 const PHYS_HZ = 120;
 const H = 1 / PHYS_HZ;
@@ -38,6 +43,8 @@ const KT = 0.514444;
 const DEG = Math.PI / 180;
 const FAR = 650000;                 // m: the far terrain ends 205 km out, the horizon at altitude is further
 
+// render scale, device pixel ratio cap, sun shadow map size; the post-processing tiers (MSAA,
+// bloom levels, lens ghosts) are in js/env/Post.js (POST_TIERS), keyed by the same names
 const QUALITY = {
   low: { scale: 0.75, maxDpr: 1, shadow: 1024 },
   medium: { scale: 1, maxDpr: 1, shadow: 2048 },
@@ -133,8 +140,12 @@ class App {
       this.mods = await loadModules();
       const { Environment, Terrain, AircraftVisual } = this.mods;
       this.env = new Environment({ renderer: this.renderer, scene: this.scene });
+      // the HDR frame and its output transform (the canvas has no MSAA or depth of its own then)
+      if (POST && !STUBS) this.post = new (await import('./env/Post.js')).Post({ renderer: this.renderer, env: this.env, quality: this.settings.quality });
       this.effects = new Effects(this.scene);
       this.terrain = new Terrain({ renderer: this.renderer, scene: this.scene, env: this.env, baseUrl: 'data/terrain/' });
+      // lighting: ground albedo around the camera (land cover), lowest ground nearby (Dead Sea)
+      this.env.setTerrain?.(this.terrain);
       this.visual = new AircraftVisual({ scene: this.scene, baseUrl: 'data/aircraft/' });
       this.ui.progress('terrain', 0, 'starting');
       this.ui.progress('aircraft', 0, 'starting');
@@ -174,8 +185,12 @@ class App {
 
   _createRenderer() {
     const depth = chooseDepth();
+    // with the HDR post chain (js/env/Post.js) the scene goes into its own 4x MSAA half-float
+    // target and only the final pass draws to the canvas: no MSAA and no depth buffer here
+    const direct = !POST || STUBS;
     const r = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: direct,
+      depth: direct,
       powerPreference: 'high-performance',
       logarithmicDepthBuffer: depth === 'log',
       reversedDepthBuffer: depth === 'reversed',
@@ -249,6 +264,7 @@ class App {
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
     this.addModule(new Buildings(ctx));
+    if (!STUBS) this.addModule(new Clouds(ctx));          // lighting: clouds (?clouds=, menu Weather), drawn by Post
   }
 
   /**
@@ -314,6 +330,7 @@ class App {
       sun.shadow.mapSize.set(Q.shadow, Q.shadow);
       if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
     }
+    this.post?.setQuality(q);
     for (const m of this.modules) m.setQuality?.(q);
     this._saveSettings();
     if (!quiet) this.ui.syncMenu(this.settings, this.spawn);
@@ -695,7 +712,9 @@ class App {
     this.env.update(cam, dt);
     this.terrain.update(cam);
     this._updateModules(cam, dt, true);
-    this.renderer.render(this.scene, cam);
+    // HDR frame, clouds, bloom, glare and tone mapping (js/env/Post.js), or straight to the canvas
+    if (this.post) this.post.render(this.scene, cam);
+    else this.renderer.render(this.scene, cam);
 
     // helmet display / info strip
     const mode = this.cams.mode;

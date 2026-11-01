@@ -41,6 +41,14 @@ export class UI {
     for (const b of $('quality-list').querySelectorAll('button')) {
       b.addEventListener('click', () => app.setQuality(b.dataset.q));
     }
+    // lighting: weather presets (js/env/Clouds.js reads settings.clouds; choose() drops a ?clouds= override)
+    for (const b of $('clouds-list')?.querySelectorAll('button') || []) {
+      b.addEventListener('click', () => {
+        app.setOption('clouds', b.dataset.clouds);
+        app.clouds?.choose?.(b.dataset.clouds);
+        this.syncMenu(app.settings, app.spawn);
+      });
+    }
     $('opt-wingmen').addEventListener('change', (e) => app.setOption('wingmen', e.target.checked));
     $('opt-mousestick').addEventListener('change', (e) => app.setOption('mouseStick', e.target.checked));
     $('opt-buildings')?.addEventListener('change', (e) => app.setOption('buildings', e.target.checked));   // js/world/Buildings.js
@@ -120,6 +128,8 @@ export class UI {
       tl.appendChild(b);
     }
     for (const b of $('quality-list').querySelectorAll('button')) b.classList.toggle('selected', b.dataset.q === settings.quality);
+    const clouds = this.app.clouds?.preset || settings.clouds || 'few';
+    for (const b of $('clouds-list')?.querySelectorAll('button') || []) b.classList.toggle('selected', b.dataset.clouds === clouds);
     $('opt-wingmen').checked = !!settings.wingmen;
     $('opt-mousestick').checked = !!settings.mouseStick;
     if ($('opt-buildings')) $('opt-buildings').checked = settings.buildings !== false;

@@ -58,6 +58,9 @@ screenshot; or open the page in a normal browser window and leave it for a minut
 * **Graphics**: Low (75 % resolution, small shadow map), Medium, High (full resolution up to 2x
   for high-DPI screens, 4096 px shadows). High is meant for an RTX 3070 at 1440p.
 * **Options**: two AI wingmen in fingertip formation, the mouse stick, 3D buildings, the volume.
+* **Weather**: clear, few cumulus (the default), scattered, broken, or high cirrus (lighting:
+  `js/env/Clouds.js`). The clouds cast shadows on the ground and on the jet; fly into one and
+  the view goes white.
 * **Joystick & gamepad**: bind any axis or button of any controller (saved in the browser),
   deadzone and expo, invert the keyboard pitch, the mouse stick's roll spring.
 
@@ -196,6 +199,8 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `wingmen=0` / `1` | wingmen off / on |
 | `stubs=1` | stand-in modules from `dev/stubs` (no data needed) |
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
+| `clouds=clear` / `few` / `scattered` / `broken` / `cirrus` | weather for this session (the menu's Weather row otherwise) |
+| `post=0` | no HDR post-processing: straight to the canvas with three's AgX (a fallback; no clouds, bloom or glare) |
 | `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
 | `buildings=0` | no 3D buildings (the menu's option turns them off too) |
@@ -259,6 +264,7 @@ node sim/tests/e2e.mjs   [--port 8110] [--out DIR] [--size 960x540] [--quality l
 node sim/tests/smoke.mjs [--mode stubs|real|both] [--port 8103] [--out DIR] [--root SIM_FOLDER]
 node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs        (flight model, no browser)
 node sim/tests/input.test.mjs                                          (keyboard, mouse stick, gamepad; no browser)
+node sim/tests/lighting_shots.mjs [--port 8148] [--out DIR] [--set quick|times|night|sky|clouds|shadows|all] [--only a,b] [--quality q] [--resume]
 ```
 
 Both browser tests start `serve.py` on their port and open the app in headless Chromium
@@ -291,6 +297,11 @@ landing, `09`/`10` Jerusalem at sunset (chase, cockpit).
 
 **`tests/smoke.mjs`** checks the shell with the stand-in modules (`?stubs=1`) and, when the data
 is there, for real: menu, a manual take-off, the tower view, two airborne start points.
+
+**`tests/lighting_shots.mjs`** takes the screenshots of the light, sky and clouds work
+(`js/env/README.md`): the same places at six times of day, dusk and night, the weather presets
+from below, inside and above, the shadows near the ground; the exposure of each shot and
+`renderInfo()` / `gpuMemory()` go to its log and `report.json`.
 
 ### Test API (`index.html?test=1`)
 
@@ -378,6 +389,14 @@ use 4 texture units (3 atmosphere tables and the sun's shadow map).
   chosen.
 * `serve.py` listens on 127.0.0.1 only and moves to the next free port when 8035 is taken.
 * Extra modules: `js/ai/Wingmen.js` (optional, off by default) and `js/ui/Effects.js`.
+* **Light and the HDR frame** (`js/env`, see `js/env/README.md`): the scene is drawn into a
+  half-float 4x MSAA target in physical units and finished by `js/env/Post.js` (clouds, bloom, sun
+  glare, AgX with a look, night vision); the canvas itself has no MSAA or depth buffer. The
+  exposure is metered on the light at the camera and adapts like an eye; the ambient light is the
+  sky plus the ground around the camera at its land-cover albedo; the moon and the stars have
+  their real positions and phase for the date. Transparent things near the camera (burner plume,
+  canopy, sprites) are drawn after the clouds; the sun's shadow box widens near the ground to take
+  in buildings and trees ahead of the camera.
 
 ## Credits
 
@@ -394,4 +413,6 @@ use 4 texture units (3 atmosphere tables and the sun's shadow map).
   imagery (CC BY 4.0). Facades and roofs are procedural.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
-  renders) is made here.
+  renders) is made here. The sky, stars, moon and clouds are procedural (formulas: Hillaire 2020
+  atmosphere, the Astronomical Almanac's low-precision sun and moon, Perlin-Worley cloud noise);
+  the land-cover albedo that lights the shadows is ESA WorldCover (above, CC BY 4.0).
