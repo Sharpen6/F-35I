@@ -53,6 +53,12 @@ LINE_W = 1.35                  # panel line width (px)
 TAPE_W = 11.0                  # sealant tape band width along door outlines (px, ~3.3 cm; ref_03 4-5 cm)
 BAND_W = 0.08                  # RAM tape frames over the upper fuselage seams (m; ref_06 of 901,
                                # c51, c53: bold 7-9 cm bands)
+# fastener heads: ~1 cm round heads at 3-4 cm pitch, dark with a light rim, legible at 2-3 mm/px
+# (ref_05 of 901: forebody bay, gun fairing and inlet-side panels; ref_03 of 905; c53)
+RIVET_R = 1.7                  # head radius (px, ~1.0 cm across)
+RIVET_V = 1.0                  # head darkness (R channel)
+RIVET_RIM = (2.5, 0.3)         # light rim round each head: radius (px), sealant value (G channel)
+BAND_RIVET_V = 0.9             # rows inside the RAM tape frames, a shade softer than on bare skin
 
 
 def images():
@@ -193,12 +199,18 @@ class Painter:
             hit = self.bvh.ray_cast(Vector((sg * 9.0, p[1], p[2])), Vector((-sg, 0, 0)), 30.0)
         return hit[0] is not None and (hit[0] - Vector(p)).length < tol
 
-    def trace(self, kind, pts, side=1, step=0.01):
-        """2-D authoring polyline -> runs of (point, normal) on the skin."""
+    def trace(self, kind, pts, side=1, step=0.01, facing=0.0):
+        """2-D authoring polyline -> runs of (point, normal) on the skin.  facing > 0 keeps only the
+        hits whose normal faces the projection that much (|n.x| for side lines), so a line that runs
+        under an overhang (the wing-root fillet over the inlet side) stops at its edge instead of
+        spilling onto the overhang's upper or lower face."""
         dense = _resample(pts, step)
         runs, cur = [], []
+        ax = 0 if kind == "side" else 2
         for a, b in dense:
             h = self.cast(kind, a, b, side)
+            if h is not None and abs(h[1][ax]) < facing:
+                h = None
             if h is None:
                 if len(cur) > 1:
                     runs.append(cur)
@@ -226,7 +238,8 @@ class Painter:
                     continue
                 self.canvas.seg(m, c, (u0 * w, v0 * h), (u1 * w, v1 * h), width, value)
 
-    def dots(self, run, pitch=0.03, rad=0.9, value=0.75, maps=("top", "bottom", "side")):
+    def dots(self, run, pitch=0.03, rad=RIVET_R, value=RIVET_V, rim=RIVET_RIM, maps=("top", "bottom", "side")):
+        """Fastener row along a run: dark round heads (R) with a light sealant rim (G)."""
         acc = 0.0
         for (p0, n0), (p1, _) in zip(run, run[1:]):
             acc += (p1 - p0).length
@@ -239,13 +252,16 @@ class Painter:
                     w, h = MAPS[m]
                     u, v = uv(m, p0)
                     self.canvas.disc(m, R, (u * w, v * h), rad, value)
+                    if rim:
+                        self.canvas.disc(m, G, (u * w, v * h), rim[0], rim[1])
 
     # -- authoring API ---------------------------------------------------
     def line(self, kind, pts, mirror=True, closed=False, saw=None, width=LINE_W, value=1.0,
-             tape=False, rivets=None, side=1):
+             tape=False, rivets=None, side=1, facing=0.0):
         """kind: 'top' / 'bottom' -> pts are (s, x); 'side' -> pts are (s, z).
         saw=(teeth, amplitude) turns every segment into a sawtooth.
-        rivets=(offset, pitch) adds a fastener row parallel to the line."""
+        rivets=(offset, pitch) adds a fastener row parallel to the line.
+        facing: see trace() (drop the parts of the line on surfaces turned away from the projection)."""
         pts = list(pts)
         if closed:
             pts = pts + [pts[0]]
@@ -259,13 +275,13 @@ class Painter:
             if mirror:
                 variants.append(([(a, -b) for a, b in pts], 1))
         for vp, sd in variants:
-            for run in self.trace(kind, vp, sd):
+            for run in self.trace(kind, vp, sd, facing=facing):
                 self.stroke(run, R, width, value)
                 if tape:
                     self.stroke(run, G, TAPE_W, 0.55)
             if rivets:
                 off, pitch = rivets
-                for run in self.trace(kind, offset_polyline(vp, off), sd):
+                for run in self.trace(kind, offset_polyline(vp, off), sd, facing=facing):
                     self.dots(run, pitch)
 
     def frame(self, kind, pts, mirror=True, width=BAND_W, value=0.8, crenel=None, seam=0.0, rivets=None):
@@ -303,7 +319,7 @@ class Painter:
             if rivets:
                 off, pitch = rivets
                 for run in self.trace(kind, offset_polyline(base, off) if off else base):
-                    self.dots(run, pitch, value=0.6)
+                    self.dots(run, pitch, value=BAND_RIVET_V)
 
     def patch(self, kind, poly, c=B, value=0.5, mirror=True, side=1):
         """Filled coating patch, drawn directly in its own map (no ray cast)."""
@@ -576,11 +592,36 @@ def layout(pt):
     # inlet cowl: line parallel to the lip
     pt.line("side", [(4.52, 0.30), (4.74, -0.05), (4.92, -0.42)], tape=True)
 
-    # ---- mid fuselage sides below the wing root (photo c51) -------------
-    pt.line("side", hexa(5.72, 6.55, -0.28, 0.05, 0.08), closed=True, tape=True)     # c51, c20
-    pt.line("side", hexa(6.50, 8.55, -0.42, -0.06, 0.14), closed=True)
-    pt.line("side", hexa(6.95, 8.65, -0.64, -0.48, 0.07), closed=True)
-    pt.line("side", [(4.95, -0.05), (5.50, -0.05)])
+    # ---- inlet and mid fuselage sides below the wing root ----------------
+    # Measured on c51 (right side, solved camera, aligned on the crescent marks and formation
+    # strips) and checked on c53 and ref_05 / ref_07 (left side of 901 / 919) and ref_04 (right
+    # side of 926).  All outlines read as light sealant bands or dark seams, so all are taped.
+    # The fastened access panel under the crescent index marks: a large chamfer at its top-front
+    # corner, a smaller one at its bottom-aft corner, the other two corners square
+    pt.line("side", [(5.73, -0.06), (5.93, 0.05), (6.55, 0.05), (6.55, -0.20), (6.45, -0.28),
+                     (5.75, -0.28)], closed=True, tape=True)
+    # seam just ahead of it (aft of the eagle), from under the formation strip down past its bottom
+    pt.line("side", [(5.67, 0.12), (5.67, -0.31)], tape=True)
+    # left side only: a small hexagon over the aft half of the access panel (ref_05, ref_07, c53;
+    # absent on the right in c51 and ref_04)
+    pt.line("side", [(6.20, 0.085), (6.47, 0.085), (6.51, 0.155), (6.47, 0.225), (6.20, 0.225), (6.16, 0.155)],
+            closed=True, tape=True, mirror=False, side=1)
+    # the long panel aft of it, back to the main-gear door (whose taped outline at s 8.21 closes
+    # these panels; nothing is drawn onto the door): its top level with the formation strips, about
+    # 0.11 m above the access panel's top (c51; 0.16-0.18 m in c53 and ref_05), with a chamfer down
+    # to the access panel's top-aft corner, a stepped bottom near the access panel's bottom, a
+    # chamfered aft-bottom corner and fastener rows inside its edges.  The model's wing-root fillet
+    # covers the upper aft part of the inlet side, so the top edge stops at the fillet (facing)
+    # instead of running onto the fillet's lower face.  A shade darker than its neighbours (c53, c28).
+    LONG = [(8.00, 0.15), (6.83, 0.15), (6.55, 0.0), (6.55, -0.275), (6.77, -0.275), (6.81, -0.235),
+            (7.70, -0.235), (7.74, -0.265), (8.02, -0.265), (8.19, -0.155)]
+    pt.line("side", LONG, tape=True, facing=0.8, rivets=(0.022, 0.035))
+    pt.patch("side", LONG[1:] + [(8.19, 0.15)], R, 0.08)
+    # long seam along the top of the lower panels, hooking down and forward under the access panel
+    # (c51, c53), and the lower panel with chamfered ends below it (c51, c53, ref_07)
+    pt.line("side", [(6.07, -0.575), (6.22, -0.55), (6.29, -0.51), (6.30, -0.47), (6.25, -0.41), (8.19, -0.39)],
+            tape=True)
+    pt.line("side", [(7.215, -0.40), (7.07, -0.47), (7.17, -0.548), (8.10, -0.545), (8.19, -0.49)], tape=True)
     pt.line("side", [(8.75, -0.10), (10.40, -0.12), (10.55, -0.30)])
     # aft fuselage sides
     pt.line("side", hexa(10.9, 12.9, -0.30, 0.05, 0.12), closed=True)

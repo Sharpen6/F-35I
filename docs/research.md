@@ -329,6 +329,19 @@ Positions are taken from the 3-view and from photos of 901, 905 and 926.
   read 6-10 % lighter than the paint, in sun they read darker than the paint's sheen. The model's
   layout (panels.layout) was traced from ref_06 mapped onto the top skin through its solved camera
   (data/camera_matches/ref06.json) and checked on dark-band profiles of that rectified image.
+- Inlet-side panels below the wing root (c51 right side, measured by ray casts through its solved
+  camera after an affine fit on the crescent index marks and formation strips, residuals under 6 px of
+  3840; checked on c53, ref_05 of 901, ref_07 of 919, ref_04 of 926). The crescent-mark access panel
+  spans s 5.73-6.55, z -0.28..0.05, with a big chamfer at its top-front corner (about 0.21 x 0.11 m)
+  and a small one at its bottom-aft corner. A seam runs about 4-7 cm ahead of it (s ≈ 5.67-5.70)
+  from under the strips to just below it. On the left only, a hexagon about 0.35 x 0.15 m sits over
+  its aft half. The long panel aft of it reaches the main-gear door: its top is about 0.11 m above
+  the access panel's top (c51; 0.16-0.18 m in c53 and ref_05), with a chamfer of about 0.29 x 0.17 m
+  down to the access panel's top-aft corner. Its bottom steps between z -0.28 and -0.23 and it has
+  fastener rows inside its edges. Below it, a long seam at z ≈ -0.40 hooks down and forward at
+  s ≈ 6.25, and a lower panel with chamfered ends spans s ≈ 7.06-8.2, z -0.40..-0.55. Outlines read
+  as light sealant bands or dark seams. Fastener heads are about 0.8-1.2 cm across at 3-4 cm pitch
+  (ref_05, ref_03).
 
 Approximate sRGB values (sources disagree, so treat these as guides only):
 
