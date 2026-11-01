@@ -81,6 +81,7 @@ export class HMD {
     ctx.clearRect(0, 0, this._w, this._h);
     if (!state || !camera) return;
     const d = this._data(state, extra);
+    this.last = d;                         // the numbers on display (read by the test API)
     if (this.visible) {
       if (viewMode === 'cockpit') this._drawCockpit(d, state, camera, extra);
       else this._drawStrip(d);

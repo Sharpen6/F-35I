@@ -119,8 +119,9 @@ of +-64 km (the core plus a 12.8 km ring) so the core edges and the far area joi
   `bengurion_26`, `deadsea_low`, `coast_low`. On-ground spawns: `y` is the ground height
   (wheels on it), 25 m past the threshold on the centreline. Airborne spawns: `y` is the altitude
   above MSL and `ground_y` the ground height below. Extra hints: `gear` (1 down, 0 up),
-  `throttle` (0..1), `flight_path_deg` (final), `time_h` / `day_of_year` (sunset),
-  `airport` / `runway`.
+  `throttle` (0 = idle, on-ground spawns only: airborne spawns carry none, so the flight model
+  trims the throttle for 1 g at the spawn's speed and flight path), `flight_path_deg` (final),
+  `time_h` / `day_of_year` (sunset), `airport` / `runway`.
 * `previews/`: `core_hillshade.jpg`, `far_hillshade.jpg`, crops `telnof.jpg`, `tel_aviv_coast.jpg`,
   `jerusalem.jpg`, `dead_sea.jpg`, `telnof_runways.jpg` (runways and spawns drawn on),
   `runway_strips.jpg` (each runway straightened: red = pavement edges, cyan = thresholds, yellow =

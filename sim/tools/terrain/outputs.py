@@ -184,19 +184,22 @@ def runway_start(H, ap, rw, end_id, label):
 
 
 def final_approach(H, ap, rw, end_id, dist_m, speed_ms, label, glide_deg=3.0, tch_m=15.0):
-    """On the extended centreline `dist_m` before the threshold, on a `glide_deg` glide path."""
+    """On the extended centreline `dist_m` before the threshold, on a `glide_deg` glide path.
+    No throttle: the flight model trims the jet (throttle included) for 1 g on that path."""
     e, d = _end_and_dir(rw, end_id)
     x, z = e['x'] - dist_m * d[0], e['z'] - dist_m * d[1]
     y = H.at(e['x'], e['z']) + tch_m + dist_m * math.tan(math.radians(glide_deg))
     return dict(label=label, x=r2(x), y=r2(y, 1), z=r2(z), heading_deg=r2(heading_deg(*d)),
-                on_ground=False, speed_ms=r2(speed_ms), gear=1, throttle=0.5,
+                on_ground=False, speed_ms=r2(speed_ms), gear=1,
                 flight_path_deg=-glide_deg, ground_y=r2(H.at(x, z), 1), airport=ap['icao'], runway=end_id)
 
 
-def airborne(H, lon, lat, alt_m, hdg, speed_ms, label, throttle, **extra):
+def airborne(H, lon, lat, alt_m, hdg, speed_ms, label, **extra):
+    """Level flight; no throttle: the flight model trims it for 1 g at that speed and height
+    (a fixed throttle would be far from the trim and the jet would run away)."""
     x, z = grid.lonlat_to_xz(lon, lat)
     s = dict(label=label, x=r2(x), y=r2(alt_m, 1), z=r2(z), heading_deg=r2(hdg), on_ground=False,
-             speed_ms=r2(speed_ms), gear=0, throttle=throttle, ground_y=r2(H.at(x, z), 1))
+             speed_ms=r2(speed_ms), gear=0, ground_y=r2(H.at(x, z), 1))
     s.update(extra)
     return s
 
@@ -223,18 +226,18 @@ def build_spawns(airports, H, dead_sea_level):
             sp[k33] = runway_start(H, llek, r, e33, f'Tel Nof, runway {e33}, ready for takeoff')
     sp['telnof_final'] = final_approach(H, llek, longest, end, 10000.0, 140 * KT,
                                         f'Tel Nof, 10 km final runway {end}, 140 kt, gear down')
-    sp['tlv_3000'] = airborne(H, 34.7800, 32.0800, 3000.0, 180.0, 200.0, 'Over Tel Aviv, 3,000 m', 0.7)
+    sp['tlv_3000'] = airborne(H, 34.7800, 32.0800, 3000.0, 180.0, 200.0, 'Over Tel Aviv, 3,000 m')
     sp['jerusalem_sunset'] = airborne(H, 35.1200, 31.7850, 1500.0, 90.0, 160.0,
-                                      'Jerusalem hills at sunset, 1,500 m, heading east', 0.6,
+                                      'Jerusalem hills at sunset, 1,500 m, heading east',
                                       time_h=18.75, day_of_year=172)
     llbg = _find_airport(airports, 'LLBG')
     rb = max(llbg['runways'], key=lambda r: r['length_m'])
     eb = best_end(rb, '26')
     sp['bengurion_' + eb.lower()] = runway_start(H, llbg, rb, eb, f'Ben Gurion, runway {eb}, ready for takeoff')
     sp['deadsea_low'] = airborne(H, 35.5050, 31.7300, dead_sea_level + 300.0, 180.0, 150.0,
-                                 'Dead Sea, 300 m above the water, heading south', 0.6)
+                                 'Dead Sea, 300 m above the water, heading south')
     sp['coast_low'] = airborne(H, 34.5800, 31.7600, 300.0, 20.0, 180.0,
-                               'Along the coast from Ashdod to Tel Aviv, 300 m', 0.65)
+                               'Along the coast from Ashdod to Tel Aviv, 300 m')
     return sp, notes
 
 

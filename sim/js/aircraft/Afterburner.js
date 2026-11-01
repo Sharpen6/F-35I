@@ -8,6 +8,13 @@
 // flicker keeps it alive. A disc of hot glow sits in the nozzle throat: dull red at idle, orange
 // at MIL, white-hot in burner (seen from behind, through the petals).
 //
+// Brightness: the flame is an emitting and absorbing gas, not a sum of light. Seen down its axis
+// (the chase view) the path through it is metres long, and plain additive light summed to several
+// times the daylit ground, then added to the already tone-mapped background: a blown-out white
+// ball by day. The march therefore saturates each channel at uSat (a hot yellow-orange) and the
+// flame hides what is behind it by its opacity (1 - exp(-uKappa * luminance)), blended as
+// premultiplied colour + background * (1 - alpha). Seen from the side (short paths) it is unchanged.
+//
 // Frame: everything is built in the BODY frame (+Z aft); `exit` is the nozzle exit centre.
 
 import * as THREE from 'three';
@@ -33,6 +40,8 @@ const PLUME_FRAG = /* glsl */`
   uniform float uAb;          // 0..1
   uniform float uTime;
   uniform float uGain;
+  uniform vec3 uSat;          // radiance each channel saturates at (linear)
+  uniform float uKappa;       // opacity per unit of integrated luminance
   varying vec3 vLocal;
 
   float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
@@ -104,7 +113,9 @@ const PLUME_FRAG = /* glsl */`
       acc += emission(p);
     }
     acc *= dt * uGain;
-    gl_FragColor = vec4(acc, 1.0);
+    float alpha = 1.0 - exp(-uKappa * dot(acc, vec3(0.2126, 0.7152, 0.0722)));
+    vec3 col = uSat * (vec3(1.0) - exp(-acc / uSat));
+    gl_FragColor = vec4(col, alpha);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }`;
@@ -157,11 +168,15 @@ export class Afterburner {
       uCamLocal: { value: new THREE.Vector3() },
       uLen: { value: 4.6 }, uR0: { value: this.r0 }, uRmax: { value: this.rMax },
       uAb: { value: 0 }, uTime: { value: 0 }, uGain: { value: 1.0 }, uScale: { value: new THREE.Vector3(1, 1, 1) },
+      uSat: { value: new THREE.Vector3(1.0, 0.42, 0.10) }, uKappa: { value: 0.8 },
     };
+    // premultiplied "over": the tone-mapped flame colour + the background * (1 - opacity)
     this.plumeMat = new THREE.ShaderMaterial({
       name: 'F35_AB_Plume', uniforms: this.uniforms, vertexShader: PLUME_VERT, fragmentShader: PLUME_FRAG,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
-      toneMapped: true,
+      transparent: true, depthWrite: false, side: THREE.BackSide, toneMapped: true,
+      blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+      blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
     });
     this.plume = new THREE.Mesh(geo, this.plumeMat);
     this.plume.name = 'AB_Plume';
@@ -227,8 +242,8 @@ export class Afterburner {
     const c = this.glowUniforms.uColour.value;
     c.setRGB(1.0, 0.30, 0.07).multiplyScalar(heat);
     if (on) {
-      const k = 0.8 * Math.pow(ab, 0.7);
-      c.r += 1.0 * k; c.g += 0.62 * k; c.b += 0.28 * k;
+      const k = 0.5 * Math.pow(ab, 0.7);
+      c.r += 1.0 * k; c.g += 0.55 * k; c.b += 0.2 * k;
     }
   }
 }

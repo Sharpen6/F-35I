@@ -67,9 +67,12 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   and quaternion: `T(rest) * L(outermost) * ... * L(innermost)` (wheel spin inside the strut inside
   the retraction), so all controls combine correctly. Surfaces on one hinge add their angles and
   clamp like the Blender drivers. The nozzle's `AB_Open` morph target follows `ab` (or throttle).
-* `Afterburner.js`: a ray-marched additive plume in a bounding cylinder behind the nozzle exit
+* `Afterburner.js`: a ray-marched emissive plume in a bounding cylinder behind the nozzle exit
   (32 steps per pixel, only drawn while `ab > 0`): orange envelope turning pink, a flame front at
   the exit, six shock diamonds, turbulent flicker; length 2-5.4 m and brightness scale with `ab`.
+  Emission and absorption, not plain addition: each channel saturates at a hot yellow-orange and
+  the flame covers the background by its opacity (premultiplied blending), so looking down the
+  plume from behind by day gives an orange-yellow core, not a blown-out white disc.
   A glow disc in the nozzle throat: dull red at idle, orange at MIL, yellow-white in burner.
 * `lights.js`: lens emission on the glTF light materials, small additive glow sprites (kept a few
   pixels big at any distance, nav lights visible only from their side), the anti-collision beacons

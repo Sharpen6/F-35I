@@ -35,6 +35,19 @@ Without it the loading screen says what is missing; `index.html?stubs=1` runs th
 stand-ins (a flat field with one runway, a box-and-wings jet and simple kinematics) to try the
 controls.
 
+**Benchmark.** `index.html?bench=1` (e.g. http://127.0.0.1:8035/index.html?bench=1&quality=high)
+flies a scripted 60 s take-off from Tel Nof 36 at noon: MIL, then afterburner, rotation at
+150 kt, gear up, climb and a turn toward Tel Aviv, with the view going chase, cockpit, fly-by,
+chase. At the end the sim stops and the results stay on screen (and in `window.__bench`, and as
+`BENCH {...}` in the console): average fps, 1 % low fps (the mean frame rate of the slowest 1 %
+of frames), minimum fps, frame-time percentiles, draw calls and triangles per frame, and an
+estimate of the GPU memory the app uploaded (textures, geometry, render targets, the canvas).
+The first 3 s (shader compiles, first terrain tiles) are not counted. Options: `&quality=`,
+`&time=`, `&spawn=` (an airborne start point flies straight on), `&seconds=`. For a headless
+screenshot of the result on a machine with a real GPU, wait in Playwright (headless Chrome with
+`--enable-gpu`, or headed) until `document.title` is `F-35I bench: done`, then take the
+screenshot; or open the page in a normal browser window and leave it for a minute.
+
 ## The start menu
 
 * **Start**: on the runway at Tel Nof (36 or 33R, parking brake set, engine at idle), on a 10 km
@@ -129,9 +142,12 @@ looks around. Bindings are kept per controller in the browser's local storage.
 
 ## Cameras
 
-* **Cockpit**: the pilot's eye from the model, the canopy frame and the panoramic display in
-  view; look around with the mouse (drag), the numpad or a hat; the head is pushed down a
-  little under g and back under acceleration; the view greys out above about 7 g.
+* **Cockpit**: the pilot's eye from the model (station 3.36 m, the rig's `eye`), a 60 deg
+  vertical field of view (94 deg across on a 16:9 screen) looking 8.5 deg down (the design eye
+  line, 6 deg, plus 2.5 deg): the canopy bow runs along the top of the picture, the clear view
+  ahead is over the glare shield and the panoramic display is below. Look around with the mouse
+  (drag), the numpad or a hat; the head is pushed down a little under g and back under
+  acceleration; the view greys out above about 7 g.
 * **Chase**: behind and above, on a spring, drawing back with speed; drag to look at the jet
   from another side (it swings back), wheel for the distance.
 * **Orbit**: free orbit around the jet (drag, wheel); also the backdrop of the menu.
@@ -169,14 +185,15 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `wingmen=0` / `1` | wingmen off / on |
 | `stubs=1` | stand-in modules from `dev/stubs` (no data needed) |
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
-| `test=1` | the scripting hook `window.__sim` for the tests |
+| `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
+| `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
 
 ## Files (the app shell)
 
 | file | |
 | --- | --- |
 | `index.html`, `css/sim.css`, `css/splash.jpg` | page, import map, loading screen, menus |
-| `js/main.js` | the app: renderer, loading, fixed-step loop, glue between the modules, test hook |
+| `js/main.js` | the app: renderer, loading, fixed-step loop, glue between the modules |
 | `js/input/Input.js`, `Bindings.js` | keyboard, mouse, mouse stick, gamepads, joystick bindings |
 | `js/ui/Cameras.js` | the five camera modes |
 | `js/ui/HMD.js` | helmet display (a 2D canvas over the 3D view) |
@@ -186,7 +203,10 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `js/ai/Wingmen.js` | the two AI wingmen |
 | `dev/stubs/` | stand-ins for Environment, Terrain, AircraftVisual and FlightModel (`?stubs=1`) |
 | `serve.py`, `Fly_F-35I.bat` | local server and the Windows launcher |
-| `tests/smoke.mjs` | Playwright smoke test |
+| `js/test/TestApi.js` | the automation API `window.__sim` (`?test=1`) |
+| `js/test/TestPilot.js` | scripted pilot (take-off and climb, approach and landing) for the tests and the benchmark |
+| `js/test/Bench.js`, `stats.js` | the `?bench=1` benchmark; frame statistics, GPU memory estimate |
+| `tests/smoke.mjs`, `tests/e2e.mjs` | Playwright smoke test, end-to-end test |
 
 The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terrain` and
 `js/world` (terrain rendering and queries), `js/aircraft` (the jet), `js/fdm` (flight model).
@@ -198,9 +218,19 @@ The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terr
   tab) is clamped instead of being caught up. The sim pauses when the tab is hidden.
 * Each frame: input, physics steps, the jet's pose and moving parts, cameras, `Environment.update`,
   `Terrain.update` (after the camera has moved), render, helmet display, sound.
-* The aircraft's gear contact points (the model's parked tyre points) go to the flight model
-  (`configWithRig`), so the jet stands exactly on its modelled stance; the struts' travel from
-  the flight model is drawn on the model's struts.
+* The aircraft's gear contact points go to the flight model (`configWithRig`): each rig contact's
+  `posParked` (the round tyre's bottom with the oleo at its static compression) raised by the
+  tyre's `tyreDeflection`. That is the stance the Blender scenes use (`groundStance`: 1.45 deg
+  nose-up), the flight model's own default contacts and the pitch the FCS holds on the ground,
+  so the jet stands exactly on its modelled stance: oleos at their parked compression, tyres
+  pressed into the runway by their deflection (3 cm nose, 4.5 cm mains; the tyre meshes are
+  round). The flight model's strut (oleo and tyre in one spring, static compression 7 / 9 cm)
+  is drawn on the modelled oleo: up to the static point in proportion (the oleo's 5 cm share),
+  beyond it one to one, so the struts are fully out in the air and compress with
+  `state.wheels` on touchdown and over bumps.
+* The Environment owns the renderer's tone mapping and exposure, the shadow maps, the fog and
+  `scene.environment` (which the aircraft's materials need); `main.js` only creates the renderer
+  (logarithmic depth, see below), the camera (far plane 650 km) and the scene.
 * Wingmen: two more `AircraftVisual`s that share the player's textures (so they add little video
   memory). They are kinematic: each flies a target point (its slot 14 m out, 11 m back, 1.2 m low
   in the leader's frame, rolling with him) through a position / velocity / acceleration chase
@@ -212,17 +242,71 @@ The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terr
 ## Tests
 
 ```
+node sim/tests/e2e.mjs   [--port 8110] [--out DIR] [--size 960x540] [--quality low|medium|high] [--root SIM_FOLDER]
 node sim/tests/smoke.mjs [--mode stubs|real|both] [--port 8103] [--out DIR] [--root SIM_FOLDER]
+node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs        (flight model, no browser)
 ```
 
-Starts `serve.py` on port 8103, opens the app in headless Chromium (SwiftShader WebGL2) with
-`?test=1`, with the stand-ins and, when `sim/data` and the real modules are there, for real:
-waits for the menu, starts from the first start point (Tel Nof 36), releases the parking brake,
-selects full afterburner, rotates at 150 kt, raises the gear and climbs, using the test hook to
-run the simulation faster than real time. Screenshots of the menu and after 2, 10 and 30 s
-(cockpit) go to `/home/claude/simdata/shots/smoke_<mode>_*.png`, plus the tower view and a look
-at the coast and Jerusalem from altitude. It fails on any console error, page error, failed
-request, a crash or a take-off that goes wrong.
+Both browser tests start `serve.py` on their port and open the app in headless Chromium
+(SwiftShader WebGL2, Playwright) with `?test=1`. The render loop stays paused: the simulation
+runs in fixed 1/120 s steps much faster than real time and a frame is drawn only for a check or
+a screenshot (SwiftShader takes seconds per frame). Both fail on any console error, page error or
+failed request.
+
+**`tests/e2e.mjs`** (the real data and modules; a few minutes) checks, with the numbers in its
+log and in `report.json`:
+
+1. Tel Nof runway 36 at noon: every wheel on the runway with the tyre pressed in by its modelled
+   deflection (no sinking or floating), the flight model's struts and the modelled oleos at
+   their static compression, the stance pitch (1.45 deg plus the runway's slope), nose wheel on
+   the centreline, nothing moving; the helmet display's numbers (IAS, altitude in feet, heading,
+   g, vertical speed, Mach) against the flight model; the model's controls (surfaces, gear,
+   canopy, burner) against the flight model; the five cameras (cockpit at the eye with the head
+   hidden, chase behind, orbit, fly-by and tower looking at the jet).
+2. Take-off with the scripted pilot: MIL, then afterburner, the centreline held by nose-wheel
+   steering, rotation at 150 kt, gear up only after a positive climb, climb to 3,000 m and the
+   turn toward Tel Aviv; the HMD, the model and the cameras checked again in flight.
+3. `telnof_final`: the 3 deg glide slope and the localizer at 145 kt, flare, touchdown below
+   3 m/s, brakes to a stop on the runway, then the canopy opens.
+4. `jerusalem_sunset` at the spawn's time of day.
+
+Screenshots (`/home/claude/simdata/shots/e2e/` by default): `01`/`02` on the runway (chase,
+cockpit), `03` the take-off roll in afterburner, `04` the climb-out (chase), `05` the HMD in the
+cockpit at 3,000 m, `06` a fly-by, `07` short final from the cockpit, `08` stopped after the
+landing, `09`/`10` Jerusalem at sunset (chase, cockpit).
+
+**`tests/smoke.mjs`** checks the shell with the stand-in modules (`?stubs=1`) and, when the data
+is there, for real: menu, a manual take-off, the tower view, two airborne start points.
+
+### Test API (`index.html?test=1`)
+
+`window.__sim` (js/test/TestApi.js), for the tests and for the browser console. Units are SI
+and radians unless a name says otherwise (`_kt`, `_deg`, `Ft`).
+
+| | |
+| --- | --- |
+| `ready`, `error`, `state`, `live` | loaded / load error; the app's state (`menu`, `flying`, `paused`); the render loop running |
+| `pause()`, `resume()` | stop / restart the app's own requestAnimationFrame loop (`?test=1` starts paused; `setLive(on)` does the same) |
+| `start(spawn, {time, camera})` | fly from a start point (names: `spawns()`), hands off, inputs cleared; returns `summary()` |
+| `camera(mode)` / `view(mode)`, `time(hours)` | the camera (`cockpit`, `chase`, `orbit`, `flyby`, `tower`); the time of day (solar hours) |
+| `setInput({...})`, `clearInput()` | hold inputs until changed (merged; `setInput(null)` clears): `pitch`, `roll`, `yaw` (-1..1: nose up, right, right), `throttle` (0..1, 0.75 = MIL, above = afterburner), `brake` (0..1), `gear` (true = down), `parkingBrake`, `speedbrake`, `canopy` (true = open), `nws` |
+| `autopilot(plan, opts)`, `pilot()` | the scripted pilot flies through the same inputs: `'takeoff'` (`vrKt` 150, `altitude` 3000, `target {x, z}` or `heading`, `cruiseKt`) or `'land'` (`approachKt` 145, `glideDeg` 3, `aimM` 300), on the spawn's runway or `runway` / `icao`; `autopilot(null)` stops it. `pilot()`: `{plan, phase, done, t, events, out}`; phases `roll`, `rotate`, `liftoff`, `gear up`, `climb`, `cruise` / `approach`, `flare`, `touchdown`, `rollout`, `stopped` |
+| `step(n)` | n fixed steps of 1/120 s without drawing (cameras, terrain streaming and crash handling follow every 12 steps); returns `summary()` |
+| `advance(seconds, draw = true)` | the same for a time, then draws one frame |
+| `fly({until, seconds})` | runs until the scripted pilot reaches phase `until`, finishes, the jet crashes, or `seconds` pass: `{t, summary, pilot}` |
+| `settle(ms)` | lets wall time pass without simulating (terrain tiles load, the exposure adapts), then draws one frame |
+| `render()` | draws one frame now: `{ms, calls, triangles, points, lines, geometries, textures, programs}` (`ms` includes the GPU) |
+| `summary()` | `{state, camera, ias_kt, alt_m, agl_m, vs, onGround, gear, throttle, pitch_deg, roll_deg, heading_deg, g, crashed, crashReason, rpm, ab, phase, time, wingmen, fps}` |
+| `fdm()` | the whole FlightModel state (sim/DESIGN.md) as JSON: position, quaternion, velocity, alpha, ias, altitude, agl, gLoad, wheels, engine, controls, warnings, lastTouchdown ... |
+| `visual()` | the AircraftVisual: rig control values (`rig`), what the app gave it (`given`), head visible, plume `{visible, ab, length}`, throat glow colour, eye point (body and world) |
+| `gear()` | per wheel: `wow`, the flight model's `fdmCompression` / `fdmStatic`, the modelled `oleo` / `rigStatic` / `rigValue`, `travel`, `tyreDeflection`, the tyre's lowest point `tyreBottom`, the `ground` height and the `gap` (negative: pressed in), `steer_deg`, `along` / `cross` on the spawn's runway |
+| `runway(id, icao)` | the jet against a runway end (default the spawn's): `along`, `cross` (m, + = right), `headingError_deg`, `onRunway`, threshold, length, width |
+| `hmd()` | the numbers the helmet display drew last: `iasKt`, `altFt`, `hdg`, `g`, `mach`, `alphaDeg`, `vsFpm`, `aglFt`, `thr`, `ab`, `fuelLb`, `gear`, `warnings` ... |
+| `renderInfo()`, `timing()`, `gpuMemory()` | renderer.info of the last drawn frame; step and frame times, fps, GPU name, canvas size; the GPU memory estimate (MB, the largest textures) |
+
+Example (Playwright, after `waitForFunction(() => window.__sim?.ready)`):
+`page.evaluate(() => { __sim.start('telnof_36', {time: 12}); __sim.autopilot('takeoff'); return __sim.fly({until: 'climb'}); })`,
+then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
 
 ## Notes and small deviations from DESIGN.md
 
@@ -231,7 +315,7 @@ request, a crash or a take-off that goes wrong.
   precision than ordinary Z, the logarithmic buffer does. `?depth=reversed` uses
   `reversedDepthBuffer` where `EXT_clip_control` exists.
 * **Shadows**: three r187 removed `PCFSoftShadowMap`; `PCFShadowMap` is used (the Environment
-  owns the shadow settings anyway). The sun's shadow follows the jet (`env.setShadowTarget`);
+  owns the shadow settings). The sun's shadow follows the jet (`env.setShadowTarget`);
   while the wingmen stand beside it the shadow box covers all three.
 * `HMD.draw(state, camera, viewMode, extra)`: the optional `extra` carries what is not in the
   flight model state (the drawn pose, throttle lever, brakes, parking brake, speed brake, the
