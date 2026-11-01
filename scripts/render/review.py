@@ -46,6 +46,9 @@ VIEWS = {
     # canopy, roughly as in photos c34 (left side, from ahead and below) and c09 (right side)
     "canopy_c34": ((5.6, -7.6, 0.75), (0.0, -4.4, 0.95), 70),
     "canopy_c09": ((-3.0, -4.1, 1.25), (0.0, -4.5, 1.0), 45),
+    # canopy-area stencils (RESCUE, DANGER triangles, canopy warning), side on
+    "stencil_l": ((4.0, -3.95, 0.75), (0.6, -3.95, 0.25), 50),
+    "stencil_r": ((-4.0, -3.95, 0.75), (-0.6, -3.95, 0.25), 50),
     "nozzle_rear34": ((-2.6, 10.2, 0.9), (0.0, 6.0, 0.12), 50),
 }
 
