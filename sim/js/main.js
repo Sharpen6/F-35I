@@ -122,6 +122,7 @@ class App {
     this._crashShown = false;
     this._prevCam = null;
     this._frame = (t) => this.frame(t);
+    this.modules = [];                      // graphics modules beside the terrain: see addModule()
   }
 
   // ------------------------------------------------------------------------------ start-up
@@ -144,6 +145,7 @@ class App {
       this.ui.progress('terrain', 1, 'ready');
       this.ui.progress('aircraft', 1, 'ready');
       this._setupSim();
+      this._addGraphicsModules();
     } catch (e) {
       console.error(e);
       this.ui.loadError(`${e.message}\n\nTo try the app without the generated data, open index.html?stubs=1`);
@@ -232,6 +234,43 @@ class App {
     this._lazyWingmen();
   }
 
+  // ------------------------------------------------------------------------------ graphics modules
+  /**
+   * The visual modules that live beside the terrain and the aircraft (buildings, roads and
+   * airfield lights, vegetation, clouds, post-processing helpers ...). Each one is created here
+   * with one line and registered with addModule(); keep the order: things drawn on the ground
+   * first. A module streams its own data and must not block start-up.
+   */
+  _addGraphicsModules() {
+    const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
+    void ctx;
+    // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+  }
+
+  /**
+   * Register a graphics module. A module is any object with some of these methods:
+   *   update(f)                 every frame, after the environment and the terrain;
+   *                             f = { camera, dt, draw (false when the frame is not drawn),
+   *                                   sunDirection (world, unit), time (hours), quality, state }
+   *   setTime(hours, dayOfYear) the time of day changed
+   *   setQuality(name)          'low' | 'medium' | 'high' (each module keeps its own table)
+   *   reset()                   a new start point or a restart
+   *   dispose()
+   */
+  addModule(m) {
+    this.modules.push(m);
+    m.setQuality?.(this.settings.quality);
+    m.setTime?.(this.settings.time, (this.spawn && this.spawn.day_of_year) || 172);
+    return m;
+  }
+
+  _updateModules(cam, dt, draw) {
+    if (!this.modules.length) return;
+    const f = { camera: cam, dt, draw, sunDirection: this.env.sunDirection, time: this.settings.time,
+      quality: this.settings.quality, state: this.state };
+    for (const m of this.modules) m.update?.(f);
+  }
+
   _saveSettings() {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings)); } catch (e) { /* private mode */ }
   }
@@ -253,6 +292,7 @@ class App {
     h = ((h % 24) + 24) % 24;
     this.settings.time = h;
     this.env.setTime(h, (this.spawn && this.spawn.day_of_year) || 172);
+    for (const m of this.modules) m.setTime?.(h, (this.spawn && this.spawn.day_of_year) || 172);
     this.env.snapExposure?.();
     this._saveSettings();
     if (!quiet && this.state !== 'flying') this.ui.syncMenu(this.settings, this.spawn);
@@ -270,6 +310,7 @@ class App {
       sun.shadow.mapSize.set(Q.shadow, Q.shadow);
       if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
     }
+    for (const m of this.modules) m.setQuality?.(q);
     this._saveSettings();
     if (!quiet) this.ui.syncMenu(this.settings, this.spawn);
   }
@@ -324,6 +365,7 @@ class App {
     this.cams.snap();
     this.env.snapExposure?.();
     if (this.wingmen) this.wingmen.reset(st);
+    for (const m of this.modules) m.reset?.();
   }
 
   startFlight() {
@@ -617,9 +659,10 @@ class App {
     const shadowTarget = this.wingmen && this.wingmen.sharedShadow ? this.wingmen.shadowProxy : this.visual.object3d;
     if (shadowTarget !== this._shadowTarget) { this._shadowTarget = shadowTarget; this.env.setShadowTarget?.(shadowTarget); }
     this.effects.update(dt);
-    if (!draw) { this.terrain.update(cam); return; }
+    if (!draw) { this.terrain.update(cam); this._updateModules(cam, dt, false); return; }
     this.env.update(cam, dt);
     this.terrain.update(cam);
+    this._updateModules(cam, dt, true);
     this.renderer.render(this.scene, cam);
 
     // helmet display / info strip
