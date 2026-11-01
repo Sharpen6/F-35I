@@ -7,7 +7,7 @@ built only from publicly available reference material (see [`docs/research.md`](
 is assembled from the renders by [`scripts/video/make_video.py`](scripts/video/make_video.py).
 `renders/progress/` holds the build history and `blend/history/` a saved .blend for every milestone.
 
-![F-35I Adir, front left](renders/history/23_fl34.jpg)
+![F-35I Adir, front left](renders/history/24_fl34.jpg)
 
 **Animations** (MP4 in [`renders/animation/`](renders/animation), small GIF previews in
 [`renders/gifs/`](renders/gifs)): turntable, landing-gear retraction, canopy, pilot head look, cockpit
