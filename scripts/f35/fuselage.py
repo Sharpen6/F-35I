@@ -674,7 +674,10 @@ NOZ_SKIN_R = 0.596      # shroud skin radius about the nozzle axis (outer flap r
 NOZ_CUT_R = 0.606       # behind the teeth everything inside this radius is cut away
 NOZ_CORE = (12.92, 0.555)              # engine bay opened from here (flame holder shows)
 SHROUD_BLEND = (12.45, NOZ_SHROUD_S)   # the section centre is drawn onto the shroud circle
-BOOM_SECTOR = (-15.0, 48.0, 14.0)      # angles about the axis left to the booms: from, to, ramp (deg)
+# angles about the nozzle axis left to the booms: from, to, lower ramp, upper ramp (deg).  The upper
+# ramp is wide: a narrow one (48-62 deg) left a ridge on the deck ahead of the shroud, half a metre
+# out from the centre line, where the centre was drawn down onto the shroud and the side was not.
+BOOM_SECTOR = (-15.0, 30.0, 14.0, 30.0)
 
 
 def _shroud_blend(s, pts):
@@ -685,7 +688,7 @@ def _shroud_blend(s, pts):
     nozzle flap roots, as on the real aircraft (references/nozzle)."""
     w = _smooth(SHROUD_BLEND[0], SHROUD_BLEND[1], s)
     out = []
-    a0, a1, ramp = BOOM_SECTOR
+    a0, a1, ramp_lo, ramp_up = BOOM_SECTOR
     for p in pts:
         x, z = p[0], p[1]
         dz = z - NOZ_Z
@@ -694,7 +697,7 @@ def _shroud_blend(s, pts):
             out.append((x, z))
             continue
         th = math.degrees(math.atan2(dz, x))
-        m = max(_smooth(a1, a1 + ramp, th), 1.0 - _smooth(a0 - ramp, a0, th))
+        m = max(_smooth(a1, a1 + ramp_up, th), 1.0 - _smooth(a0 - ramp_lo, a0, th))
         rn = r + (NOZ_SKIN_R - r) * w * m
         out.append((x * rn / r, NOZ_Z + dz * rn / r))
     return out
