@@ -96,6 +96,7 @@ PROGRESS = {
     "041": "RAM tape frames traced from a top photo of 901",
     "042": "White crescent index marks round the rescue door and inlet panels",
     "043": "Stance, nose leg, main wheels and brake lines measured from photos",
+    "044": "Review round 13: radome, EOTS glass, serial digits, canopy band, nose well, eagles",
 }
 CLIPS = [  # (file stem, title, caption)
     ("turntable_v6", "Turntable", "Final paint, sky and the new pilot"),
