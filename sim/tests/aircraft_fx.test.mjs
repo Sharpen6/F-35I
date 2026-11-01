@@ -3,7 +3,8 @@
 //   node --import ./sim/tests/node-three.mjs sim/tests/aircraft_fx.test.mjs
 //
 // anti-collision flash pattern, nozzle opening at idle, the burner's exposure compensation, the
-// condensation model (vapour at high g in humid low air, the cone near Mach 1, contrails high up).
+// condensation model (vapour at high g in humid low air, the cone near Mach 1, contrails high up),
+// the landing-light pool's visibility gain.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,6 +13,7 @@ import { nozzleIdleOpen } from '../js/aircraft/AircraftVisual.js';
 import { flameExposureComp } from '../js/aircraft/Afterburner.js';
 import { air, condensation } from '../js/aircraft/fxshared.js';
 import { FX_QUALITY } from '../js/aircraft/AircraftFX.js';
+import { poolGain } from '../js/aircraft/LandingPool.js';
 
 test('anti-collision beacons: one short flash a second each, top and bottom alternating', () => {
   let topOn = 0, botOn = 0, both = 0;
@@ -77,4 +79,11 @@ test('condensation: contrail above ~9 km, none low or on the ground', () => {
 test('quality table: every level, the burner steps grow with quality', () => {
   for (const q of ['low', 'medium', 'high']) assert.ok(FX_QUALITY[q], q);
   assert.ok(FX_QUALITY.low.abSteps < FX_QUALITY.medium.abSteps && FX_QUALITY.medium.abSteps < FX_QUALITY.high.abSteps);
+});
+
+test('landing-light pool: invisible by day, faint at sunset, gentler than the glows at night', () => {
+  assert.equal(poolGain(0.93), 1);                        // noon
+  assert.ok(poolGain(12.7) > 3 && poolGain(12.7) < 6);   // sunset
+  assert.ok(poolGain(40) > 30 && poolGain(40) < 60);     // night
+  assert.ok(poolGain(40) < AircraftLights.nightGain(40) / 3);
 });

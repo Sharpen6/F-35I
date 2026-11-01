@@ -2,17 +2,24 @@
 // is drawn on its own: a grid that follows the terrain (Terrain.heightAt) ahead of the lamp, added
 // on top of the ground (additive), lit per fragment from the lamp's beam:
 //     E = I(theta) cos(incidence) / r^2,   L = albedo E / pi
-// with I(theta) the beam pattern of lights.js (400,000 cd peak, 9 deg 1/e half width), the ground's
-// albedo assumed (runway asphalt with its paint ~0.12), and the same night visibility gain as the
-// light glows (AircraftLights.nightGain: the sim's night exposure stops far short of a dark-adapted
-// eye). Its display brightness rolls off softly toward uKnee (~1.1), so the pool stays graded where
-// a camera would not clip it to a flat white wedge, and fades out before the grid's edges.
-// By day it is invisible, as it should be. The beam (world position, direction, intensity, spread)
-// is also published on visual.lights.landing for a terrain shader that wants to light itself.
+// with I(theta) the beam pattern of lights.js (400,000 cd peak, 9 deg 1/e half width) and the
+// ground's albedo assumed (runway asphalt with its paint ~0.12). The sim's night exposure (40) stops
+// far short of a dark-adapted eye, so the pool gets a visibility gain, poolGain(exposure) =
+// (exposure / 6)^2: ~44 at night (the ~10 cd/m^2 just ahead of the nose wheel reads bright, the
+// beam's far end ~1 cd/m^2 dim), ~10 at dusk, ~4 at sunset (barely there, as against a bright sky),
+// 1 by day (invisible). It is gentler than the glows' nightGain: a lit surface, not a point source.
+// Its display brightness rolls off softly toward uKnee (~1.1), so the pool stays graded where a
+// camera would not clip it to a flat white wedge, and fades out before the grid's edges.
+// The beam (world position, direction, intensity, spread) is also published on
+// visual.lights.landing for a terrain shader that wants to light itself.
 
 import * as THREE from 'three';
-import { AircraftLights } from './lights.js';
 import { fxExposure } from './fxshared.js';
+
+/** Visibility gain of the pool for the camera's exposure (see the header). */
+export function poolGain(exposure) {
+  return Math.max(1, Math.pow((exposure || 1) / 6, 2));
+}
 
 const CD = 1 / 30000;
 const NX = 17, NZ = 33;
@@ -112,7 +119,7 @@ export class LandingPool {
     this.mesh.matrixAutoUpdate = false;
     this.mesh.onBeforeRender = (renderer) => {
       const e = fxExposure.get(renderer);
-      this.uniforms.uGain.value = this.albedo / Math.PI * AircraftLights.nightGain(e);
+      this.uniforms.uGain.value = this.albedo / Math.PI * poolGain(e);
       this.uniforms.uExposure.value = Math.max(e, 1e-3);
     };
     world.add(this.mesh);
