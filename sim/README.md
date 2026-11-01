@@ -335,6 +335,10 @@ neighbours and region (`sim/tools/world/README.md`).
 | medium | 2 km | 21 km (a house to ~3.5 km) | 44 |
 | high | 3 km (towers further) | 28 km (a house to ~5 km) | 72 |
 
+Cost over Tel Aviv at 300 m (`sim/tools/world/shots.mjs`): high +55 draw calls, +2.2 M triangles,
++54 MB geometry; medium +34, +1.7 M, +35 MB; low +26, +1.2 M, +23 MB. The building shaders
+use 4 texture units (3 atmosphere tables and the sun's shadow map).
+
 ## Notes and small deviations from DESIGN.md
 
 * **Depth buffer**: logarithmic by default. The view spans the cockpit (0.04 m near plane) and
