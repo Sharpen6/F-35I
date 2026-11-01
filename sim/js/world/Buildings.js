@@ -100,7 +100,7 @@ export class Buildings {
     this.terrain = terrain;
     this.app = app;
     this.baseUrl = baseUrl;
-    this.attribution = 'Buildings: © OpenStreetMap contributors and Microsoft ML Building Footprints (ODbL), via the Overture Maps Foundation.';
+    this.attribution = 'Buildings: © OpenStreetMap contributors and Microsoft ML Building Footprints (ODbL), via the Overture Maps Foundation; air bases traced from ESA WorldCover Sentinel-2 imagery (CC BY 4.0).';
     const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
     this.forcedOff = params.get('buildings') === '0';
     this.quality = 'high';
@@ -133,9 +133,10 @@ export class Buildings {
     this._castShadow = false;
     this._disposed = false;
 
-    // the stand-in environment of ?stubs=1 has no atmosphere (and there is no data): stay off
-    if (!env?.uniforms?.uSkyViewLUT) {
-      this.failed = true;
+    // the stand-in environment of ?stubs=1 has no atmosphere (and there is no data): stay off;
+    // with ?buildings=0 nothing is loaded or compiled at all
+    if (!env?.uniforms?.uSkyViewLUT || this.forcedOff) {
+      this.failed = !this.forcedOff;
       this.worker = null;
       this.ready = Promise.resolve();
       return;
@@ -252,7 +253,12 @@ export class Buildings {
   update(f) {
     const on = !this.forcedOff && !this.failed && this.app?.settings?.buildings !== false;
     if (this.group.visible !== on) this.group.visible = on;
-    if (!on || !this.index) return;
+    if (!on) {
+      // switched off: free the video memory too (switching on streams everything in again)
+      if (this._loaded) { for (const t of this.tiles.values()) this._unloadTile(t); this._loaded = false; }
+      return;
+    }
+    if (!this.index) return;
     f.camera.getWorldPosition(this._cam);
     this._streamTiles();
     this._streamChunks();
@@ -301,15 +307,19 @@ export class Buildings {
 
   async _loadTile(t) {
     t.state = 'loading';
+    const token = t.token = {};          // a tile unloaded and loaded again while this one runs
     this._tileLoads++;
+    this._loaded = true;
     try {
       const m = await this._request({ type: 'tile', key: t.key, url: new URL(this.baseUrl + t.file, location.href).href });
       if (this._disposed) return;
+      if (t.token !== token) return;     // superseded: the newer request owns the worker's copy
       if (t.state !== 'loading') { this.worker.postMessage({ type: 'drop', key: t.key }); return; }
       this._buildTileMesh(t, m.boxes);
       t.chunks = m.chunks;
       t.state = 'ready';
     } catch (e) {
+      if (t.token !== token) return;
       console.warn(`Buildings: tile ${t.key}: ${e.message}`);
       t.state = 'failed';
       t.retryAt = performance.now() + 30000;

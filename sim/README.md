@@ -57,7 +57,7 @@ screenshot; or open the page in a normal browser window and leave it for a minut
   clock time is about 40 minutes later). `[` and `]` change it in flight.
 * **Graphics**: Low (75 % resolution, small shadow map), Medium, High (full resolution up to 2x
   for high-DPI screens, 4096 px shadows). High is meant for an RTX 3070 at 1440p.
-* **Options**: two AI wingmen in fingertip formation, the mouse stick, the volume.
+* **Options**: two AI wingmen in fingertip formation, the mouse stick, 3D buildings, the volume.
 * **Joystick & gamepad**: bind any axis or button of any controller (saved in the browser),
   deadzone and expo, invert the keyboard pitch.
 
@@ -187,6 +187,8 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
 | `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
+| `buildings=0` | no 3D buildings (the menu's option turns them off too) |
+| `buildingsDebug=1` | buildings tinted by level of detail: boxes blue, full detail red |
 
 ## Files (the app shell)
 
@@ -308,6 +310,31 @@ Example (Playwright, after `waitForFunction(() => window.__sim?.ready)`):
 `page.evaluate(() => { __sim.start('telnof_36', {time: 12}); __sim.autopilot('takeoff'); return __sim.fly({until: 'climb'}); })`,
 then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
 
+## Buildings (`js/world/Buildings.js`)
+
+The 839,000 buildings of the core: Overture Maps (OpenStreetMap and Microsoft ML footprints) and
+the air bases traced in the imagery, made into `data/world/buildings/` (222 tiles, 32 MB) by
+`sim/tools/world/buildings.py` with heights, roof shapes, styles and colours estimated from tags,
+neighbours and region (`sim/tools/world/README.md`).
+
+* **Streaming**: a worker (`BuildingsWorker.js`) parses the 6.4 km tiles around the camera and
+  builds two levels of detail. Every building is an instanced box with its roof shape (one draw
+  call per tile) that grows out of the ground at its visibility distance (no popping); near the
+  camera, 800 m chunks get the real footprints (walls, roofs, parapets, roof houses, pitched
+  roofs, domes, vaults) and mask their boxes. Start-up does not wait for buildings.
+* **Shading** (`buildingShaders.js`): procedural, filtered facades per style (White City plaster
+  with balconies and pilotis, Jerusalem limestone, glass curtain walls, offices, towers,
+  industrial halls, houses, greenhouses, old stone), windows that reflect the sky and show rooms
+  behind them, lit windows and shop fronts at night (fewer after midnight), roofs with tiles, metal,
+  solar water heaters and clutter. Lit like the terrain (sun, sky, aerial perspective, logarithmic
+  depth); they receive the sun's shadows, and the full-detail chunks cast them.
+
+| quality | full detail within | boxes up to | full-detail chunks |
+| --- | --- | --- | --- |
+| low | 1.2 km | 15 km (a house to ~2 km) | 24 |
+| medium | 2 km | 21 km (a house to ~3 km) | 44 |
+| high | 3 km (towers further) | 28 km (a house to ~4.5 km) | 72 |
+
 ## Notes and small deviations from DESIGN.md
 
 * **Depth buffer**: logarithmic by default. The view spans the cockpit (0.04 m near plane) and
@@ -342,6 +369,9 @@ then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
   cover: © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021)
   processed by ESA WorldCover consortium (CC BY 4.0). Airports: OurAirports (public domain).
   The menu shows the attribution of the data set it loaded.
+* **Buildings**: © OpenStreetMap contributors and Microsoft ML Building Footprints (ODbL 1.0),
+  via the Overture Maps Foundation; the air bases traced from the ESA WorldCover Sentinel-2
+  imagery (CC BY 4.0). Facades and roofs are procedural.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here.
