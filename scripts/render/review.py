@@ -50,6 +50,9 @@ VIEWS = {
     "stencil_l": ((4.0, -3.95, 0.75), (0.6, -3.95, 0.25), 50),
     "stencil_r": ((-4.0, -3.95, 0.75), (-0.6, -3.95, 0.25), 50),
     "nozzle_rear34": ((-2.6, 10.2, 0.9), (0.0, 6.0, 0.12), 50),
+    # nose leg under its doors: front-left and low (as c51 / c53), and side on (as c48)
+    "ng_fl":   ((2.4, -6.6, -1.05), (0.0, -3.7, -0.95), 45),
+    "ng_side": ((5.0, -3.8, -1.0), (0.0, -3.8, -0.95), 50),
 }
 
 HIDE_PREFIX = ("HB_", "Hitbox", "Smoke", "Vapour", "Cut_", "CompareCam", "PrevCam", "MatchCam")

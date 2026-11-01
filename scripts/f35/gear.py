@@ -63,6 +63,8 @@ MG_B = (2.17, 9.48, 0.17)          # drag-brace airframe pivot: a fitting in a n
 MG_BRACE_D = 0.90                  # brace lug on the leg, this far down from the trunnion (below the
                                    # hanging door's lower edge)
 MG_E = (1.62, 10.62, 0.31)         # actuator airframe pivot (well roof)
+MG_BRACE_POLE = (0.25, 0.5, 0.35)   # pole above the stowed brace: (inboard, aft, up) from its middle
+MG_BRACE_UPPER = 0.70              # upper link's share: the stowed knee folds into the body under the wing-root skin
 
 
 def W(p):
@@ -167,7 +169,9 @@ def build_wheel(prefix, coll, centre, axle_dir, R, rim, width, outboard=1.0):
     parts = [tyre, hub]
     u = a.orthogonal().normalized()
     w = a.cross(u)
-    nb = 10 if R > 0.3 else 6
+    if R > 0.3:
+        return parts + _main_hub_face(prefix, coll, c, a, u, w, rim, hw, outboard)
+    nb = 6
     for k in range(nb):
         t = 2 * math.pi * k / nb
         p = c + a * (o * hw * 0.42) + (u * math.cos(t) + w * math.sin(t)) * rim * 0.62
@@ -188,6 +192,35 @@ def build_wheel(prefix, coll, centre, axle_dir, R, rim, width, outboard=1.0):
         p1 = c + a * (o * hw * 0.425) + dv * rim * 0.78
         parts.append(bar(f"{prefix}_Slot{k}", p0, p1, rim * 0.16, 0.012, a, coll,
                          M.get("intake_dark")))
+    return parts
+
+
+def _main_hub_face(prefix, coll, c, a, u, w, rim, hw, o):
+    """Main wheel, outboard face (c51, c53): a ring of twelve round lightening holes in the web
+    and a raised centre cap carrying a three-bolt triangular plate; no bolt ring shows."""
+    dark, chrome = M.get("intake_dark"), M.get("chrome")
+    parts = []
+    web = 0.4214                                          # web plane (x hw) at the hole ring, from the profile
+    for k in range(12):                                   # each hole a short radial slot (two round ends)
+        t = 2 * math.pi * (k + 0.5) / 12
+        dv = u * math.cos(t) + w * math.sin(t)
+        for j, rr in enumerate((0.60, 0.70)):
+            p = c + a * (o * hw * web) + dv * rim * rr
+            parts.append(cylinder(f"{prefix}_Hole{k}{'ab'[j]}", p - a * (o * 0.004), p + a * (o * 0.0055),
+                                  rim * 0.12, None, coll, dark, segments=12))
+    cap = cylinder(f"{prefix}_Cap", c + a * (o * hw * 0.60), c + a * (o * hw * 0.70),
+                   rim * 0.34, rim * 0.30, coll, M.get("hub"), segments=32)
+    parts.append(cap)
+    face = c + a * (o * (hw * 0.70 + 0.002))
+    vs = [face + (u * math.cos(t) + w * math.sin(t)) * rim * 0.27
+          for t in (math.pi / 2, math.pi / 2 + 2 * math.pi / 3, math.pi / 2 + 4 * math.pi / 3)]
+    for k in range(3):
+        parts.append(bar(f"{prefix}_CapPlate{k}", vs[k], vs[(k + 1) % 3], 0.010, 0.004, a, coll, dark))
+        parts.append(cylinder(f"{prefix}_CapBolt{k}", vs[k] - a * (o * 0.002), vs[k] + a * (o * 0.008),
+                              0.007, None, coll, chrome, segments=6))
+    vstem = c + a * (o * hw * 0.55) + u * rim * 0.86
+    parts.append(cylinder(f"{prefix}_Valve", vstem, vstem + a * (o * 0.035), 0.007, None, coll, chrome,
+                          segments=6))
     return parts
 
 
@@ -422,7 +455,8 @@ def build_main(coll, bones, side):
                               segments=20))
     oleo_objs.append(cylinder(f"MG_Knuckle_{tag}", S - a1 * 0.08, S + a1 * 0.10, 0.088, None, coll, gear,
                               segments=20))            # axle fitting at the foot of the piston
-    oleo_objs.append(cylinder(f"MG_Axle_{tag}", S, C + a1 * 0.17, 0.045, None, coll, gear, segments=14))
+    oleo_objs.append(cylinder(f"MG_Axle_{tag}", S, C + a1 * (MG_W * 0.5 * 0.62), 0.045, None, coll, gear,
+                              segments=14))          # ends inside the hub cap: no stub shows (c51)
     oleo_objs.append(cylinder(f"MG_Brake_{tag}", C - a1 * 0.115, C - a1 * 0.03, 0.16, None, coll,
                               M.get("intake_dark"), segments=24))
     # torque links (aft side), from the gland down to the axle fork
@@ -434,13 +468,22 @@ def build_main(coll, bones, side):
     oleo_objs.append(bar(f"MG_TorqueLink_L_{tag}", knee, t_lo, 0.06, 0.035, nrm, coll, gear, bevel=0.006))
     oleo_objs.append(cylinder(f"MG_TorqueKnee_{tag}", knee - nrm * 0.04, knee + nrm * 0.04, 0.02, None,
                               coll, chrome, segments=10))
-    # brake line down the front of the strut
+    # brake lines down the front of the strut (c51, c53): a dark hose and a metal pipe, one each side
+    # of the drag-brace lug, held by clamp rings on the oleo, then looping forward to the brake
     fwd_p = -aft_p
-    pts = [T + u * 0.45 + fwd_p * 0.11, T + u * (oleo - 0.06) + fwd_p * 0.11, S - u * 0.12 + fwd_p * 0.09,
-           C - a1 * 0.09 + fwd_p * 0.12]
-    for k in range(len(pts) - 1):
-        (oleo_objs if k == 2 else strut_objs).append(
-            cylinder(f"MG_BrakeLine{k}_{tag}", pts[k], pts[k + 1], 0.009, None, coll, chrome, segments=6, cap=False))
+    side_p = u.cross(fwd_p).normalized()
+    for j, (off, rad, mat) in enumerate(((0.085, 0.012, M.get("hose")), (-0.085, 0.008, chrome))):
+        sp = side_p * off
+        pts = [T + u * 0.64 + fwd_p * 0.075 + sp, T + u * (oleo - 0.06) + fwd_p * 0.075 + sp,
+               S - u * 0.12 + fwd_p * 0.075 + sp, S - u * 0.04 + fwd_p * 0.17 + sp * 0.6,
+               C - a1 * 0.09 + fwd_p * 0.13 + sp * 0.4]
+        for k in range(len(pts) - 1):
+            (oleo_objs if k >= 2 else strut_objs).append(
+                cylinder(f"MG_BrakeLine{j}{k}_{tag}", pts[k], pts[k + 1], rad, None, coll, mat, segments=8,
+                         cap=False))
+    for k, h in enumerate((oleo - 0.17, oleo - 0.10)):
+        strut_objs.append(cylinder(f"MG_Clamp{k}_{tag}", T + u * (h - 0.012), T + u * (h + 0.012),
+                                   0.098, None, coll, M.get("hose"), segments=24))
     # wheel (outboard face shows the hub)
     wheel = build_wheel(f"MG_Wheel_{tag}", coll, C, a1, MG_R, MG_RIM, MG_W)
     # drag brace (forward): outside the well with the gear down, folding into it on retraction
@@ -449,9 +492,9 @@ def build_main(coll, bones, side):
     # the pole sits above the stowed brace, inboard: retracted, the knee folds up into the body
     # instead of out through the well opening; deployed, the brace keeps a slight forward-up bend
     Dw_stow = rot_about(Dw, T, R)
-    pole_pt = (Bw + Dw_stow) / 2 + Vector((0, 0, 0.7)) + Vector((-side * 0.25, 0, 0))
+    pole_pt = (Bw + Dw_stow) / 2 + Vector((-side * MG_BRACE_POLE[0], MG_BRACE_POLE[1], MG_BRACE_POLE[2]))
     pole = (pole_pt - (Bw + Dw) / 2).normalized()
-    K, Lk, n = brace_geometry(Bw, Dw, pole, over=0.005)
+    K, Lk, n = brace_geometry(Bw, Dw, pole, over=0.005, upper=MG_BRACE_UPPER)
     br_u = bar(f"MG_DragBrace_U_{tag}", Bw, K, 0.085, 0.06, n.cross((Dw - Bw).normalized()), coll, gear,
                bevel=0.008)
     br_l = bar(f"MG_DragBrace_L_{tag}", K, Dw, 0.075, 0.055, n.cross((Dw - Bw).normalized()), coll, gear,

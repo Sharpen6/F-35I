@@ -22,7 +22,7 @@ def _new(name):
 
 def principled(name, color, rough=0.5, metal=0.0, coat=0.0, emission=None,
                emission_strength=0.0, alpha=1.0, transmission=0.0, ior=1.45,
-               spec=0.5, spec_tint=None, thin_film=0.0):
+               spec=0.5, spec_tint=None, thin_film=0.0, film_ior=1.9):
     mat = _new(name)
     b = _bsdf(mat)
     b.inputs["Base Color"].default_value = (*color, 1.0)
@@ -40,7 +40,7 @@ def principled(name, color, rough=0.5, metal=0.0, coat=0.0, emission=None,
         b.inputs["Specular Tint"].default_value = (*spec_tint, 1.0)
     if thin_film > 0 and "Thin Film Thickness" in b.inputs:
         b.inputs["Thin Film Thickness"].default_value = thin_film      # nm (ITO coating)
-        b.inputs["Thin Film IOR"].default_value = 1.9
+        b.inputs["Thin Film IOR"].default_value = film_ior
     if alpha < 1.0:
         b.inputs["Alpha"].default_value = alpha
         try:
@@ -453,14 +453,17 @@ def _make(name):
         "radome":    dict(color=(0.215, 0.225, 0.235), rough=0.45, metal=0.2),
         # clear, lightly bronze-tinted transparency; the gold shows mainly in
         # reflections (ITO coating), as in photos where the pilot is plainly visible.
-        # A ~110 nm film (n 1.9 on n 1.5 glass) reflects a first-order gold that
-        # pales at grazing angles; the earlier 420 nm film gave a second-order
-        # red + blue peak, i.e. a magenta canopy.
+        # A quarter-wave film on n 1.5 glass reflects a first-order gold that pales at
+        # grazing angles; the earlier 420 nm film gave a second-order red + blue peak,
+        # i.e. a magenta canopy.  n 1.62 at 131 nm keeps the hue of the earlier n 1.9 /
+        # 112 nm film (peak ~850 nm) but reflects ~7 % at normal incidence instead of ~17 %:
+        # in c09, c34 and c53 the black bow stays solid under sky glare, and the glass reads
+        # darker than the skin (c34 glass/skin luminance ~0.66; the renders gave ~0.94).
         # photo c09: the view through both walls turns amber while the reflections stay
         # near neutral (magenta-violet glints in c51 / c53), so the tint is in the transmission
         "canopy":    dict(color=(0.84, 0.72, 0.50), rough=0.02, metal=0.0,
                           transmission=1.0, ior=1.5, alpha=1.0, spec_tint=(1.0, 0.95, 0.88),
-                          thin_film=112.0),
+                          thin_film=131.0, film_ior=1.62),
         "canopy_frame": dict(color=(0.17, 0.18, 0.19), rough=0.45, metal=0.3),
         "canopy_bow": dict(color=(0.025, 0.025, 0.028), rough=0.5),
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),
