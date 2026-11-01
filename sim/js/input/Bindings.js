@@ -32,6 +32,7 @@ export const BUTTON_ACTIONS = [
   { id: 'canopyToggle', label: 'Canopy open / close' },
   { id: 'speedbrakeToggle', label: 'Speed brake' },
   { id: 'highAoAToggle', label: 'High-AoA mode (50 deg) on / off' },
+  { id: 'apcToggle', label: 'Auto-throttle (approach, 13 deg AoA) on / off' },
   { id: 'throttleUp', label: 'Throttle up (hold)' },
   { id: 'throttleDown', label: 'Throttle down (hold)' },
   { id: 'cameraNext', label: 'Next camera' },

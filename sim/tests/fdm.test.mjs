@@ -635,7 +635,51 @@ tests.final = () => {
     info(`start ${ias0.toFixed(1)} KIAS at ${aoa0.toFixed(1)} deg AoA, throttle ${inp.throttle.toFixed(3)}; first 10 s path within ${gDev.toFixed(2)} deg of -3;`
       + ` 20 s: ${st.ias_kt.toFixed(1)} KIAS, ${(st.alpha * R2D).toFixed(1)} deg AoA`);
     check('hands-off final: flight path, first 10 s', gDev, 0, 0.1, 'deg', 'no 1 g bias at high AoA in the path hold (it flattened the path by 0.2 deg and bled speed)');
-    check('hands-off final: speed change in 20 s', vDev, 0, 3, 'kt', 'trimmed start; the back of the drag curve diverges only slowly (fly the AoA with the throttle)');
+    check('hands-off final: speed change in 20 s', vDev, 0, 3, 'kt', 'trimmed start; the back of the drag curve diverges only slowly (fly the AoA with the throttle, or the auto-throttle)');
+  }
+  {
+    // the auto-throttle (APC) from the 10 km approach spawn, hands off all the way to the runway
+    const fdm = newFdm();
+    const dist = 10000;
+    const y = RWY.elev + 15 + dist * Math.tan(3 * D2R);
+    const r = fdm.reset({ x: 0, y, z: RWY.zSouth + dist, heading_deg: 0, on_ground: false, speed_ms: tasFromCas(140 * KT, y), gear: true, flight_path_deg: -3, fuel: 0.45, apc: true });
+    const st = fdm.state;
+    const inp = { ...base(), throttle: r.throttle, apc: r.apc };
+    let aDev = 0, vMin = Infinity, vMax = 0, engaged = true, zTd = null;
+    for (let i = 0; i < 200 * 60 && !st.crashed && zTd === null; i++) {
+      fdm.step(DT, inp);
+      if (st.onGround) zTd = st.position.z;
+      else if (i > 15 * 60 && st.agl > 15) {
+        aDev = Math.max(aDev, Math.abs(st.alpha * R2D - 13));
+        vMin = Math.min(vMin, st.ias_kt); vMax = Math.max(vMax, st.ias_kt);
+        engaged = engaged && st.apc;
+      }
+    }
+    for (let i = 0; i < 2 * 60 && !st.crashed; i++) fdm.step(DT, inp);
+    const td = st.lastTouchdown;
+    info(`auto-throttle: AoA within ${aDev.toFixed(2)} deg of 13, ${vMin.toFixed(1)}..${vMax.toFixed(1)} KIAS; touchdown ${zTd !== null ? (RWY.zSouth - zTd).toFixed(0) : '-'} m past the threshold,`
+      + ` sink ${td ? td.sink.toFixed(2) : '-'} m/s; then throttle ${st.engine.throttle.toFixed(2)}, engaged ${st.apc}`);
+    checkTrue('auto-throttle: on from an approach spawn, engaged all the way down', r.apc === true && engaged, `spawn ${r.apc}, engaged ${engaged}`, 'spawns.json telnof_final has apc: true');
+    check('auto-throttle: AoA on the way down', aDev, 0, 0.5, 'deg', 'holds the on-speed AoA (with a fixed throttle the jet ran away to 300 kt in 100 s)');
+    check('auto-throttle: speed band on the way down', vMax - vMin, 0, 3, 'kt', 'a stable approach at ~140 KIAS');
+    check('auto-throttle: touchdown past the threshold', zTd !== null ? RWY.zSouth - zTd : -1, 100, 700, 'm', 'the 3 deg path from 15 m over the threshold, into the touchdown zone');
+    checkTrue('auto-throttle: hard landing without a flare, no crash, then idle and off', !st.crashed && td && td.hard && st.engine.throttle === 0 && !st.apc,
+      st.crashReason || `hard ${td ? td.hard : '-'}, throttle ${st.engine.throttle}, engaged ${st.apc}`, 'retards to idle at touchdown and lets go (the lever follows, main.js)');
+  }
+  {
+    // it needs the gear down, and gives way in the 50 deg mode
+    const fdm = newFdm();
+    const r = airSpawn(fdm, 250, 1500);
+    const st = fdm.state;
+    const inp = { ...base(), throttle: r.throttle, apc: true, gearHandle: false };
+    for (let i = 0; i < 60; i++) fdm.step(DT, inp);
+    const gearUp = st.apc;
+    const fdm2 = newFdm();
+    const r2 = fdm2.reset({ x: 0, y: 800, z: 0, heading_deg: 0, on_ground: false, speed_ms: tasFromCas(140 * KT, 800), gear: true, fuel: 0.45 });
+    const inp2 = { ...base(), throttle: r2.throttle, apc: true, highAoA: true };
+    for (let i = 0; i < 60; i++) fdm2.step(DT, inp2);
+    checkTrue('auto-throttle: off with the gear up and in the high-AoA mode', !gearUp && !fdm2.state.apc && Math.abs(fdm2.state.engine.throttle - r2.throttle) < 1e-9,
+      `gear up ${gearUp}, high-AoA mode ${fdm2.state.apc}`, 'the lever flies the engine then');
   }
   {
     // 146 KCAS on the 3 deg path straight into the runway, hands off, no flare

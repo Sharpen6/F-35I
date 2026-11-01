@@ -98,6 +98,18 @@ const run = (n) => { let f; for (let i = 0; i < n; i++) f = inp.update(DT); retu
   check('A: high-AoA mode on / off', a === true && b === false, `${a} -> ${b}`);
 }
 
+// ---- T: the auto-throttle; any throttle input hands the throttle back to the pilot
+{
+  inp.setLevers({ throttle: 0.3, apc: true });
+  const spawned = inp.update(DT).apc;
+  key('keydown', 'Equal'); inp.update(DT); key('keyup', 'Equal');
+  const afterKey = inp.levers.apc;
+  key('keydown', 'KeyT'); const on = inp.update(DT).apc; key('keyup', 'KeyT');
+  key('keydown', 'KeyT'); const off = inp.update(DT).apc; key('keyup', 'KeyT');
+  check('auto-throttle: on from the spawn, T toggles it, the throttle keys take over', spawned && !afterKey && on && !off,
+    `spawn ${spawned}, after = ${afterKey}, T ${on} -> ${off}`);
+}
+
 // ---- standard gamepad: right stick (rudder X, throttle Y) and L3
 {
   const pad = {

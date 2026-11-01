@@ -226,6 +226,15 @@ export const F35I_CONFIG = {
     tauR: 0.18, kBeta: 2.0, betaMax: 12 * D, betaMin: 1.5 * D, betaQbarRef: 5000,
   },
 
+  // ------------------------------------------------------------------------------ auto-throttle
+  // Approach power compensator (T key; on at the telnof_final spawn): with the gear down in the air
+  // it flies the on-speed AoA with the engine while the FCS holds the flight path. On the back side
+  // of the drag curve (the approach) a fixed throttle runs away in speed: from the trimmed 140 kt
+  // the jet was at 300 kt on the runway 100 s later. Throttle per rad of AoA error (0.08 per deg),
+  // its integral, damping on the acceleration along the path (per m/s^2, filtered over vdotTau s),
+  // the range (idle to MIL, never the afterburner) and the slew rate (per s).
+  apc: { alpha: 13 * D, kp: 4.6, ki: 1.2, kd: 0.03, vdotTau: 0.4, min: 0.03, max: 0.75, rate: 0.3 },
+
   // ------------------------------------------------------------------------------ actuators
   actuators: {
     de: { rate: 3.0, tau: 0.025 },                 // 1/s of the normalised range: stabilators ~60 deg/s

@@ -350,7 +350,9 @@ class App {
       parkingBrake: onGround,
       canopy: false,
       speedbrake: false,
+      apc: !!r.apc,                        // flight track: an approach spawn starts on the auto-throttle
     });
+    this._apcShown = !!r.apc;
     const st = this.fdm.state;
     this.currPos.copy(st.position); this.prevPos.copy(st.position);
     this.currQuat.copy(st.quaternion); this.prevQuat.copy(st.quaternion);
@@ -389,7 +391,7 @@ class App {
     let hint = sp.on_ground !== false
       ? (pad ? 'Parking brake set: L3 releases it. Throttle: right stick up or the right trigger. Start: menu'
         : 'Parking brake set: Shift+B releases it. Throttle: Shift / Page Up. F1: help')
-      : `${sp.label}. ${pad ? 'Start: menu' : 'F1: help'}`;
+      : `${sp.label}.${this.input.levers.apc ? ` Auto-throttle on${pad ? '' : ' (T)'}.` : ''} ${pad ? 'Start: menu' : 'F1: help'}`;
     if (this.settings.mouseStick && !pad) hint += '. Mouse stick: click the view to capture the mouse';
     this.ui.toast(hint, 4200);
   }
@@ -529,7 +531,8 @@ class App {
     if (!t) return;
     for (const k of ['pitch', 'roll', 'yaw', 'brake']) if (t[k] != null) f[k] = t[k];
     const L = this.input.levers;
-    if (t.throttle != null) { L.throttle = clamp(t.throttle, 0, 1); f.throttle = L.throttle; }
+    // a scripted throttle takes over from the auto-throttle, as the pilot's lever does
+    if (t.throttle != null) { L.throttle = clamp(t.throttle, 0, 1); f.throttle = L.throttle; L.apc = false; f.apc = false; }
     if (t.gear != null) f.gearHandle = L.gearHandle = !!t.gear;
     if (t.parkingBrake != null) f.parkingBrake = L.parkingBrake = !!t.parkingBrake;
     if (t.speedbrake != null) { L.speedbrake = !!t.speedbrake; f.speedbrake = L.speedbrake ? 1 : 0; }
@@ -579,6 +582,19 @@ class App {
     if (f.reset) { this.restart(); return; }
     if (f.resetHint) ui.toast(this.input.lastDevice === 'keyboard' ? 'Hold R for a second to restart at the start point' : 'Hold the button for a second to restart', 2000);
     if (f.highAoAToggle) ui.toast(L.highAoA ? 'High-AoA mode: AoA limit 50 deg' : 'Normal mode: AoA limit 25 deg');
+    // auto-throttle (APC): only with the gear down in the air; while it flies, the lever follows
+    // the engine command, so taking over (any throttle input turns it off) does not jump
+    if (L.apc && st.apc) { L.throttle = st.engine.throttle; this._apcFlying = true; }
+    if (L.apc && (st.onGround || st.crashed || st.gear < 0.999 || L.highAoA || !L.gearHandle)) {
+      if (this._apcFlying && st.onGround) L.throttle = 0;               // touchdown: idle, as the flight model does
+      L.apc = false;
+      if (f.apcToggle) { ui.toast('Auto-throttle: with the gear down, in the air'); this._apcShown = false; }
+    }
+    if (!L.apc) this._apcFlying = false;
+    if (L.apc !== !!this._apcShown) {
+      this._apcShown = L.apc;
+      ui.toast(L.apc ? 'Auto-throttle on: it flies 13 deg AoA; move the throttle to take over' : 'Auto-throttle off');
+    }
     if (f.gearToggle) {
       if (!L.gearHandle && st.onGround) {
         L.gearHandle = true;

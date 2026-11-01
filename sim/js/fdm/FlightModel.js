@@ -83,6 +83,7 @@ export class FlightModel {
     this._timeOnGround = 0;
     this._timeAirborne = 0;
     this._hardTimer = 0;         // s left of the HARD LANDING warning
+    this._apcOn = false; this._apcI = 0; this._apcV = 0; this._apcVdot = 0; this._apcRetard = false;   // auto-throttle (_throttleCmd)
     this._wasOnGround = true;
 
     // ---- sensor values carried from one sub-step to the next (FCS inputs)
@@ -118,7 +119,7 @@ export class FlightModel {
       crashed: false, crashReason: '', warnings: [],
       // extras (SI unless named): handy for the HMD / HUD and tests
       ias_kt: 0, tas_kt: 0, alt_ft: 0, vs_fpm: 0, gamma: 0, groundSpeed: 0, qbar: 0, mass: 0, time: 0,
-      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false,
+      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false, apc: false,
     };
     this._stance = this._computeStance();
     this.reset({ x: 0, y: 0, z: 0, heading_deg: 0, on_ground: true });
@@ -183,6 +184,11 @@ export class FlightModel {
     this.lastTouchdown = null;
     this._hardTimer = 0;
     this._timeAirborne = 0;
+    this._apcOn = false;
+    this._apcRetard = false;
+    this._apcI = 0;
+    this._apcV = spawn.on_ground === false ? (+spawn.speed_ms || 0) : 0;
+    this._apcVdot = 0;
     this.time = 0;
     this._acc = 0;
     this.rollDistance = 0;
@@ -261,7 +267,36 @@ export class FlightModel {
     this._prevOrigin.copy(this._origin);
     this._prevQuat.copy(this._quat);
     this._publish(0, null);
-    return { throttle, gearDown };
+    // spawn.apc: start with the auto-throttle on (an approach spawn; it needs the gear down)
+    return { throttle, gearDown, apc: !onGround && gearDown && !!spawn.apc };
+  }
+
+  /**
+   * The throttle this step: the pilot's lever, or with inp.apc the auto-throttle (approach power
+   * compensator, cfg.apc), which holds the on-speed AoA with the gear down in the air. It starts
+   * from the throttle in use (no jump) and gives way on the ground, with the gear moving, in the
+   * 50 deg AoA mode and with the engine out; the input layer turns it off when the pilot moves the
+   * lever, and follows its throttle with the lever meanwhile (main.js).
+   */
+  _throttleCmd(h, inp, alpha, V, onGround) {
+    const c = this.cfg.apc;
+    const lever = clamp(inp.throttle != null ? +inp.throttle : this._throttle, 0, 1);
+    if (!c) return lever;
+    // acceleration along the path, filtered (the damping term; kept warm while off)
+    const vdot = (V - this._apcV) / h;
+    this._apcV = V;
+    this._apcVdot += (vdot - this._apcVdot) * Math.min(1, h / c.vdotTau);
+    if (!inp.apc) this._apcRetard = false;
+    // touchdown with it flying: idle until it is switched off (the lever follows it, main.js), so
+    // the jet does not roll down the runway at approach power, nor bounce into a re-engagement
+    if (this._apcOn && onGround && inp.apc) this._apcRetard = true;
+    const on = !!inp.apc && !this._apcRetard && !onGround && this.gearPos > 0.999 && !inp.highAoA && V > 30 && !this.crashed && this.engine.running;
+    if (!on) { this._apcOn = false; return this._apcRetard ? 0 : lever; }
+    if (!this._apcOn) { this._apcOn = true; this._apcI = this._throttle; }
+    const e = alpha - c.alpha;                          // + = slow: more power
+    this._apcI = clamp(this._apcI + c.ki * e * h, c.min, c.max);
+    const cmd = clamp(this._apcI + c.kp * e - c.kd * this._apcVdot, c.min, c.max);
+    return approach(this._throttle, cmd, c.rate * h);
   }
 
   _setAttitude(heading, pitch, roll) {
@@ -432,7 +467,7 @@ export class FlightModel {
     const onGround = wowMain || wowNose;
 
     // ---------------------------------------------------------------- discrete systems
-    const thr = clamp(inp.throttle != null ? +inp.throttle : this._throttle, 0, 1);
+    const thr = this._throttleCmd(h, inp, alpha, V, onGround);
     this._throttle = thr;
     const handleDown = inp.gearHandle !== false;
     if (handleDown) this.gearPos = Math.min(1, this.gearPos + h / cfg.gear.retractTime);
@@ -723,6 +758,7 @@ export class FlightModel {
     st.fcsMode = this.fcs.mode;
     st.lastTouchdown = this.lastTouchdown;
     st.highAoA = !!(inp && inp.highAoA);
+    st.apc = this._apcOn;                  // the auto-throttle is flying the throttle
     // warnings
     const wn = st.warnings;
     wn.length = 0;

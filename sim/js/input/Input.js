@@ -7,14 +7,15 @@
 //     pitch, roll, yaw (-1..1, + = pull / right / right), throttle (0..1, 0.75 = MIL),
 //     brake (0..1), parkingBrake, gearHandle (true = down), canopy (true = open), nwsEnable,
 //     speedbrake (0..1)
-//   highAoA (the 50 deg AoA mode is selected), and the edges of this frame (true once per press):
+//   highAoA (the 50 deg AoA mode is selected), apc (the auto-throttle is selected), and the edges of this frame (true once per press):
 //   gearToggle, canopyToggle, cameraNext, cameraPrev, camera (1..5 or 0), pause, reset, resetHint,
 //   hmdToggle, help, lightsToggle, landingLightToggle, mute, timeEarlier, timeLater,
-//   parkingBrakeToggle, speedbrakeToggle, highAoAToggle, lookCenter, fullscreen, menuBack; plus
+//   parkingBrakeToggle, speedbrakeToggle, highAoAToggle, apcToggle, lookCenter, fullscreen, menuBack; plus
 //   head look: lookX / lookY (rates -1..1 from hats and the numpad), dragX / dragY (mouse drag in
 //   px this frame), wheel (scroll steps this frame).
 //
-// The levers (throttle, gear handle, parking brake, canopy, speed brake, high-AoA mode) live here;
+// The levers (throttle, gear handle, parking brake, canopy, speed brake, high-AoA mode, auto-throttle)
+// live here; moving the throttle in any way turns the auto-throttle off (the pilot takes over);
 // the app may veto a change by writing input.levers back (e.g. the gear handle is locked on the
 // ground).  Two hints from the app (main.js, every frame): `airborne` (L3 on a gamepad is the
 // parking brake on the ground and the high-AoA mode in the air) and `resetNeedsHold` (R restarts
@@ -40,7 +41,7 @@ const RESET_HOLD = 1.0;              // s to hold R (or a bound reset button) to
 // the stick reads centred, so the FCS holds attitude.  The roll axis springs back to centre once
 // the mouse rests (MOUSE_ROLL_IDLE s), like a spring-loaded side-stick: roll in, stop, and the
 // bank is held.  Middle click centres both axes.
-const MOUSE_DEADZONE = 0.06;
+export const MOUSE_DEADZONE = 0.06;        // (the HMD draws it round the mouse-stick indicator)
 const MOUSE_ROLL_IDLE = 0.25;
 const MOUSE_ROLL_RETURN = 3.0;       // throw per s
 const LOOK_KEYS = { Numpad8: [0, 1], Numpad2: [0, -1], Numpad4: [-1, 0], Numpad6: [1, 0] };
@@ -51,7 +52,7 @@ const OWN_KEYS = new Set([
   'KeyH', 'KeyV', 'KeyM', 'KeyP', 'KeyR', 'KeyS', 'KeyF', 'PageUp', 'PageDown', 'Home', 'F1',
   'BracketLeft', 'BracketRight', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'Slash',
   'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Numpad8', 'Numpad2', 'Numpad4', 'Numpad6',
-  'Numpad5', 'Space', 'Tab', 'KeyA',
+  'Numpad5', 'Space', 'Tab', 'KeyA', 'KeyT',
 ]);
 const THR_UP_KEYS = new Set(['ShiftLeft', 'ShiftRight', 'Equal', 'NumpadAdd']);
 const THR_DOWN_KEYS = new Set(['ControlLeft', 'ControlRight', 'Minus', 'NumpadSubtract']);
@@ -80,7 +81,7 @@ export function shapeAxis(v, deadzone, expo) {
 
 const EDGE_NAMES = ['gearToggle', 'canopyToggle', 'cameraNext', 'cameraPrev', 'pause', 'reset', 'resetHint', 'hmdToggle',
   'help', 'lightsToggle', 'landingLightToggle', 'mute', 'timeEarlier', 'timeLater', 'parkingBrakeToggle',
-  'speedbrakeToggle', 'highAoAToggle', 'lookCenter', 'fullscreen', 'menuBack', 'confirm'];
+  'speedbrakeToggle', 'highAoAToggle', 'apcToggle', 'lookCenter', 'fullscreen', 'menuBack', 'confirm'];
 
 export class Input {
   constructor(domElement) {
@@ -91,7 +92,7 @@ export class Input {
     /** Mouse stick: the mouse (pointer locked to the view) moves a virtual stick. */
     this.mouseStick = false;
     this.mouseStickPos = { x: 0, y: 0 };
-    this.levers = { throttle: 0, gearHandle: true, parkingBrake: true, canopy: false, speedbrake: false, nwsEnable: true, highAoA: false };
+    this.levers = { throttle: 0, gearHandle: true, parkingBrake: true, canopy: false, speedbrake: false, nwsEnable: true, highAoA: false, apc: false };
     /** Hints from the app, every frame (see the header). */
     this.airborne = false;
     this.resetNeedsHold = false;
@@ -116,7 +117,7 @@ export class Input {
 
     this.frame = {
       pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: 0, parkingBrake: true, gearHandle: true, canopy: false,
-      nwsEnable: true, speedbrake: 0, highAoA: false, camera: 0, lookX: 0, lookY: 0, dragX: 0, dragY: 0, wheel: 0, dragButton: -1,
+      nwsEnable: true, speedbrake: 0, highAoA: false, apc: false, camera: 0, lookX: 0, lookY: 0, dragX: 0, dragY: 0, wheel: 0, dragButton: -1,
     };
     for (const k of EDGE_NAMES) this.frame[k] = false;
 
@@ -154,7 +155,7 @@ export class Input {
   }
 
   /** Put the levers where the flight model set them up (after reset(spawn)). */
-  setLevers({ throttle, gearDown, parkingBrake, canopy, speedbrake, highAoA = false } = {}) {
+  setLevers({ throttle, gearDown, parkingBrake, canopy, speedbrake, highAoA = false, apc = false } = {}) {
     const L = this.levers;
     if (throttle != null) L.throttle = clamp(+throttle, 0, 1);
     if (gearDown != null) L.gearHandle = !!gearDown;
@@ -162,6 +163,7 @@ export class Input {
     if (canopy != null) L.canopy = !!canopy;
     if (speedbrake != null) L.speedbrake = !!speedbrake;
     L.highAoA = !!highAoA;               // a new flight starts in the normal 25 deg mode
+    L.apc = !!apc;                       // and the auto-throttle off unless the spawn has it on
     this.detent.hold = 0;
     this.kb.pitch = this.kb.roll = this.kb.yaw = 0;
     this.mouseStickPos.x = this.mouseStickPos.y = 0;
@@ -244,6 +246,7 @@ export class Input {
       case 'KeyP': case 'Escape': q('pause'); break;
       case 'KeyR': this._resetPress(); break;
       case 'KeyA': q('highAoAToggle'); break;
+      case 'KeyT': q('apcToggle'); break;
       case 'KeyS': q('speedbrakeToggle'); break;
       case 'KeyF': q('fullscreen'); break;
       case 'Home': case 'Numpad5': q('lookCenter'); break;
@@ -423,7 +426,7 @@ export class Input {
         const lever = clamp((v + 1) / 2, 0, 1);
         const last = this._throttleAxisLast.get(pad.id);
         if (last === undefined || Math.abs(lever - last) > 0.015) {
-          if (last !== undefined) { this.levers.throttle = lever; this.detent.hold = 0; active = true; }
+          if (last !== undefined) { this.levers.throttle = lever; this.levers.apc = false; this.detent.hold = 0; active = true; }
           this._throttleAxisLast.set(pad.id, lever);
         }
       }
@@ -495,6 +498,7 @@ export class Input {
     // a fresh press in the held direction lets the lever through the detent at once
     if (atDetent && ((D.hold > 0 && upPress) || (D.hold < 0 && downPress))) { D.hold = 0; D.t = 0; }
     if (rate === 0) { D.t = 0; return; }
+    L.apc = false;                       // the pilot takes the throttle back from the auto-throttle
     const target = t + rate * THROTTLE_RATE * dt;
     if (rate > 0 && t < MIL - 1e-6 && target >= MIL) { t = MIL; D.hold = 1; D.t = 0; }
     else if (rate < 0 && t > MIL + 1e-6 && target <= MIL) { t = MIL; D.hold = -1; D.t = 0; }
@@ -556,8 +560,8 @@ export class Input {
     for (const e of this._queue) {
       if (e === 'thrUpPress') upPress = true;
       else if (e === 'thrDownPress') downPress = true;
-      else if (e === 'throttleMax') { this.levers.throttle = 1; this.detent.hold = 0; }
-      else if (e === 'throttleIdle') { this.levers.throttle = 0; this.detent.hold = 0; }
+      else if (e === 'throttleMax') { this.levers.throttle = 1; this.levers.apc = false; this.detent.hold = 0; }
+      else if (e === 'throttleIdle') { this.levers.throttle = 0; this.levers.apc = false; this.detent.hold = 0; }
       else if (e.startsWith('cam')) f.camera = +e.slice(3);
       else if (e in f) f[e] = true;
     }
@@ -604,6 +608,7 @@ export class Input {
     if (f.parkingBrakeToggle) L.parkingBrake = !L.parkingBrake;
     if (f.speedbrakeToggle) L.speedbrake = !L.speedbrake;
     if (f.highAoAToggle) L.highAoA = !L.highAoA;
+    if (f.apcToggle) L.apc = !L.apc;                     // the app may put it back (gear up, on the ground)
     if (f.gearToggle) L.gearHandle = !L.gearHandle;      // the app may put it back
     if (f.canopyToggle) L.canopy = !L.canopy;            // the app may put it back
 
@@ -614,6 +619,7 @@ export class Input {
     f.speedbrake = L.speedbrake ? 1 : 0;
     f.nwsEnable = L.nwsEnable;
     f.highAoA = L.highAoA;
+    f.apc = L.apc;
 
     // mouse drag and wheel
     f.dragX = this._drag.dx;
