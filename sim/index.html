@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F-35I Adir - flight over central Israel</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/sim.css">
+<script type="importmap">
+{"imports": {"three": "./vendor/three/build/three.module.js", "three/addons/": "./vendor/three/examples/jsm/"}}
+</script>
+</head>
+<body>
+<!-- 3D view and the overlays drawn on top of it -->
+<div id="view"></div>
+<div id="vignette"></div>
+<canvas id="hmd"></canvas>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<!-- crash / status message -->
+<div id="message" class="hidden">
+  <div class="msg-title" id="message-title">CRASHED</div>
+  <div class="msg-text" id="message-text"></div>
+  <div class="msg-hint" id="message-hint">Press <kbd>R</kbd> to try again, <kbd>Esc</kbd> for the menu</div>
+</div>
+
+<!-- loading screen -->
+<section id="loading" class="screen splash">
+  <div class="splash-inner">
+    <h1 class="brand">F-35I <span>ADIR</span></h1>
+    <p class="sub">Fly the Israeli Air Force F-35I over central Israel</p>
+    <div class="progress">
+      <div class="prow"><span class="pname">Terrain</span><div class="bar"><div id="bar-terrain"></div></div><span class="plabel" id="label-terrain">waiting</span></div>
+      <div class="prow"><span class="pname">Aircraft</span><div class="bar"><div id="bar-aircraft"></div></div><span class="plabel" id="label-aircraft">waiting</span></div>
+    </div>
+    <div id="load-error" class="error hidden"></div>
+  </div>
+</section>
+
+<!-- start menu (the live scene stays visible on the right) -->
+<section id="menu" class="screen hidden">
+  <div class="menu-panel">
+    <h1 class="brand small">F-35I <span>ADIR</span></h1>
+    <p class="sub">Central Israel &middot; 102 &times; 102 km &middot; real terrain and imagery</p>
+
+    <h2>Start</h2>
+    <div id="spawn-list" class="choice-list"></div>
+
+    <h2>Time of day <small>(21 June, solar time)</small></h2>
+    <div id="time-list" class="seg"></div>
+
+    <h2>Graphics</h2>
+    <div id="quality-list" class="seg">
+      <button data-q="low">Low</button><button data-q="medium">Medium</button><button data-q="high">High</button>
+    </div>
+
+    <h2>Options</h2>
+    <label class="check"><input type="checkbox" id="opt-wingmen"> Two wingmen join in fingertip formation</label>
+    <label class="check"><input type="checkbox" id="opt-mousestick"> Mouse stick (move the mouse to fly; click the view to capture it)</label>
+    <label class="range">Volume <input type="range" id="opt-volume" min="0" max="100" step="1"><span id="opt-volume-val"></span></label>
+
+    <div class="buttons">
+      <button id="btn-fly" class="primary">Fly</button>
+      <button id="btn-controls">Joystick &amp; gamepad</button>
+      <button id="btn-help">Controls help</button>
+    </div>
+    <p id="pad-status" class="note"></p>
+    <p id="attribution" class="attribution"></p>
+  </div>
+</section>
+
+<!-- pause -->
+<section id="pause" class="screen dim hidden">
+  <div class="panel center">
+    <h2>Paused</h2>
+    <div class="buttons column">
+      <button id="btn-resume" class="primary">Resume</button>
+      <button id="btn-reset">Restart at the start point</button>
+      <button id="btn-menu">Main menu</button>
+      <button id="btn-pause-controls">Joystick &amp; gamepad</button>
+      <button id="btn-pause-help">Controls help</button>
+    </div>
+  </div>
+</section>
+
+<!-- help -->
+<section id="help" class="screen dim hidden">
+  <div class="panel wide">
+    <button class="close" data-close="help" title="Close (Esc)">&times;</button>
+    <h2>Controls</h2>
+    <div id="help-body" class="help-grid"></div>
+  </div>
+</section>
+
+<!-- joystick / gamepad bindings -->
+<section id="bindings" class="screen dim hidden">
+  <div class="panel wide">
+    <button class="close" data-close="bindings" title="Close (Esc)">&times;</button>
+    <h2>Joystick, HOTAS and gamepad</h2>
+    <div id="bindings-body"></div>
+  </div>
+</section>
+
+<noscript><p class="error">The flight sim needs JavaScript.</p></noscript>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
