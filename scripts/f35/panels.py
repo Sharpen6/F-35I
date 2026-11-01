@@ -554,15 +554,20 @@ def layout(pt):
     pt.line("side", [(2.5, -0.38), (3.10, -0.38)], mirror=False, side=1)
     pt.line("side", [(2.5, -0.38), (3.7, -0.38), (3.85, -0.48)], mirror=False, side=-1)
     # the canopy frame band reads a shade lighter than the fuselage side in the photos (c34, c51,
-    # c09): a light coating over the band and the rear frame, in side view between the sill and
-    # the glass edge, back to the frame's aft edge
-    from .canopy import sill_z, glass_edge_z, rear_edge_s, CREST, FRAME_W
-    s_aft = rear_edge_s(sill_z(4.7)) + FRAME_W
-    lo = [(s, sill_z(s) - 0.004) for s in np.linspace(1.86, s_aft, 70)]
+    # c09): a light coating over the band and the rear pillar, in side view between the band's
+    # lower edge and the glass edge, back to the pillar's aft edge (the sill strip below the band
+    # keeps the fuselage colour)
+    from .canopy import band_low_z, band_corner, glass_edge_z, rear_edge_s, CREST, FRAME_W
+    s_aft, z_aft = band_corner()
+    lo = [(s, band_low_z(s) + 0.001) for s in np.linspace(1.86, s_aft, 90)]
     z_top = CREST(s_aft) + 0.03
-    aft = [(rear_edge_s(z) + FRAME_W, z) for z in np.linspace(sill_z(s_aft), z_top, 12)]
+    aft = [(rear_edge_s(z) + FRAME_W, z) for z in np.linspace(z_aft, z_top, 12)]
     top = [(s, min(glass_edge_z(s), CREST(s) + 0.03)) for s in np.linspace(rear_edge_s(z_top) + FRAME_W, 1.86, 110)]
     pt.patch("side", lo + aft + top, B, 0.35)
+    # the canopy's parting line along the band's lower edge reads as a dark gap, ~5 mm, darker
+    # than the rest of the frame outline, over the lit step of the sill strip (c34, c51); drawn
+    # just above the edge so it lands on the band's face, not on the step
+    pt.line("side", [(s, band_low_z(s) + 0.0025) for s in np.linspace(1.86, s_aft - 0.003, 90)], width=2.0)
     # under-canopy sill panels (~8 cm below the canopy's sill, which is ~0.55 m up from the
     # windscreen to the bow) and the sawtooth behind the canopy
     pt.line("side", [(1.95, 0.47), (3.0, 0.47), (4.30, 0.60)], rivets=(-0.025, 0.035))

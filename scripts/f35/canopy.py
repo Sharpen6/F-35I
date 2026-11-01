@@ -29,21 +29,37 @@ OPEN_ANGLE = 40.0                 # photos show ~30-40 deg
 # (station at the crest and at the sill).
 BOW_CREST, BOW_SILL, BOW_W = 2.84, 3.01, 0.085
 # Frame round the transparency (photos c34, c14, c09, c51, c53; 3-view ref_09): a flat band flush
-# with the glass, ~0.15 m tall along the sides, carrying the "DO NOT CUT CANOPY WITHIN 3 INCHES OF
-# CANOPY FRAME" stencil.  In side view its upper edge (the edge of the glass) is two straight lines:
-# almost level from the windscreen base to a V right under the bow foot, then straight up to the
-# rear, where it turns up in a rounded corner into the rear edge of the glass (near vertical,
-# leaning aft at the top).  Ahead of s ~2.1 the frame covers the whole canopy (the windscreen base,
-# a chevron in plan); behind the glass it is a ~0.1 m rear frame with a straight aft edge, behind
-# which the spine fairing carries the canopy's section on aft, flush but for a small lip.
+# with the glass, carrying the "DO NOT CUT CANOPY WITHIN 3 INCHES OF CANOPY FRAME" stencil.  In
+# side view it is a chevron of constant width: its upper edge (the edge of the glass) is two
+# straight lines, almost level from the windscreen base to a V right under the bow foot, then
+# straight up to the rear, where it turns up in a tight corner into the rear edge of the glass
+# (near vertical, leaning aft at the top); its lower edge runs parallel to it, BAND_W lower, with
+# its own sharp V under the glass V, and meets the rear frame's aft edge in a square corner.  Ahead
+# of s ~2.1 the frame covers the whole canopy (the windscreen base, a chevron in plan); behind the
+# glass it is a ~0.1 m straight pillar, behind which the spine fairing carries the canopy's section
+# on aft, flush but for a small lip.  Below the band, down to the sill, the canopy's surface is
+# fuselage skin (Canopy_Sill) that stays put when the canopy opens.
 # (s, z) of the band's top: 3-view ref_09 (side view, x6) has the glass edge ~0.61-0.63 m from
 # the windscreen (glass from s ~1.9 on the crest) back to a V at s ~3.0 under the bow foot, then
-# straight up at ~15 deg to the rear corner (~1.0 m at s 4.45); the band is ~0.09-0.11 m tall
-GLASS_LINE = [(1.84, 0.70), (3.00, 0.637), (4.47, 0.995)]     # front run drops ~3 deg aft (c34, c09, c51)
+# straight up at ~15 deg to the rear corner.  The V and the aft run sit 3.5 cm higher than that
+# drawing: c34, c09 and c51 measured against the crest and the chine put the glass 3.3-3.9 cm
+# higher from the V to s ~3.75 (aft run parallel to the drawing's) with the band's lower V on the
+# sill, so a band of constant width fits above the sill without the sill's dip at s ~2.7.
+GLASS_LINE = [(1.84, 0.70), (3.00, 0.672), (4.47, 1.030)]     # front run drops ~1.5 deg aft
 GLASS_REAR = (4.575, 0.99, 12.0)       # rear edge of the glass: through (s, z), leaning aft (deg)
-GLASS_CORNER_R = 0.07
+GLASS_CORNER_R = 0.03                   # tight glass corner (c34, c51; ref_05 of 901 open)
 FRAME_W = 0.105                         # rear frame, measured along s behind the glass edge
 FRAME_T = 0.012                         # glass and frame thickness (solidified outwards)
+# frame band width square to the glass edge in side view: c34 has the band 0.115-0.127 m tall
+# (s 2.3-3.75, against 0.899 m from chine to crest at the V), ref_05 (901, canopy open) the same
+# width on both runs, c09 and c51 ~0.12 m; at 0.115 the lower V stays clear of the sill
+BAND_W = 0.115
+# the band's lower edge is a dark gap over a lit step line (c34, c51): the sill strip below it
+# stands this much proud of the band; where the band reaches the sill (ahead of s ~2.1) a sliver of
+# strip SILL_MIN tall is kept so the band never shares an edge with the forebody
+SILL_STEP = 0.003
+SILL_MIN = 0.0015
+SILL_SKIRT = 0.02                       # the sill strip runs on this far down inside the forebody
 FAIR_END = 5.30                         # the spine fairing has blended into the fuselage by here
 
 
@@ -157,6 +173,63 @@ def glass_edge_z(s):
     return 9.0
 
 
+def _cross2(a, b):
+    return a.x * b.y - a.y * b.x
+
+
+def _meet(p, d, q, e):
+    """Intersection of the 2-D lines p + t d and q + t e."""
+    return p + d * (_cross2(q - p, e) / _cross2(d, e))
+
+
+_BAND = []
+
+
+def band_outline():
+    """Side-view polyline (s, z) of the frame band's lower edge: both straight runs of GLASS_LINE
+    moved BAND_W square to themselves, meeting in a sharp V under the glass V, and ending in the
+    square corner with the rear frame's aft edge (rear_edge_s + FRAME_W)."""
+    if _BAND:
+        return _BAND
+    (s0, z0), (s1, z1), (s2, z2) = (Vector(p) for p in GLASS_LINE)
+    d0 = Vector((s1 - s0, z1 - z0)).normalized()
+    d1 = Vector((s2 - s1, z2 - z1)).normalized()
+    a0 = Vector((s0, z0)) + Vector((d0.y, -d0.x)) * BAND_W        # (d.y, -d.x): below a run going aft
+    a1 = Vector((s1, z1)) + Vector((d1.y, -d1.x)) * BAND_W
+    v = _meet(a0, d0, a1, d1)
+    sr, zr, lean = GLASS_REAR
+    e = Vector((math.sin(math.radians(lean)), math.cos(math.radians(lean))))
+    c = _meet(a1, d1, Vector((sr + FRAME_W, zr)), e)
+    _BAND.extend([(a0.x, a0.y), (v.x, v.y), (c.x, c.y)])
+    return _BAND
+
+
+def band_corner():
+    """(s, z) of the band's lower aft corner, where the rear pillar's aft edge starts."""
+    return band_outline()[-1]
+
+
+def band_low_z(s):
+    """Height of the frame band's lower edge at station s: the straight chevron of band_outline,
+    or SILL_MIN above the sill where that would run below it (the windscreen base)."""
+    pts = band_outline()
+    (sa, za), (sb, zb) = pts[0], pts[1]
+    for p, q in zip(pts, pts[1:]):
+        if s >= p[0]:
+            (sa, za), (sb, zb) = p, q
+    s_ = min(s, pts[-1][0])
+    z = za + (zb - za) * (s_ - sa) / max(1e-9, sb - sa)
+    return max(z, sill_z(s) + SILL_MIN)
+
+
+def band_u(s):
+    """Height fraction (0 sill .. 1 crest) of the band's lower edge at station s."""
+    zs, zt = sill_z(s), CREST(s)
+    if zt - zs < 1e-4:
+        return 0.0
+    return min(0.5, max(0.0, (band_low_z(s) - zs) / (zt - zs)))
+
+
 def rear_edge_s(z):
     """Station of the (straight part of the) glass's rear edge at height z."""
     sr, zr, lean = GLASS_REAR
@@ -263,23 +336,47 @@ def build_glass(coll):
     return glass
 
 
-def build_frame(coll, k_cols=6):
-    """The opaque frame: both side bands, the windscreen base ahead of the glass and the rear
-    frame behind it, as one surface flush with the glass (same thickness, shared edge)."""
+def band_stations():
+    """Stations of the frame's (and the sill strip's) sections, nose to the band's aft corner,
+    and the glass span (a, b)."""
     a, b, gst = glass_stations()
     front = [s for s in _span(S_FRONT + 0.004, a, 0.02)]
-    s_last = min(frame_end_s(0.0), frame_end_s(1.0)) - 0.004
-    rear = [s for s in _span(b, s_last, 0.012)]
-    sts = front + gst + rear
+    rear = [s for s in _span(b, band_corner()[0] - 0.004, 0.012)]
+    return a, b, front + gst + rear
+
+
+def corner_u():
+    """Height fraction of the band's aft corner on its station (the foot of the pillar's aft edge)."""
+    sc, zc = band_corner()
+    return (zc - sill_z(sc)) / (CREST(sc) - sill_z(sc))
+
+
+def _col_point(s, u, side):
+    """Canopy surface point at station s and height fraction u on `side`; u < 0 carries the
+    surface's (vertical) foot on straight down below the sill."""
+    if u >= 0.0:
+        return surface_point(s, th_of_u(u, side))[0]
+    return surface_point(s, th_of_u(0.0, side))[0] + Vector((0.0, 0.0, (CREST(s) - sill_z(s)) * u))
+
+
+def _two_sided(name, coll, mat, cols, end):
+    """Mesh of a strip of the canopy surface on both sides, nose to the band's aft corner:
+    cols(s, a, b) gives the height fractions of the section's columns at station s (sill side
+    first), `end` those of the last section, which lies on the rear frame's straight aft edge
+    (each column at its own frame_end_s).  Both halves' first sections are fanned to the nose."""
+    a, b, sts = band_stations()
+    k_cols = len(end) - 1
     halves = []
     for side in (1, -1):
-        ks = list(range(k_cols + 1)) if side > 0 else list(range(k_cols, -1, -1))
         rings = []
         for s in sts:
-            ub = glass_u(s) if a < s < b else 1.0
-            rings.append([surface_point(s, th_of_u(ub * k / k_cols, side))[0] for k in ks])
-        # aft edge: each column ends on the straight, leaning cut
-        rings.append([surface_point(frame_end_s(k / k_cols), th_of_u(k / k_cols, side))[0] for k in ks])
+            us = cols(s, a, b)
+            if side < 0:
+                us = us[::-1]
+            # below the band's aft corner the aft edge leans forward: a column never runs past it
+            rings.append([_col_point(min(s, frame_end_s(u)), u, side) for u in us])
+        us = end if side > 0 else end[::-1]
+        rings.append([_col_point(frame_end_s(u), u, side) for u in us])
         halves.append(rings)
     verts, faces = [], []
     for rings in halves:
@@ -287,22 +384,60 @@ def build_frame(coll, k_cols=6):
         o = len(verts)
         verts.extend(v)
         faces.extend([tuple(i + o for i in fc) for fc in f])
-    # front tip: fan both halves' first sections to the canopy's nose
-    tip = len(verts)
+    t = len(verts)
     verts.append(P(S_FRONT, 0.0, CREST(S_FRONT)))
-    nper = len(sts) + 1
+    nper = (len(sts) + 1) * (k_cols + 1)
     for h in range(2):
-        o = h * nper * (k_cols + 1)
         for k in range(k_cols):
-            faces.append((tip, o + k + 1, o + k))
-    ob = mesh_object("Canopy_Frame", verts, faces, coll, M.get("skin"))
+            faces.append((t, h * nper + k + 1, h * nper + k))
+    ob = mesh_object(name, verts, faces, coll, mat)
     bm = bmesh.new()
     bm.from_mesh(ob.data)
-    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)     # halves meet on the crest
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)     # halves meet on the crest / nose
+    bmesh.ops.dissolve_degenerate(bm, dist=1e-5, edges=bm.edges)  # columns clamped onto the aft edge
     bm.to_mesh(ob.data)
     bm.free()
     _orient_outwards(ob)
+    return ob
+
+
+def build_frame(coll, k_cols=6):
+    """The opaque frame: both side bands from their straight lower edge (band_outline) up to the
+    glass, the windscreen base ahead of the glass and the rear pillar behind it, as one surface
+    flush with the glass (same thickness, shared edge).  Opens with the canopy."""
+    def cols(s, a, b):
+        ub = glass_u(s) if a < s < b else 1.0
+        ul = band_u(s)
+        return [ul + (ub - ul) * k / k_cols for k in range(k_cols + 1)]
+    uc = corner_u()
+    end = [uc + (1.0 - uc) * k / k_cols for k in range(k_cols + 1)]
+    ob = _two_sided("Canopy_Frame", coll, M.get("skin"), cols, end)
     add_solidify(ob, FRAME_T, 1.0)
+    # crisp rims: the pillar's aft edge and the band's lower edge read as sharp steps (c34, c51)
+    es = ob.modifiers.new("EdgeSplit", 'EDGE_SPLIT')
+    es.split_angle = math.radians(30.0)
+    return ob
+
+
+def build_sill(coll, k_cols=2):
+    """The strip of fuselage skin between the forebody's upper surface (the canopy sill) and the
+    frame band's lower edge, back to the pillar's aft edge: the canopy's section carried on by the
+    fixed structure, so it stays put when the canopy opens.  It stands SILL_STEP proud of the frame
+    (the lit step line along the band's lower edge) and runs on SILL_SKIRT below the sill, inside
+    the forebody, so no shadowed lip shows where the two meet."""
+    def skirt(s):
+        return -SILL_SKIRT / max(1e-3, CREST(s) - sill_z(s))
+
+    def cols(s, a, b):
+        ul = band_u(s)
+        return [skirt(s)] + [ul * k / k_cols for k in range(k_cols + 1)]
+    uc = corner_u()
+    sc = band_corner()[0]
+    end = [skirt(sc)] + [uc * k / k_cols for k in range(k_cols + 1)]
+    ob = _two_sided("Canopy_Sill", coll, M.get("skin"), cols, end)
+    add_solidify(ob, FRAME_T + SILL_STEP, 1.0)
+    es = ob.modifiers.new("EdgeSplit", 'EDGE_SPLIT')
+    es.split_angle = math.radians(30.0)
     return ob
 
 
@@ -380,6 +515,7 @@ def build(ctx):
         ob.parent = glass
     fus = ctx["objects"].get("Fuselage")
     fcoll = fus.users_collection[0] if fus is not None else coll
+    ctx["objects"]["Canopy_Sill"] = build_sill(fcoll)        # fixed: not parented to the glass
     fair = build_fairing(ctx, fcoll)
     if fair is not None:
         ctx["objects"]["Spine_Fairing"] = fair

@@ -204,6 +204,10 @@ There are two internal bays, each with two doors (four doors in total).
   - Photos c09 and c34 show the internal bow as a dark band about 8–9 cm wide, a third of the way back from the canopy tip, leaning forward at the top. On the model it crosses the crest at station 2.84 m and meets the sill at 3.01 m.
   - The pilot's helmet sits just behind the bow, near the middle of the canopy, not at its back. The 3-view side and top views put the head at station ≈ 3.3 m and photo c34 at ≈ 3.35 m, with the seat headbox at ≈ 3.7 m and a long deck behind the seat under the rear of the canopy.
   - Until this check the model's whole cockpit (pilot, seat, consoles, display) sat about 0.55 m too far back; it is now moved forward as a block (`cockpit.COCKPIT_DS`), with the display 0.70 m ahead of the design eye and narrowed to fit under the canopy.
+- **Frame band (measured for the model) [M][P]:**
+  - In side view the opaque band under the glass is a chevron of constant width, about 0.115–0.125 m. Both of its edges are straight and parallel and kink in a sharp V at the same station, under the bow foot. Measured in c34 against the chine-to-crest height; c09 and c51 agree, and ref_05 (901, canopy open) shows the same width on both runs.
+  - The band's lower edge is the canopy's own edge (ref_05). Photos show it as a dark gap with a lit step line below it. At the rear it meets a straight, near-vertical aft pillar in a square corner, behind a tight glass corner.
+  - Measured against the chine, c34 puts the glass edge 3.3–3.9 cm higher than the 3-view line from the V to station ≈ 3.75 m, parallel to it. The band's lower V lies on the sill. The model's glass V is at z 0.672 m (station 3.0 m), and the band is 0.115 m wide.
 
 ### Gun, doors and other external features
 
