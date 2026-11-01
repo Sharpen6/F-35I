@@ -221,6 +221,81 @@ def render_table(k, heading, keep, title, subtitle, total):
 
 TABLE_OUT = os.path.join(ROOT, "renders", "video", "tables")
 
+# ------------------------------------------------------------------ how the code grew (git history)
+MILESTONES = {  # commit -> (label, label offset in points)
+    "77893ec": ("Airframe", (16, -34)),
+    "86b0337": ("Gear, bays and rig", (18, -38)),
+    "b5af2bb": ("Damage model", (-30, 40)),
+    "958740b": ("Nose and inlets matched to photos", (10, -46)),
+    "06dbeef": ("Panel lines", (-24, 40)),
+    "0d8356b": ("DSI inlets", (-40, -52)),
+    "ef50029": ("Paint and sky", (-70, 44)),
+    "5ee45a6": ("Afterburner", (-20, -56)),
+    "668b330": ("Pilot rebuilt", (-120, 40)),
+}
+LINE = "#3987e5"          # single series (reference palette, dark slot 1)
+INK2 = "#c3c2b7"          # secondary text
+GRID = "#262a31"
+
+
+def git_growth():
+    import subprocess
+    from datetime import datetime
+    git = lambda *a: subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True,  # noqa: E731
+                                    encoding="utf-8").stdout
+    rows = []
+    for line in git("log", "--reverse", "--format=%h|%ct").split():
+        h, t = line.split("|")
+        n = 0
+        for f in git("ls-tree", "-r", "--name-only", h, "scripts").split():
+            if f.endswith(".py"):
+                n += git("show", f"{h}:{f}").count("\n")
+        rows.append((h, int(t), n))
+    return rows
+
+
+def render_growth():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    rows = git_growth()
+    if not rows:
+        return None
+    t0 = rows[0][1]
+    hrs = [(t - t0) / 3600 for _, t, _ in rows]
+    lines = [n for _, _, n in rows]
+    fig = plt.figure(figsize=(19.2, 10.8), dpi=100, facecolor="#%02x%02x%02x" % BG)
+    ax = fig.add_axes((0.075, 0.12, 0.86, 0.66), facecolor="#%02x%02x%02x" % BG)
+    ax.plot(hrs, lines, color=LINE, lw=1.9, solid_capstyle="round", drawstyle="steps-post", zorder=3)
+    ax.fill_between(hrs, lines, step="post", color=LINE, alpha=0.10, lw=0, zorder=2)
+    for (h, t, n), x in zip(rows, hrs):
+        if h in MILESTONES:
+            label, off = MILESTONES[h]
+            ax.plot([x], [n], "o", ms=8, mfc=LINE, mec="#%02x%02x%02x" % BG, mew=2, zorder=4)
+            ax.annotate(label, (x, n), xytext=off, textcoords="offset points", color=INK2, fontsize=17,
+                        ha="left", va="center",
+                        arrowprops=dict(arrowstyle="-", color="#5a606b", lw=1, shrinkA=2, shrinkB=6))
+    ax.set_xlim(-0.2, hrs[-1] + 0.3)
+    ax.set_ylim(0, max(lines) * 1.15)
+    ax.grid(axis="y", color=GRID, lw=1)
+    ax.set_axisbelow(True)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.tick_params(colors="#8a909a", labelsize=15, length=0, pad=10)
+    ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{int(v):,}"))
+    ax.set_xlabel("hours since the first commit", color="#8a909a", fontsize=16, labelpad=12)
+    ax.set_ylabel("lines of Python", color="#8a909a", fontsize=16, labelpad=14)
+    rgb = lambda c: "#%02x%02x%02x" % c                 # noqa: E731
+    fig.text(90 / W, 1 - 82 / H, "How the code grew", color=rgb(FG), fontsize=29, fontweight="bold",
+             va="center")
+    fig.text(92 / W, 1 - 133 / H, f"{len(rows)} commits in {hrs[-1]:.0f} hours  ·  {lines[-1]:,} lines of Python  ·  "
+             "one point per commit, from the git history", color=rgb(ACCENT), fontsize=17, va="center")
+    fig.text(92 / W, 58 / H, "github.com/Sharpen6/F-35I", color=rgb(MUTED), fontsize=17, va="center")
+    out = os.path.join(OUT, "00_how_the_code_grew.png")
+    fig.savefig(out, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return out
+
 
 def main():
     for folder in (OUT, TABLE_OUT):
@@ -232,6 +307,8 @@ def main():
         print(render(k, path, anchor, n, title, len(PAGES)))
     for k, (heading, keep, title, sub) in enumerate(TABLES, 1):
         print(render_table(k, heading, keep, title, sub, len(TABLES)))
+    if os.path.isdir(os.path.join(ROOT, ".git")):
+        print(render_growth())
 
 
 if __name__ == "__main__":

@@ -390,7 +390,7 @@ def build(tl, only=None):
         nf, nl = code_stats()
         tl.chapter(2, "The code", f"{nl:,} lines of Python in {nf} files build, rig and animate the whole jet")
         for p in sorted(glob.glob(R("renders", "video", "code", "*.png"))):
-            tl.image(p, 7.0, None, push=0.025)
+            tl.image(p, 9.0 if "code_grew" in p else 7.0, None, push=0.025)
         tl.end_chapter()
     if want(3):
         tl.chapter(3, "Building the airframe", "Every milestone is kept as a numbered backup of the .blend file")
