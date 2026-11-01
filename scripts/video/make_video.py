@@ -91,6 +91,11 @@ PROGRESS = {
     "036": "Canopy rebuilt from the 3-view and photos: flush band with a V, deeper glass",
     "037": "Nose details from photos: EOTS box, DAS blister, pentagon DAS, probes, panels",
     "038": "Shoulder gun and vent fairings, main gear brace, nozzle teeth, shallower belly",
+    "039": "Pilot v5, modelled on its own: skinned body, IAF flight gear, HMDS helmet",
+    "040": "The pilot, version by version",
+    "041": "RAM tape frames traced from a top photo of 901",
+    "042": "White crescent index marks round the rescue door and inlet panels",
+    "043": "Stance, nose leg, main wheels and brake lines measured from photos",
 }
 CLIPS = [  # (file stem, title, caption)
     ("turntable_v6", "Turntable", "Final paint, sky and the new pilot"),
