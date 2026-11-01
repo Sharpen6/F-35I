@@ -200,6 +200,21 @@ def sewn_patch(base, p, cut, t0=0.0005, t1=0.0030, h=0.001, half=0.06):
     return mesh(ops, h, smooth=1, lo=p - half, hi=p + half)
 
 
+def flat_grid(c, a, b, ha, hb, na, nb, normal, disc=False):
+    """A flat all-quad sheet centred on c, +-ha along unit a and +-hb along unit b, facing
+    `normal`.  disc=True squeezes the square grid onto the ellipse ha x hb (no pole)."""
+    X, Y = np.meshgrid(np.linspace(-1.0, 1.0, na + 1), np.linspace(-1.0, 1.0, nb + 1))
+    if disc:
+        X, Y = X * np.sqrt(1.0 - Y * Y / 2.0), Y * np.sqrt(1.0 - X * X / 2.0)
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    v = np.asarray(c, float) + (X.ravel() * ha)[:, None] * a + (Y.ravel() * hb)[:, None] * b
+    i = (np.arange(nb)[:, None] * (na + 1) + np.arange(na)[None, :]).ravel()
+    q = np.stack([i, i + 1, i + na + 2, i + na + 1], axis=1)
+    if np.dot(np.cross(a, b), normal) < 0.0:
+        q = q[:, ::-1]
+    return v, q
+
+
 def first_exit(solid, O, D, rmax=0.08, n=33, it=22):
     """Where rays from points O (inside solid) along unit directions D first leave it: coarse
     steps find the first sample outside, bisection refines it (rays that leave and re-enter
@@ -924,8 +939,8 @@ def suit_detail_parts(j, F, arms, fb):
            (sdf.RoundBox(p + R[2] * 0.0160, (0.074, 0.110, 0.0016), 0.003, R), 0.002, "union")]
     v, q = mesh(ops, 0.0014, smooth=1)
     out.append(dict(name="Kneeboard", v=v, q=q, mat="kneeboard", bone="thigh.R"))
-    ops = [(sdf.RoundBox(p + R[2] * 0.0172, (0.066, 0.100, 0.0010), 0.0005, R), 0.0, "union")]
-    v, q = mesh(ops, 0.0007, smooth=0)
+    # the glass: a flat sheet just proud of the tablet's face (0.0176)
+    v, q = flat_grid(p + R[2] * 0.0180, R[0], R[1], 0.066, 0.100, 4, 6, R[2])
     rel = v - p
     # screen UVs as the seated pilot reads it: u to the pilot's right, v (up) towards the knee
     uv = np.c_[0.5 + (rel @ -R[0]) / 0.132, 0.5 + (rel @ R[1]) / 0.200]
@@ -952,8 +967,8 @@ def suit_detail_parts(j, F, arms, fb):
     out.append(dict(name="Watch_Bezel", v=v, q=q, mat="black_gloss", bone="forearm.L"))
     v, q = band(sl, around(sl, j, F, "forearm.L", 0.66), 0.018, thick=0.003, h=0.0012)
     out.append(dict(name="Watch_Band", v=v, q=q, mat="steel_brushed", bone="forearm.L"))
-    ops = [(sdf.Disc(p + d * 0.0086, d, 0.0155, 0.0008, 0.0003), 0.0, "union")]
-    v, q = mesh(ops, 0.0005, smooth=0)
+    # the dial: a flat disc under the bezel (top of the case at 0.0090)
+    v, q = flat_grid(p + d * 0.0090, right, up, 0.0155, 0.0155, 12, 12, d, disc=True)
     rel = v - p
     uv = np.c_[0.5 + (rel @ right) / 0.031, 0.5 + (rel @ up) / 0.031]
     out.append(dict(name="Watch_Face", v=v, q=q, mat="watch_face", bone="forearm.L", uv=uv))

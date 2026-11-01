@@ -133,14 +133,49 @@ def rig(coll, j, F, name, ik=False):
 
 
 # --------------------------------------------------------------------------- parts -> objects
+def zone_borders(me):
+    """Vertices where faces of different materials meet (None for a one-material mesh)."""
+    n = len(me.polygons)
+    if n == 0 or len(me.materials) < 2:
+        return None
+    mi = np.empty(n, np.int32)
+    me.polygons.foreach_get("material_index", mi)
+    if mi.min() == mi.max():
+        return None
+    ls = np.empty(n, np.int32)
+    lt = np.empty(n, np.int32)
+    me.polygons.foreach_get("loop_start", ls)
+    me.polygons.foreach_get("loop_total", lt)
+    lv = np.empty(len(me.loops), np.int32)
+    me.loops.foreach_get("vertex_index", lv)
+    face = np.repeat(np.arange(n), lt)
+    loop = np.repeat(ls, lt) + np.arange(len(face)) - np.repeat(np.cumsum(lt) - lt, lt)
+    zm = mi[face]
+    vmin = np.full(len(me.vertices), 1 << 30)
+    vmax = np.full(len(me.vertices), -1)
+    np.minimum.at(vmin, lv[loop], zm)
+    np.maximum.at(vmax, lv[loop], zm)
+    return (vmax >= 0) & (vmin != vmax)
+
+
 def decimate(ob, ratio):
-    """Collapse-decimate a mesh in place (keeps material slots and UVs); no operator context."""
+    """Collapse-decimate a mesh in place (keeps material slots and UVs); no operator context.
+    The vertices on borders between material zones get weight 0 in the modifier's vertex
+    group, so the edges at a border cost far more to collapse than the rest and the zones keep
+    their exact outlines (an unweighted collapse drags faces across a border)."""
     if ratio >= 0.999 or len(ob.data.polygons) < 2000:
         return ob
     m = ob.modifiers.new("Decimate", 'DECIMATE')
     m.decimate_type = 'COLLAPSE'
     m.ratio = ratio
     m.use_collapse_triangulate = False
+    border = zone_borders(ob.data)
+    vg = None
+    if border is not None and border.any():
+        vg = ob.vertex_groups.new(name="_decimate")
+        vg.add(np.nonzero(~border)[0].tolist(), 1.0, 'REPLACE')
+        m.vertex_group = vg.name
+        m.vertex_group_factor = 10.0
     dg = bpy.context.evaluated_depsgraph_get()
     ev = ob.evaluated_get(dg)
     me = bpy.data.meshes.new_from_object(ev, preserve_all_data_layers=True, depsgraph=dg)
@@ -148,6 +183,9 @@ def decimate(ob, ratio):
     ob.modifiers.remove(m)
     ob.data = me
     me.name = old.name
+    g = ob.vertex_groups.get("_decimate")      # group names live on the mesh: look it up again
+    if g is not None:
+        ob.vertex_groups.remove(g)
     if old.users == 0:
         bpy.data.meshes.remove(old)
     return ob
@@ -166,8 +204,7 @@ def objects_from_parts(coll, parts, arm, j, mats, prefix="Pilot", ratio=1.0):
             io.set_face_materials(ob, p["mi"])
         if "uv" in p:
             io.set_uv(ob, p["uv"])
-        # parametric meshes with material zones or UVs keep their exact layout
-        decimate(ob, 1.0 if ("mi" in p or "uv" in p) else ratio)
+        decimate(ob, ratio)
         if p["bone"] is None:
             io.skin(ob, arm, j, names=skin_set(p["name"]))
         else:
