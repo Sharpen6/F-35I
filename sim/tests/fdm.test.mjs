@@ -158,6 +158,85 @@ tests.takeoff = () => {
 };
 
 // ==============================================================================================
+/** Takeoff run for the handling checks: pull `stick` at vr and hold it `hold` s after lift-off. */
+function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAfter = null, parking = false } = {}) {
+  const fdm = newFdm();
+  fdm.reset({ x: 0, y: RWY.elev, z: RWY.zSouth - 50, heading_deg: 0, on_ground: true, fuel: 0.6 });
+  const st = fdm.state;
+  const z0 = st.position.z;
+  const inp = { ...base(), throttle, parkingBrake: parking };
+  let t = 0, rot = false, lo = null, maxPitch = 0, maxAlpha = 0, warnGround = false, warnAir = false;
+  while (t < 90 && !st.crashed) {
+    if (st.ias_kt >= vr) rot = true;
+    inp.pitch = rot && (!lo || t - lo.t < hold) ? stick : 0;
+    inp.yaw = st.onGround ? clamp(-0.08 * st.position.x - 0.3 * st.velocity.x, -1, 1) : 0;
+    if (lo && gearUpAfter != null && t - lo.t >= gearUpAfter) inp.gearHandle = false;
+    fdm.step(DT, inp);
+    t += DT;
+    const w = st.warnings.includes('PARKING BRAKE');
+    if (st.onGround) warnGround ||= w; else warnAir ||= w;
+    if (rot && !lo && !st.onGround) lo = { t, ias: st.ias_kt, dist: z0 - st.position.z };
+    if (lo) {
+      maxPitch = Math.max(maxPitch, st.pitch * R2D);
+      maxAlpha = Math.max(maxAlpha, st.alpha * R2D);
+      if (t - lo.t > hold) break;
+    }
+  }
+  return { st, lo, maxPitch, maxAlpha, warnGround, warnAir };
+}
+
+tests.handling = () => {
+  section('Handling: partial-stick rotation, stick held through gear up, parking brake, slow-flight roll');
+  {
+    // the ground law maps the raw stick (60 % = the full 12 deg attitude): a half pull rotates too
+    const r = takeoffRun({ stick: 0.5, hold: 10 });
+    info(`half aft stick at 150 KIAS (MIL): lift-off ${r.lo ? r.lo.ias.toFixed(0) : '-'} KIAS after ${r.lo ? r.lo.dist.toFixed(0) : '-'} m, max pitch ${r.maxPitch.toFixed(1)} deg`);
+    check('lift-off with half aft stick', r.lo ? r.lo.ias : 999, 148, 172, 'KIAS', 'a partial pull still rotates to ~10 deg (it used to fly off at ~260 kt)');
+  }
+  {
+    // full aft stick held through gear up (+2 s) and for 15 s: the take-off -> C* hand-over is
+    // ratcheted, the jet keeps its climb path instead of pulling to the AoA limit
+    const r = takeoffRun({ stick: 1, hold: 15, gearUpAfter: 2 });
+    info(`full aft stick held 15 s, gear up at +2 s: max pitch ${r.maxPitch.toFixed(1)} deg, max AoA ${r.maxAlpha.toFixed(1)} deg, climbing ${r.st.vs.toFixed(1)} m/s`);
+    check('max pitch, stick held through gear up', r.maxPitch, 8, 20, 'deg', 'no zoom: it used to reach 60-90 deg');
+    check('max AoA, stick held through gear up', r.maxAlpha, 5, 15, 'deg', 'the climb path is held, far from the 25 deg limit');
+  }
+  {
+    // parking brake left on with full afterburner: it brakes once the wheels slide; the warning only
+    // on the ground
+    const free = takeoffRun({ stick: 1, throttle: 1, vr: 140, hold: 5 });
+    const park = takeoffRun({ stick: 1, throttle: 1, vr: 140, hold: 5, parking: true });
+    info(`max A/B ground roll ${free.lo ? free.lo.dist.toFixed(0) : '-'} m; with the parking brake set ${park.lo ? park.lo.dist.toFixed(0) : '-'} m;`
+      + ` PARKING BRAKE warning on the ground ${park.warnGround}, in the air ${park.warnAir}`);
+    check('ground roll with the parking brake / without', park.lo && free.lo ? park.lo.dist / free.lo.dist : 0, 1.3, 3, '', 'the parking brake drags the sliding wheels like full brakes');
+    checkTrue('PARKING BRAKE warning on the ground only', park.warnGround && !park.warnAir, `ground ${park.warnGround}, air ${park.warnAir}`, 'meaningless once airborne');
+  }
+  {
+    // slow flight at the 25 deg AoA limit, ~120 KCAS: full right stick
+    const fdm = newFdm(seaLevelLand);
+    airSpawn(fdm, 160, 3000);
+    const st = fdm.state;
+    const inp = { ...base(), throttle: 0.75, gearHandle: false };
+    let t = 0;
+    while (t < 40 && !(st.alpha * R2D > 24.5 && st.ias_kt < 125)) {
+      inp.pitch = st.alpha * R2D < 24.5 ? 1 : 0.6; inp.throttle = st.ias_kt > 122 ? 0.2 : 0.75; fdm.step(DT, inp); t += DT;
+    }
+    inp.pitch = 1; inp.roll = 1;
+    const phi0 = st.roll;
+    let t90 = null, bMax = 0, pMax = 0;
+    for (let i = 0; i < 6 * 60 && t90 === null; i++) {
+      fdm.step(DT, inp);
+      bMax = Math.max(bMax, Math.abs(st.beta * R2D));
+      pMax = Math.max(pMax, Math.abs(st.p * R2D));
+      if (Math.abs(st.roll - phi0) * R2D >= 90) t90 = (i + 1) * DT;
+    }
+    info(`full stick at ${st.ias_kt.toFixed(0)} KIAS, ${(st.alpha * R2D).toFixed(1)} deg AoA: 90 deg of bank in ${t90 ? t90.toFixed(2) : '-'} s, peak ${pMax.toFixed(0)} deg/s, max sideslip ${bMax.toFixed(1)} deg`);
+    check('slow flight (25 deg AoA): time to 90 deg of bank', t90 ?? 99, 1.5, 3.25, 's', 'roll capped to what the rudders can coordinate; ailerons no longer wind down when the rudders saturate');
+    check('slow flight (25 deg AoA): sideslip in the roll', bMax, 0, 8, 'deg', 'coordination cap holds the sideslip near 6 deg');
+  }
+};
+
+// ==============================================================================================
 tests.climb = () => {
   section('Climb at 300 KCAS, MIL, from 1,000 m (60 % fuel)');
   const fdm = newFdm(seaLevelLand);
@@ -538,6 +617,43 @@ tests.landing = () => {
 };
 
 // ==============================================================================================
+tests.final = () => {
+  section('Hands-off final (140 KCAS, 13 deg AoA, gear down, 45 % fuel) and a landing without a flare');
+  {
+    const fdm = newFdm();
+    const V = tasFromCas(140 * KT, 595);
+    fdm.reset({ x: 0, y: 595, z: 10000, heading_deg: 0, on_ground: false, speed_ms: V, gear: true, flight_path_deg: -3, fuel: 0.45 });
+    const st = fdm.state;
+    const inp = { ...base(), throttle: st.trimThrottle };
+    const ias0 = st.ias_kt, aoa0 = st.alpha * R2D;
+    let gDev = 0, vDev = 0;
+    for (let i = 0; i < 20 * 60; i++) {
+      fdm.step(DT, inp);
+      if (i < 10 * 60) gDev = Math.max(gDev, Math.abs(st.gamma * R2D + 3));
+      vDev = Math.max(vDev, Math.abs(st.ias_kt - ias0));
+    }
+    info(`start ${ias0.toFixed(1)} KIAS at ${aoa0.toFixed(1)} deg AoA, throttle ${inp.throttle.toFixed(3)}; first 10 s path within ${gDev.toFixed(2)} deg of -3;`
+      + ` 20 s: ${st.ias_kt.toFixed(1)} KIAS, ${(st.alpha * R2D).toFixed(1)} deg AoA`);
+    check('hands-off final: flight path, first 10 s', gDev, 0, 0.1, 'deg', 'no 1 g bias at high AoA in the path hold (it flattened the path by 0.2 deg and bled speed)');
+    check('hands-off final: speed change in 20 s', vDev, 0, 3, 'kt', 'trimmed start; the back of the drag curve diverges only slowly (fly the AoA with the throttle)');
+  }
+  {
+    // 146 KCAS on the 3 deg path straight into the runway, hands off, no flare
+    const fdm = newFdm();
+    const dist = 1500;
+    const y = RWY.elev + 15 + dist * Math.tan(3 * D2R);
+    const r = fdm.reset({ x: 0, y, z: RWY.zSouth + dist, heading_deg: 0, on_ground: false, speed_ms: tasFromCas(146 * KT, y), gear: true, flight_path_deg: -3, fuel: 0.6 });
+    const st = fdm.state;
+    const inp = { ...base(), throttle: r.throttle };
+    for (let i = 0; i < 60 * 60 && !st.crashed && !(st.onGround && st.groundSpeed < 30); i++) fdm.step(DT, inp);
+    const td = st.lastTouchdown;
+    info(`no flare: ${st.crashReason || 'landed'}; touchdown sink ${td ? td.sink.toFixed(2) : '-'} m/s, closing ${td ? td.closing.toFixed(2) : '-'} m/s, bounces ${td ? td.bounces : '-'}, hard ${td ? td.hard : '-'}`);
+    check('no-flare touchdown: logged sink (first contact)', td ? td.sink : 0, 3.0, 4.6, 'm/s', 'a bounce no longer overwrites the landing (it used to log ~0.5 m/s)');
+    checkTrue('no-flare touchdown: hard landing, not a crash', !st.crashed && td && td.hard, st.crashReason || `hard ${td ? td.hard : '-'}`, '3 deg path at 146 kt: ~3.9 m/s, between 3.05 and 4.6 m/s');
+  }
+};
+
+// ==============================================================================================
 tests.gear = () => {
   section('Landing gear: retraction, weight-on-wheels interlock, steering, spool-up, fuel flow');
   {
@@ -641,8 +757,23 @@ tests.crash = () => {
   };
   let st = drop(2.0, true);
   checkTrue('2 m/s touchdown: no crash', !st.crashed && st.lastTouchdown, `${st.crashReason || 'landed'}, sink ${st.lastTouchdown ? st.lastTouchdown.sink.toFixed(2) : '-'} m/s`, 'within the gear limit');
+  {
+    // 3.6 m/s (12 ft/s): beyond the 10 ft/s design sink rate, below the 15 ft/s collapse
+    const fdm = newFdm(runwayGround);
+    const V = 72;
+    fdm.reset({ x: 0, y: RWY.elev + 1.95 + 2.5, z: 0, heading_deg: 0, on_ground: false, speed_ms: V, gear: true, fuel: 0.3,
+      flight_path_deg: -Math.asin(3.6 / V) * R2D });
+    const s1 = fdm.state;
+    const inp = { ...base(), throttle: s1.trimThrottle };
+    let shown = false;
+    for (let i = 0; i < 4 * 60 && !s1.crashed; i++) { fdm.step(DT, inp); shown ||= s1.warnings.includes('HARD LANDING'); }
+    const td = s1.lastTouchdown;
+    checkTrue('3.6 m/s touchdown: hard landing, no crash', !s1.crashed && td && td.hard && shown,
+      `${s1.crashReason || 'landed'}, sink ${td ? td.sink.toFixed(2) : '-'} m/s, hard ${td ? td.hard : '-'}, HARD LANDING shown ${shown}`,
+      'graded: 3.05 m/s (10 ft/s) design sink rate .. 4.6 m/s collapse');
+  }
   st = drop(5.0, true);
-  checkTrue('5 m/s touchdown: crash', st.crashed && /hard landing|collapsed/i.test(st.crashReason), st.crashReason || 'no crash', 'brief: sink > ~4 m/s breaks the gear');
+  checkTrue('5 m/s touchdown: crash', st.crashed && /hard landing|collapsed/i.test(st.crashReason), st.crashReason || 'no crash', 'brief: sink > ~4.6 m/s breaks the gear');
   st = drop(1.5, false);
   checkTrue('gear-up landing: crash', st.crashed && /belly|gear/i.test(st.crashReason), st.crashReason || 'no crash', 'airframe on the runway');
   const water = flatGround(0, () => ({ type: 'water', friction: 0.0 }));

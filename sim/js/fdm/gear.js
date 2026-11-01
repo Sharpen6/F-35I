@@ -184,8 +184,12 @@ export class LandingGear {
       if (!u.isNose) { rollSum += vf; rollN++; } else noseRoll = vf;
 
       let Fl = 0, Fy = 0;
-      const brake = u.brakes ? (u.pos[0] < 0 ? ctx.brakeL : ctx.brakeR) : 0;
-      const hold = u.brakes && (ctx.parking || brake >= c.holdBrake);
+      // The parking brake is a full brake application: it holds a stopped wheel (the anchor below)
+      // and, once thrust or a slope makes the wheels slide, keeps braking like full pedals (it
+      // used to stop acting altogether the moment the anchor let go).
+      const pedal = u.brakes ? (u.pos[0] < 0 ? ctx.brakeL : ctx.brakeR) : 0;
+      const brake = u.brakes && ctx.parking ? 1 : pedal;
+      const hold = u.brakes && brake >= c.holdBrake;
       t.vpl.copy(t.vc).addScaledVector(t.n, -t.vc.dot(t.n));
       const vplane = t.vpl.length();
       if (hold && (u.anchored || vplane < c.anchorCapture)) {

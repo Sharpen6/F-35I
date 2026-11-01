@@ -8,15 +8,20 @@
 //
 // Pitch (air):  C* law  C* = (nz - nz_gravity) + (Vco/g) q.  The stick commands C*; at high speed
 //               that is load factor, at low speed pitch rate.  Hands-off the jet holds the flight
-//               path angle (auto-trim, 1 g compensated for bank).  g limiter +9/-3, AoA limiter 25 deg
-//               (50 deg in the optional high-AoA mode), pitch-rate limit, tail-strike protection.
+//               path angle (auto-trim, 1 g compensated for bank).  g limiter +9/-3, AoA limiter
+//               25 deg (50 deg in the optional high-AoA mode), pitch-rate limit, tail-strike protection.
+// Roll/yaw at high AoA: the roll command is capped to what the rudders can coordinate (sideslip
+//               held within ~6 deg); a saturated rudder hands its share back to the ailerons.
 // Roll (air):   stick commands stability-axis roll rate, up to ~200 deg/s, less at low dynamic
 //               pressure, high AoA and supersonic.  Hands-off: bank-angle hold (wings level if < 5 deg).
 // Yaw (air):    sideslip controller: turn coordination (zero sideslip), pedals command sideslip.
-// Ground:       pitch stick commands a pitch attitude (full pull = ~12 deg, rotation rate limited);
-//               roll and yaw are direct; pedals also steer the nose wheel (gear.js).
+// Ground:       pitch stick commands a pitch attitude (60 % aft stick or more = the 12 deg take-off
+//               attitude, proportional below, rotation rate limited); roll and yaw are direct; pedals
+//               also steer the nose wheel (gear.js).
 // Takeoff:      after lift-off the attitude mode is kept while the stick stays pulled, then the air
-//               laws take over (capturing the flight path when the stick is released).
+//               laws take over.  The stick still held at that moment is "ratcheted": the C* law
+//               only sees stick beyond what was held (and the reference follows the stick down as it
+//               is released), so the jet keeps its climb path instead of pulling to the AoA limit.
 
 import { clamp, wrapPi, smoothstep, D2R } from './tables.js';
 import { G0 } from './atmosphere.js';
@@ -36,6 +41,7 @@ export class FlightControlSystem {
     this.bankRef = opts.bankRef || 0;
     this.groundInt = 0;          // pitch integrator used on the ground (overcomes the main-gear moment)
     this.timeAirborne = 0;
+    this.spRef = 0;              // pitch stick ratchet (shaped units) after the ground / take-off laws
     this.out = { de: opts.de || 0, da: 0, dr: 0 };
     this.debug = { qCmd: 0, CsCmd: 0, nzCmd: 1, pCmd: 0, rCmd: 0, limiter: '' };
   }
@@ -58,7 +64,8 @@ export class FlightControlSystem {
   update(h, inp, s, a, mp, geo) {
     const c = this.cfg;
     const dbg = this.debug;
-    const sp = FlightControlSystem.shape(clamp(inp.pitch || 0, -1, 1), c.stickShapePitch);
+    const rawPitch = clamp(inp.pitch || 0, -1, 1);
+    const sp = FlightControlSystem.shape(rawPitch, c.stickShapePitch);
     const sr = FlightControlSystem.shape(clamp(inp.roll || 0, -1, 1), c.stickShapeRoll);
     const sy = clamp(inp.yaw || 0, -1, 1);
     const V = Math.max(s.V, 30);
@@ -66,6 +73,7 @@ export class FlightControlSystem {
     const onGround = s.wowMain || s.wowNose;
 
     // ------------------------------------------------------------------ mode logic
+    const prevMode = this.mode;
     if (onGround) {
       this.mode = 'ground';
       this.timeAirborne = 0;
@@ -78,7 +86,15 @@ export class FlightControlSystem {
     if (this.mode !== 'air') {           // re-arm the holds for the moment the air laws engage
       this.gammaHold = false;
       this.bankHold = false;
+      this.spRef = 0;
+    } else if (prevMode !== 'air') {
+      // Ground / take-off attitude law -> C*: a pull still held means "keep this attitude", not
+      // "pull to the AoA limit" (which is what the same stick asks of the C* law).  Ratchet it.
+      this.spRef = Math.max(0, sp);
     }
+    // pitch stick seen by the air law: beyond the ratchet; the ratchet follows the stick down
+    this.spRef = Math.min(this.spRef, Math.max(0, sp));
+    const spA = sp - this.spRef;
 
     let qCmd;
     let de;
@@ -103,8 +119,11 @@ export class FlightControlSystem {
 
     if (this.mode === 'ground' || this.mode === 'takeoff') {
       // ---------------------------------------------------------------- pitch attitude command
+      // From the raw stick, linear up to rotateStick (the cubic shaping is for fine control in the
+      // air; here it left a half pull at ~4 deg, which only flies off at ~260 kt).
       const thG = c.groundPitch;
-      const thCmd = thG + Math.max(0, sp) * (c.takeoffPitch - thG);
+      const rot = clamp(rawPitch / (c.rotateStick || 1), 0, 1);
+      const thCmd = thG + rot * (c.takeoffPitch - thG);
       qCmd = clamp(c.kTheta * (thCmd - s.theta), -c.derotationRate, c.rotationRate);
       qCmd = this._limitAlphaG(qCmd, s, V, c.alphaMax, a, mp, geo, qbarEff);
       const ndi = ndiPitch(qCmd, gearM) + this.groundInt;
@@ -120,7 +139,8 @@ export class FlightControlSystem {
       // ---------------------------------------------------------------- C* pitch law (air)
       this.groundInt = 0;
       const nGz = Math.cos(s.theta) * Math.cos(s.phi);
-      const free = Math.abs(sp) < c.freeStick;
+      const free = Math.abs(spA) < c.freeStick;
+      const pa = s.gearDown > 0.5;                       // power-approach (landing) gains
       let gdot = 0;
       if (free) {
         if (!this.gammaHold) {
@@ -148,13 +168,20 @@ export class FlightControlSystem {
       const lead = clamp(c.bankCompLead * bankCompSlope(s.phi, c.bankCompKnee) * phiDot,
         -c.bankCompLeadMax, c.bankCompLeadMax);
       const comp = 1 + (bankComp(s.phi, c.bankCompKnee) + lead - 1) * wRoll;
-      const nFree = Math.cos(s.gamma) * comp + (V / G0) * gdot * Math.cos(s.phi);
+      // Hands-off load factor: nFree is perpendicular to the flight path (wind axes); C* works in
+      // body axes.  Steady flight needs body nz = cos(gamma + alpha) = nGz, i.e. nFree cos(a) minus the
+      // along-path specific force (thrust - drag, measured) times sin(a).  Without that term the
+      // reference carried a bias of cos(gamma) - cos(theta): 0.014 g at a 13 deg AoA approach, enough
+      // to flatten the path and bleed speed on the back side of the drag curve (a hands-off final
+      // used to slow down and sink short of the runway).
+      const ca0 = Math.cos(s.alpha), sa0 = Math.sin(s.alpha);
+      const nxW = (s.nx ?? Math.sin(s.gamma)) * ca0 - s.nz * sa0;
+      const nFree = (Math.cos(s.gamma) * comp + (V / G0) * gdot * Math.cos(s.phi)) * ca0 - nxW * sa0;
       const dnFree = nFree - nGz;
       const Vco = c.Vco;
-      const pa = s.gearDown > 0.5;                       // power-approach (landing) gains
       const up = pa ? c.cstarUpPA : c.cstarUp;
       const dn = pa ? c.cstarDownPA : c.cstarDown;
-      const Cs = dnFree * (V + Vco) / V + (sp > 0 ? sp * up : sp * dn);
+      const Cs = dnFree * (V + Vco) / V + (spA > 0 ? spA * up : spA * dn);
       const CsMeas = (s.nz - nGz) + (Vco / G0) * q;
       qCmd = (G0 * Cs) / (V + Vco) + c.kCstar * (Cs - CsMeas);
       dbg.CsCmd = Cs;
@@ -203,6 +230,17 @@ export class FlightControlSystem {
           this.bankRef = s.phi;
         }
       }
+      // High-AoA coordination: the sideslip grows as beta_dot = p sin(a) - r cos(a) + ay / V, and a
+      // stability-axis roll (p = pS cos a) needs the yaw rate to keep up.  Where the rudders cannot
+      // build it quickly (slow flight, 20-30 deg AoA, where gravity adds g sin(phi) / V as the bank
+      // grows) cap the command to what the yaw axis already does plus a bounded sideslip build-up;
+      // no effect at normal AoA, where sin(a) is small.
+      if (sa > 0.1 && pS !== 0) {
+        const sg = Math.sign(pS);
+        const room = Math.max(0, c.rollBetaMax - sg * s.beta);
+        const cap = Math.max(c.rollCoordMin, (sg * (r * ca - s.ay / V) + c.rollBetaGain * room) / (ca * sa));
+        if (Math.abs(pS) > cap) pS = sg * cap;
+      }
       const pCmd = pS * ca;
       // sideslip loop: zero sideslip (coordination) unless the pedals ask for some
       const betaMax = clamp(c.betaMax * c.betaQbarRef / Math.max(s.qbar, 1), c.betaMin, c.betaMax);
@@ -218,6 +256,18 @@ export class FlightControlSystem {
       const det = a.Cl_da * a.Cn_dr - a.Cl_dr * a.Cn_da;
       da = (cl * a.Cn_dr - a.Cl_dr * cn) / det;
       dr = (a.Cl_da * cn - a.Cn_da * cl) / det;
+      // Saturation: the joint solution expects the rudders' rolling moment (and the ailerons' yaw)
+      // of the unclipped deflections.  When one surface runs out of travel, solve the other axis
+      // again for the deflection the saturated one really has (slow flight at high AoA: the yaw
+      // demand of a coordinated roll saturates the rudders, and the ailerons used to wind down to
+      // nothing instead of rolling the jet).
+      if (Math.abs(dr) > 1) {
+        dr = Math.sign(dr);
+        da = (cl - a.Cl_dr * dr) / a.Cl_da;
+      } else if (Math.abs(da) > 1) {
+        da = Math.sign(da);
+        dr = (cn - a.Cn_da * da) / a.Cn_dr;
+      }
       dbg.pCmd = pCmd;
       dbg.rCmd = rCmd;
     }

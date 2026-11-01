@@ -172,7 +172,12 @@ export const F35I_CONFIG = {
     rollingResistance: { runway: 0.015, ground: 0.06, water: 0.2 },
     anchorStiffness: 4e5, anchorDamping: 6e4, anchorCapture: 0.10, anchorRelease: 0.6,
     steering: { maxAngle: 60 * D, lateralAccel: 3.4, rate: 60 * D },   // NWS full lock while taxiing
-    touchdownCrashSink: 4.0,                        // m/s closing speed at a wheel: gear failure
+    // Sink rate at a wheel's first contact.  Land-based fighter gear is designed for 10 ft/s
+    // (3.05 m/s): beyond it the landing is logged and shown as HARD LANDING; the struts give way at
+    // 15 ft/s (4.6 m/s), a heavy jet from ~4.2 m/s already (strut load over overloadFactor).  A 3 deg
+    // path flown onto the runway without a flare is ~3.8 m/s: hard, not a crash.  Contacts within
+    // bounceTime of leaving the ground belong to the same landing.
+    touchdownHardSink: 3.05, touchdownCrashSink: 4.6, bounceTime: 2.0,
   },
 
   // ------------------------------------------------------------------------------ fly-by-wire
@@ -199,16 +204,22 @@ export const F35I_CONFIG = {
     bankCompRate: [45 * D, 120 * D],               // bank rates (rad/s) over which compensation and lead fade out
     // ground / takeoff
     groundPitch: STANCE_PITCH, takeoffPitch: 12 * D,
+    rotateStick: 0.6,                              // raw aft stick that already asks for the full take-off attitude
     kTheta: 2.5, rotationRate: 8 * D, derotationRate: 3 * D, kiGround: 6.0,
     groundLawSpeed: [15, 35],                      // m/s: direct stick-to-stabilator below, attitude law above
     groundRollGain: 0.5,
     takeoffModeTime: 10, takeoffModeMaxCas: 230 * 0.514444,
-    tailStrikeAgl: 5, tailStrikePitch: 13 * D,
+    // The nozzle's lower lip clears the runway up to ~15 deg on statically compressed mains (16 deg
+    // with the struts extended, ~13.5 deg with them 0.2 m further in): 14 deg leaves the on-speed
+    // 13 deg AoA approach a flare.
+    tailStrikeAgl: 5, tailStrikePitch: 14 * D,
     // roll
     rollRateMax: 200 * D,
-    rollQbar: [0.3, 1500, 11000],                  // fraction at low qbar, qbar (Pa) where it starts / is full
-    rollAlpha: [12 * D, 30 * D, 0.3],              // full below 12 deg AoA, down to 30 % at 30 deg
+    rollQbar: [0.35, 1500, 11000],                 // fraction at low qbar, qbar (Pa) where it starts / is full
+    rollAlpha: [12 * D, 30 * D, 0.55],             // full below 12 deg AoA, down to 55 % at 30 deg (F-35 keeps
+                                                   // usable roll at high AoA: ~50 deg/s at 25 deg, 125 kt)
     rollMach: [1.1, 1.8, 0.55],
+    rollBetaMax: 6 * D, rollBetaGain: 3.0, rollCoordMin: 8 * D,   // high-AoA roll / yaw coordination (fcs.js)
     tauP: 0.12,
     kPhi: 1.2, bankSnap: 5 * D, bankHoldRate: 45 * D, bankHoldMaxPitch: 70 * D,
     // yaw

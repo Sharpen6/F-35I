@@ -81,6 +81,8 @@ export class FlightModel {
     this._acc = 0;
     this._throttle = 0;
     this._timeOnGround = 0;
+    this._timeAirborne = 0;
+    this._hardTimer = 0;         // s left of the HARD LANDING warning
     this._wasOnGround = true;
 
     // ---- sensor values carried from one sub-step to the next (FCS inputs)
@@ -116,7 +118,7 @@ export class FlightModel {
       crashed: false, crashReason: '', warnings: [],
       // extras (SI unless named): handy for the HMD / HUD and tests
       ias_kt: 0, tas_kt: 0, alt_ft: 0, vs_fpm: 0, gamma: 0, groundSpeed: 0, qbar: 0, mass: 0, time: 0,
-      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0,
+      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false,
     };
     this._stance = this._computeStance();
     this.reset({ x: 0, y: 0, z: 0, heading_deg: 0, on_ground: true });
@@ -179,6 +181,8 @@ export class FlightModel {
     this.crashed = false;
     this.crashReason = '';
     this.lastTouchdown = null;
+    this._hardTimer = 0;
+    this._timeAirborne = 0;
     this.time = 0;
     this._acc = 0;
     this.rollDistance = 0;
@@ -455,7 +459,7 @@ export class FlightModel {
     s.V = V; s.qbar = qbar; s.mach = M; s.alpha = alpha; s.beta = beta;
     s.p = this.p; s.q = this.q; s.r = this.r;
     s.theta = eu.theta; s.phi = eu.phi; s.gamma = gamma;
-    s.nz = this._nz; s.Qalpha = this._Qalpha; s.ay = this._ay;
+    s.nz = this._nz; s.nx = this._nx; s.Qalpha = this._Qalpha; s.ay = this._ay;
     s.wowMain = wowMain; s.wowNose = wowNose; s.gearDown = this.gearPos; s.aglMains = aglMains;
     s.groundSpeed = gs; s.cas = cas;
     s.gearPitchMoment = this._gearPitch;
@@ -554,10 +558,26 @@ export class FlightModel {
     // ---------------------------------------------------------------- touchdown bookkeeping, crashes
     if (onGround) this._timeOnGround += h; else this._timeOnGround = 0;
     if (gev && gev.touchdown.length && !this._wasOnGround) {
-      this.lastTouchdown = { time: this.time, sink: -this._vel.y, closing: gev.maxClosing, ias: cas, gs,
-        pitch: eu.theta, alpha, wheel: gev.touchdown[0].name };
+      const sink = -this._vel.y;
+      const td = this.lastTouchdown;
+      if (td && this._timeAirborne < cfg.gear.bounceTime) {
+        // back on the wheels after a bounce: the same landing; keep its first contact, note the worst
+        td.bounces++;
+        td.sink = Math.max(td.sink, sink);
+        td.closing = Math.max(td.closing, gev.maxClosing);
+      } else {
+        this.lastTouchdown = { time: this.time, sink, closing: gev.maxClosing, ias: cas, gs,
+          pitch: eu.theta, alpha, wheel: gev.touchdown[0].name, bounces: 0, hard: false };
+      }
     }
+    if (gev && gev.touchdown.length && gev.maxClosing > cfg.gear.touchdownHardSink && this.lastTouchdown) {
+      // beyond the gear's design sink rate (10 ft/s): it holds, but say so (and log it)
+      this.lastTouchdown.hard = true;
+      this._hardTimer = 6;
+    }
+    if (this._hardTimer > 0) this._hardTimer -= h;
     const nowOnGround = this.gear.units.some((g) => g.wow);
+    if (nowOnGround) this._timeAirborne = 0; else this._timeAirborne += h;
     this._wasOnGround = nowOnGround;
     this._checkCrash(gev, hCG);
   }
@@ -702,6 +722,7 @@ export class FlightModel {
     st.crashReason = this.crashReason;
     st.fcsMode = this.fcs.mode;
     st.lastTouchdown = this.lastTouchdown;
+    st.highAoA = !!(inp && inp.highAoA);
     // warnings
     const wn = st.warnings;
     wn.length = 0;
@@ -718,7 +739,9 @@ export class FlightModel {
       if (st.ias > lim.vne || st.mach > lim.mmo + 0.05) wn.push('OVERSPEED');
       if (!e.running) wn.push('ENGINE');
       else if (this.fuelKg < 800) wn.push('BINGO FUEL');
-      if (inp && inp.parkingBrake && this._throttle > 0.5) wn.push('PARKING BRAKE');
+      // taking off against the parking brake (it drags the wheels now); meaningless once airborne
+      if (inp && inp.parkingBrake && this._throttle > 0.5 && st.onGround) wn.push('PARKING BRAKE');
+      if (this._hardTimer > 0) wn.push('HARD LANDING');
     }
     return st;
   }
