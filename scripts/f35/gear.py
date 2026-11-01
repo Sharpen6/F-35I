@@ -20,6 +20,7 @@ from mathutils import Vector, Matrix
 
 from .geom import P, get_collection, mesh_object, cylinder, uv_sphere, add_modifier_bevel, loft_rings
 from .geom import ground_z_airframe
+from .bays import NOSE_WELL_Z
 from . import materials as M
 
 # --------------------------------------------------------------- key points
@@ -32,9 +33,15 @@ NG_R, NG_RIM, NG_W = 0.2985, 0.127, 0.191     # 23.5x7.5R10 tyre
 NG_T = (0.0, 4.45, -0.42)          # trunnion centre
 NG_C = (0.0, 4.25, ground_z_airframe(4.25) + NG_R - NG_DEFLECT)     # wheel centre; wheelbase 6.02 m
 NG_TRAIL = 0.10                    # axle aft of the piston axis (single trailing arm, c51, ref_05)
-NG_SLIDE = 0.229                   # oleo closes this much as the leg retracts, so it stows as before
-NG_STOW_C = (0.0, 3.40, -0.28)     # wheel centre when stowed
-NG_B = (0.0, 3.80, -0.08)          # drag-brace airframe pivot
+NG_SLIDE = 0.16                    # oleo closes this much as the leg retracts (no more than the chrome shows)
+NG_STOW_C = (0.0, 3.40, -0.30)     # sets the stowed leg's direction; the wheel lands at s ~3.25, clear of the roof
+# Heights above the axle along the strut (photos c29, c48, c51, c53, in tyre diameters): the boxy
+# steering housing with the lamps ends ~0.66 m above the axle, a neck and a ring with the torque-link
+# lug below it, then only ~0.17 m of chrome above the yoke.
+NG_HOUSING_H = (0.66, 0.95)
+NG_COLLAR_H = (0.58, 0.66)
+NG_B = (0.0, 3.80, -0.025)         # drag-brace airframe pivot, on a lug just under the well roof
+NG_BRACE_UPPER = 0.65              # upper link's share: the knee stays under the roof as the brace folds
 NG_E = (0.0, 5.00, -0.15)          # actuator airframe pivot
 # main gear (left; right is mirrored).  Head-on and side photos (c29, c50,
 # c53) show near-vertical legs that disappear into the wing root just outboard
@@ -44,7 +51,7 @@ NG_E = (0.0, 5.00, -0.15)          # actuator airframe pivot
 MG_T = (1.90, 10.12, 0.25)
 MG_R, MG_RIM, MG_W = 0.432, 0.216, 0.279      # 34x11.0R17 tyre
 MG_C = (2.17, 10.27, ground_z_airframe(10.27) + MG_R - MG_DEFLECT)     # wheel track 4.34 m
-MG_SLIDE = 0.095                   # oleo closes this much as the leg retracts (stows as before)
+MG_SLIDE = 0.175                   # oleo closes this much as the leg retracts (stows as before)
 MG_AXLE_OFF = 0.215                # strut centreline inboard of wheel centre
 MG_OLEO = 1.15                     # oleo body length below the trunnion (piston below it)
 MG_STOW_C = (1.20, 8.85, 0.13)     # wheel centre stowed (target), above/outboard of the weapon bay roof
@@ -208,16 +215,20 @@ def rot_about(p, T, R):
     return T + R @ (Vector(p) - T)
 
 
-def brace_geometry(Bw, Dw, pole_dir, over=0.012):
-    """Two equal links B-K-D, slightly bent (over-centre) towards pole_dir."""
+def brace_geometry(Bw, Dw, pole_dir, over=0.012, upper=0.5):
+    """Two links B-K-D, slightly bent (over-centre) towards pole_dir.  `upper` is the B-K link's share
+    of the length: a long upper link folds the brace flatter, so its knee rises less as it stows."""
     d = (Dw - Bw)
     L = d.length
-    Lk = L / 2 + over
+    S = L + 2 * over
+    L1, L2 = S * upper, S * (1.0 - upper)
+    e = d.normalized()
     n = Vector(pole_dir)
-    n = (n - d.normalized() * d.normalized().dot(n)).normalized()
-    h = math.sqrt(max(Lk * Lk - (L / 2) ** 2, 0.0))
-    K = (Bw + Dw) / 2 + n * h
-    return K, Lk, n
+    n = (n - e * e.dot(n)).normalized()
+    a = (L1 * L1 - L2 * L2 + L * L) / (2 * L)
+    h = math.sqrt(max(L1 * L1 - a * a, 0.0))
+    K = Bw + e * a + n * h
+    return K, (L1, L2), n
 
 
 # ------------------------------------------------------------------ build
@@ -230,10 +241,11 @@ def _bone(spec_list, name, head, tail, parent, objects=(), roll_axis=None, **kw)
 
 
 def build_nose(coll, bones):
-    """Nose leg as in the photos (c20, c29, c50, c51, ref_04, ref_05): a boxy white steering
-    housing with the lamps on its front, a short chrome piston, a compact yoke and one curved
-    trailing arm down the aircraft's LEFT side to a cantilevered axle; the right face of the wheel
-    is clear, and the torque links sit behind the strut with the knee pointing aft."""
+    """Nose leg as in the photos (c20, c29, c48, c50, c51, c53, ref_04, ref_05): a boxy white steering
+    housing with the lamps on its front low on the leg, a neck and a collar ring under it, a short
+    chrome piston, a compact yoke and one curved trailing arm down the aircraft's LEFT side to a
+    cantilevered axle; the right face of the wheel is clear, and the torque links run from the
+    collar ring to the yoke behind the strut with the knee pointing well aft."""
     T = W(NG_T)
     C = W(NG_C)
     X = Vector((1, 0, 0))
@@ -242,19 +254,25 @@ def build_nose(coll, bones):
     u = (Cp - T).normalized()                    # strut axis (down)
     L = (Cp - T).length
     fwd_perp = (fwd - u * u.dot(fwd)).normalized()
+
+    def at(h):
+        """Point on the strut axis h metres above the axle."""
+        return T + u * (L - h)
+
     gear, chrome, dark = M.get("gear"), M.get("chrome"), M.get("intake_dark")
     strut_objs, steer_objs = [], []
-    # trunnion + upper (outer) cylinder
+    h0, h1 = NG_HOUSING_H
+    c0, c1 = NG_COLLAR_H
+    # trunnion + upper (outer) cylinder down to the collar
     strut_objs.append(cylinder("NG_Trunnion", T - X * 0.17, T + X * 0.17, 0.05, None, coll, gear))
-    strut_objs.append(cylinder("NG_UpperStrut", T - u * 0.06, T + u * 0.50, 0.072, 0.068, coll, gear))
-    # boxy steering housing (~0.24 m wide) just under the well
-    hb0, hb1 = T + u * 0.12, T + u * 0.40
-    strut_objs.append(bar("NG_SteerHousing", hb0 - fwd_perp * 0.01, hb1 - fwd_perp * 0.01, 0.24, 0.17,
+    strut_objs.append(cylinder("NG_UpperStrut", T - u * 0.06, at(c0 + 0.01), 0.072, 0.068, coll, gear))
+    # boxy steering housing (~0.24 m wide), its lower end ~0.66 m above the axle
+    strut_objs.append(bar("NG_SteerHousing", at(h1) - fwd_perp * 0.01, at(h0) - fwd_perp * 0.01, 0.24, 0.17,
                           fwd_perp, coll, gear, bevel=0.02))
     # taxi + landing lights on the front of the housing
     lamps = []
-    for k, dz in enumerate((0.19, 0.31)):
-        base = T + u * dz + fwd_perp * 0.075
+    for k, h in enumerate((h0 + 0.21, h0 + 0.09)):
+        base = at(h) + fwd_perp * 0.075
         look = (fwd_perp * 0.9 - u * 0.15 * (k + 1)).normalized()
         strut_objs.append(cylinder(f"NG_LampBody{k}", base, base + look * 0.04, 0.045, 0.047, coll, gear,
                                    segments=16))
@@ -263,10 +281,21 @@ def build_nose(coll, bones):
         lens["light"] = "landing"
         strut_objs.append(lens)
         lamps.append(lens)
+    # neck and the collar ring that carries the upper torque link
+    strut_objs.append(cylinder("NG_Neck", at(h0 + 0.01), at(c1 - 0.005), 0.084, None, coll, gear, segments=24))
+    strut_objs.append(cylinder("NG_Collar", at(c1), at(c0), 0.104, None, coll, gear, segments=28))
+    strut_objs.append(cylinder("NG_CollarBand", at(c1 - 0.012), at(c1 - 0.022), 0.110, None, coll, chrome,
+                               segments=28))
+    # hose down the aft side of the housing to a connector (c51)
+    hose_top = at(h1 + 0.12) - fwd_perp * 0.10 + X * 0.07
+    hose_bot = at(h0 + 0.03) - fwd_perp * 0.115 + X * 0.07
+    strut_objs.append(cylinder("NG_Hose", hose_top, hose_bot, 0.011, None, coll, dark, segments=8))
+    strut_objs.append(cylinder("NG_HosePlug", hose_bot, hose_bot - u * 0.05, 0.019, None, coll, dark,
+                               segments=10))
     # lower (sliding) part -> steer group: piston, yoke, trailing arm, axle, torque links
     yoke_d = L - (NG_R + 0.07)
     yoke = T + u * yoke_d
-    steer_objs.append(cylinder("NG_Piston", T + u * 0.44, yoke + u * 0.01, 0.050, None, coll, chrome))
+    steer_objs.append(cylinder("NG_Piston", at(c0 + 0.08), yoke + u * 0.01, 0.050, None, coll, chrome))
     # compact yoke under the piston, offset to the left so nothing passes the tyre's right edge
     steer_objs.append(bar("NG_Yoke", yoke - X * 0.06, yoke + X * 0.165, 0.13, 0.08, u, coll, gear, bevel=0.012))
     ax = 0.150                                   # arm centre plane, outside the tyre's left face
@@ -283,10 +312,10 @@ def build_nose(coll, bones):
                                segments=12))
     lug = C + X * (ax + 0.01) + fwd * 0.06
     steer_objs.append(cylinder("NG_TowLug", lug, lug + fwd * 0.07, 0.018, 0.015, coll, gear, segments=10))
-    # torque links behind the strut, knee pointing aft
-    k_up = T + u * 0.47 - fwd_perp * 0.065
-    knee = T + u * ((0.47 + yoke_d) / 2) - fwd_perp * 0.17
+    # torque links from the collar ring to the yoke, behind the strut, the knee well aft (c51)
+    k_up = at(c0 + 0.02) - fwd_perp * 0.075
     k_lo = yoke - u * 0.02 - fwd_perp * 0.06
+    knee = (k_up + k_lo) * 0.5 - fwd_perp * 0.20
     steer_objs.append(bar("NG_TorqueLink_U", k_up, knee, 0.05, 0.03, X, coll, gear, bevel=0.005))
     steer_objs.append(bar("NG_TorqueLink_L", knee, k_lo, 0.05, 0.03, X, coll, gear, bevel=0.005))
     steer_objs.append(cylinder("NG_TorqueKnee", knee - X * 0.035, knee + X * 0.035, 0.018, None, coll,
@@ -294,18 +323,19 @@ def build_nose(coll, bones):
     # wheel: hub face on the right, where nothing covers it
     wheel = build_wheel("NG_Wheel", coll, C, X, NG_R, NG_RIM, NG_W, outboard=-1.0)
     # ----------------------------------------------------- retraction solve
-    # the oleo closes by NG_SLIDE first, so the stowed wheel lands where it always did
+    # the oleo closes by NG_SLIDE first, then the leg swings forward into the well
     Cs = W(NG_STOW_C)
     d1 = (C - u * NG_SLIDE) - T
     d2 = (Cs - T)
     axis, ang, R = solve_trunnion(T, d1, X, d2, X)
     # drag brace: B (airframe) -> K -> D (strut)
     Bw = W(NG_B)
-    Dw = T + u * 0.56 + fwd_perp * 0.03
+    Dw = at(h1 + 0.05) + fwd_perp * 0.06            # above the housing, hidden behind the doors
     pole = (Vector((0, 1, 0)) + Vector((0, 0, 1))).normalized()     # knee breaks aft-up
-    K, Lk, n = brace_geometry(Bw, Dw, pole)
+    K, Lk, n = brace_geometry(Bw, Dw, pole, upper=NG_BRACE_UPPER)
     br_u = bar("NG_DragBrace_U", Bw, K, 0.07, 0.05, X, coll, gear, bevel=0.008)
     br_l = bar("NG_DragBrace_L", K, Dw, 0.06, 0.045, X, coll, gear, bevel=0.008)
+    mount = bar("NG_BraceMount", W((0.0, NG_B[1], NOSE_WELL_Z[1] - 0.005)), Bw, 0.09, 0.07, X, coll, gear, bevel=0.006)
     hinge_pins = [cylinder("NG_BracePinB", Bw - X * 0.06, Bw + X * 0.06, 0.025, None, coll, chrome, segments=10),
                   cylinder("NG_BracePinK", K - X * 0.05, K + X * 0.05, 0.022, None, coll, chrome, segments=10)]
     strut_objs.append(cylinder("NG_BraceLug", Dw - X * 0.05, Dw + X * 0.05, 0.03, None, coll, gear,
@@ -328,6 +358,7 @@ def build_nose(coll, bones):
     _bone(bones, "NG_Wheel", C, C + X * 0.2, "NG_Steer", wheel, drive="wheel_spin", radius=NG_R)
     _bone(bones, "NG_BraceTgt", Dw, Dw + X * 0.08, "NG_Strut")
     _bone(bones, "NG_BracePole", K + n * 0.8, K + n * 0.8 + X * 0.08, "Root")
+    _bone(bones, "NG_BraceMount", Bw, Bw + X * 0.06, "Root", [mount])
     _bone(bones, "NG_BraceUp", Bw, K, "Root", [br_u, hinge_pins[0]], roll_axis=n)
     _bone(bones, "NG_BraceLo", K, Dw, "NG_BraceUp", [br_l, hinge_pins[1]], roll_axis=n,
           ik=("NG_BraceTgt", "NG_BracePole", 2))

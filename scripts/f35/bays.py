@@ -41,11 +41,12 @@ OUTER_DOOR_X = (0.465, 1.085)
 # from its hinge line on the bottom corner (|x| = NOSE_WELL_X) to the centre
 # line, from just behind the EOTS window to the strut.  Front edge sawtoothed,
 # aft edge raked so the free edge is slightly longer than the hinge edge.
-NOSE_WELL_X = (0.50, 0.42)         # hinge line |x| at the front / aft end.  At the front the hinge sits up
+NOSE_WELL_X = (0.50, 0.33)         # hinge line |x| at the front / aft end.  At the front the hinge sits up
                                    # on the curved bottom corner, so the hinge line climbs towards the nose
                                    # and the open doors leave about a wheel diameter of daylight above the
-                                   # nose tyre (c14, c28, c47, c51, ref_05); head-on the hinges are ~1 m
-                                   # apart (c22, c29)
+                                   # nose tyre (c14, c28, c47, c48, c51, c53, ref_05); head-on the door fronts
+                                   # are ~1 m apart (c22, c29).  The well narrows aft, so by the strut the
+                                   # doors are shallow enough to show the white steering housing under them
 NOSE_WELL_S = (2.30, 4.62)
 NOSE_WELL_Z = (-1.20, 0.04)        # cutter bottom (below the skin) / well roof
 NOSE_TEETH = 2                     # sawtooth teeth across each door's front edge

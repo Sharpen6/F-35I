@@ -17,11 +17,15 @@ L_TOTAL = 15.67          # overall length (m)
 Y0 = L_TOTAL * 0.5       # nose sits at y = -Y0
 GROUND_Z = -1.76         # ground plane (gear down, static; tyre bottoms)
 # Static ground attitude.  The airframe is built level; on its gear the jet sits about 1.45 deg
-# nose-up and 5 cm higher at the main wheels (camera-matched photos c14, c22, c29, c51 with the
-# main contacts matched).  The rig root carries this transform (assemble.apply_stance), so in
-# the airframe frame the ground lies at ground_z_airframe(s).
+# nose-up (camera-matched photos c14, c22, c29, c51 with the main contacts matched; the nose-tip to
+# fin-tip line in the long-lens side view c48 agrees within 0.3 deg) and 13 cm higher at the main
+# wheels: measured in tyre diameters, the gear doors' lower edges sit higher above the wheels in
+# c48, c51 and c53 than they did at 5 cm.  13 cm puts the fin tips 4.41 m above the ground, against
+# the published 4.38 m (14.4 ft); 10 cm would match that but leaves the doors too low in the photos.
+# The rig root carries this transform (assemble.apply_stance), so in the airframe frame the
+# ground lies at ground_z_airframe(s).
 STANCE_PITCH = 1.45      # deg, nose up
-STANCE_RAISE = 0.05      # m, airframe above GROUND_Z at the main-wheel contact line
+STANCE_RAISE = 0.13      # m, airframe above GROUND_Z at the main-wheel contact line
 MAIN_CONTACT_S = 10.27   # station of the main-wheel contact line
 
 
