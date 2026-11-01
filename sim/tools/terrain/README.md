@@ -146,3 +146,10 @@ of +-64 km (the core plus a 12.8 km ring) so the core edges and the far area joi
 `build.py` (CLI and stage order), `grid.py` (projection, grids, height encoding), `fetch.py`,
 `landcover.py`, `colorgrade.py`, `color.py`, `runways.py`, `heights.py`, `outputs.py` (airports,
 spawns, manifest), `osmcheck.py`, `previews.py`.
+
+`overrun_check.py` is a separate check of a built set (it writes nothing into it): it follows
+the pavement beyond every runway end in the colour tiles and flags ends where it runs well past
+the painted overrun (`overrun_m`), with a contact sheet to look at
+(`/home/claude/simdata/terrain_extra/overrun_check.jpg` by default). The `runways` stage's
+saturation test stops early where an overrun is paler, yellower concrete than the runway; the
+confirmed cases are corrected at runtime in `sim/js/terrain/Surface.js` (`OVERRUN_FIX`).

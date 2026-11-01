@@ -77,7 +77,7 @@ export const SCENES = [
   // Dead Sea shore (salt, mud flats, old shorelines), 150 m
   { name: 'deadsea_shore150_chase', spawn: { x: 38500, z: 6500, agl: 150, hdg: 150, speed: 150 }, time: 9, camera: 'chase', steps: 90, settle: 3500 },
   // dawn: the Moab plateau's shadow over the Dead Sea's west shore, the Judean cliffs lit above it
-  { name: 'deadsea_dawn_chase', spawn: { x: 36000, z: 6500, agl: 400, hdg: 255, speed: 150 }, time: 5.35, camera: 'chase', steps: 30, settle: 2500 },
+  { name: 'deadsea_dawn_chase', spawn: { x: 47000, z: 7600, agl: 400, hdg: 265, speed: 150 }, time: 5.35, camera: 'chase', steps: 30, settle: 2500 },
   // beach and dunes south of Ashdod, 120 m
   { name: 'dunes120_chase', spawn: { x: -41500, z: 11500, agl: 120, hdg: 20, speed: 150 }, time: 10, camera: 'chase', steps: 90, settle: 3500 },
   // night over Tel Aviv, 1,500 m
