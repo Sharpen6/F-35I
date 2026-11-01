@@ -187,6 +187,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
 | `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
+| `roads=0` / `airportlights=0` | no roads, railways and airfield surfaces / no airfield lights (see Roads) |
 
 ## Files (the app shell)
 
@@ -210,6 +211,17 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 
 The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terrain` and
 `js/world` (terrain rendering and queries), `js/aircraft` (the jet), `js/fdm` (flight model).
+
+### Roads, railways and airfield lights
+
+`js/world/Roads.js` (a graphics module) drapes the roads, railways, taxiways and aprons of
+`data/world/roads/` and `data/world/airfields/airfields.json` (OpenStreetMap via Overture, built
+by `tools/world/roads.py` and `airfields.py`) exactly on the terrain within 3.4 km (high), 2.4
+km (medium) or 1.5 km (low), with lane markings, kerbs, rails, taxiway lines and holding
+positions, street lights and floodlit aprons at night, fading into the imagery beyond. It owns
+`js/world/AirportLights.js`: runway edge, threshold, centreline and touchdown lights, approach
+lights with flashers, PAPI, blue taxiway lights and floodlight masts, switched by the sun.
+Without the data it draws nothing. Formats, layouts and rebuild: `tools/world/ROADS.md`.
 
 ### How the shell runs
 
@@ -342,6 +354,9 @@ then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
   cover: © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021)
   processed by ESA WorldCover consortium (CC BY 4.0). Airports: OurAirports (public domain).
   The menu shows the attribution of the data set it loaded.
+* **Roads, railways and airfields** (`data/world/roads`, `data/world/airfields`): © OpenStreetMap
+  contributors, ODbL 1.0, via the Overture Maps Foundation (release 2026-10-21.0). The menu
+  shows it with the terrain's credits.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here.

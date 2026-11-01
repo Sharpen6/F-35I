@@ -196,6 +196,7 @@ def main():
     ap.add_argument('--cache', default=os.path.join(HERE, '_cache', 'roads'), help='download cache (git-ignored)')
     ap.add_argument('--out', default=os.path.join(HERE, '..', '..', 'data', 'world'), help='data folder (roads/ goes in it)')
     ap.add_argument('--stages', default='fetch,build', help='comma list: fetch,build,check')
+    ap.add_argument('--terrain', default=None, help='terrain data folder for check (default <out>/../terrain)')
     args = ap.parse_args()
     cache = os.path.abspath(args.cache)
     os.makedirs(cache, exist_ok=True)
@@ -210,7 +211,7 @@ def main():
     if 'build' in stages:
         build(cache, os.path.abspath(args.out))
     if 'check' in stages:
-        check(cache, os.path.abspath(args.out))
+        check(cache, os.path.abspath(args.out), args.terrain and os.path.abspath(args.terrain))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -744,8 +745,137 @@ def write_tile(pls, ix, iz):
     return head + bytes(recs) + b''.join(pts) + np.array(brs, '<f4').tobytes()
 
 
-def check(cache, out):
-    raise NotImplementedError('check stage: see below')
+def read_tile(path):
+    """A tile written by tile_bytes(): list of (cls, flags, cw_m, left_m, right_m, points (n, 2) tile-local m)."""
+    buf = open(path, 'rb').read()
+    magic, n, npts, nb = struct.unpack_from('<4sIII', buf, 0)
+    assert magic == b'RDS1', path
+    pts = np.frombuffer(buf, '<u2', npts * 2, 16 + n * 24).reshape(-1, 2).astype(np.float64) * 0.1
+    out = []
+    for k in range(n):
+        cls, flags, lanes, level, cw, left, right, m, nbk, first, fb, u0 = struct.unpack_from('<BBBbHBBHHIIf', buf, 16 + k * 24)
+        out.append((cls, flags, cw / 100.0, left / 10.0, right / 10.0, pts[first:first + m]))
+    return out
+
+
+def road_mask(lines, px, size, classes):
+    """Coverage (size x size, row 0 north) of the paved width of the given classes, px m per pixel."""
+    mask = np.zeros((size, size), np.float32)
+    yy, xx = np.mgrid[0:size, 0:size]
+    cx, cz = (xx + 0.5) * px, (yy + 0.5) * px
+    for cls, flags, cw, left, right, p in lines:
+        if cls not in classes or flags & 2 or len(p) < 2:      # no bridges: their deck is not on the ground
+            continue
+        hw = 0.5 * cw + 0.5 * (left + right)
+        for a, b in zip(p[:-1], p[1:]):
+            x0, x1 = sorted((a[0], b[0]))
+            z0, z1 = sorted((a[1], b[1]))
+            i0, i1 = max(int((x0 - hw) / px) - 1, 0), min(int((x1 + hw) / px) + 2, size)
+            j0, j1 = max(int((z0 - hw) / px) - 1, 0), min(int((z1 + hw) / px) + 2, size)
+            if i0 >= i1 or j0 >= j1:
+                continue
+            X, Z = cx[j0:j1, i0:i1], cz[j0:j1, i0:i1]
+            d = b - a
+            L2 = max(float(d @ d), 1e-9)
+            t = np.clip(((X - a[0]) * d[0] + (Z - a[1]) * d[1]) / L2, 0, 1)
+            dist = np.hypot(X - a[0] - t * d[0], Z - a[1] - t * d[1])
+            cov = np.clip(hw / px + 0.5 - dist / px, 0, 1)        # antialiased: a pixel half covered at the edge
+            np.maximum(mask[j0:j1, i0:i1], cov, out=mask[j0:j1, i0:i1])
+    return mask
+
+
+def box_blur(a, r):
+    """Mean over a (2r+1)^2 box (edges clamped), by cumulative sums."""
+    p = np.pad(a, r + 1, mode='edge')
+    c = p.cumsum(0).cumsum(1)
+    n = 2 * r + 1
+    s = c[n:, n:] - c[:-n, n:] - c[n:, :-n] + c[:-n, :-n]
+    return s[:a.shape[0], :a.shape[1]] / (n * n)
+
+
+def check(cache, out, terrain=None, ntiles=8, shift=4):
+    """Offset of the main roads against the L0 imagery, per tile (cross-correlation in pixels).
+
+    The asphalt of motorways, trunk and primary roads differs from the land around it in the
+    Sentinel-2 composite: darker than fields and bare soil, often lighter than roofs and trees in
+    town. The shift of the road mask that best matches the local contrast of the imagery (the
+    extremum of the correlation, whichever its sign) is the misregistration between OpenStreetMap
+    and the imagery, which are georeferenced independently; sub-pixel by a parabola through the
+    peak. Reports per tile and for all tiles together; writes <out>/roads/check.txt.
+    """
+    from PIL import Image
+    terrain = terrain or os.path.join(out, '..', 'terrain')
+    rdir = os.path.join(out, 'roads')
+    idx = json.load(open(os.path.join(rdir, 'index.json')))
+    size, px = grid.L0_PX, grid.TILE_SIZE / grid.L0_PX
+    major = {CLS['motorway'], CLS['trunk'], CLS['primary']}
+    # the tiles with the most main road
+    scored = []
+    for key in idx['files']:
+        ix, iz = map(int, key.split(','))
+        lines = read_tile(os.path.join(rdir, f'tile_{ix}_{iz}.bin'))
+        km = sum(np.hypot(*np.diff(p, axis=0).T).sum() for c, f, *_r, p in lines if c in major and len(p) > 1) / 1000
+        scored.append((km, ix, iz, lines))
+    scored.sort(key=lambda t: -t[0])
+    rows = []
+    for km, ix, iz, lines in scored[:ntiles]:
+        img = os.path.join(terrain, 'color', 'L0', f'tile_{ix}_{iz}.jpg')
+        if not os.path.exists(img):
+            continue
+        rgb = np.asarray(Image.open(img).convert('RGB'), np.float32) / 255
+        lum = rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+        dark = box_blur(lum, 6) - lum                     # contrast against the surroundings (75 m box)
+        m = road_mask(lines, px, size, major)
+        m -= m.mean()
+        dark -= dark.mean()
+        S = shift
+        corr = np.zeros((2 * S + 1, 2 * S + 1))
+        core = (slice(S, size - S), slice(S, size - S))
+        for dj in range(-S, S + 1):
+            for di in range(-S, S + 1):
+                # road mask moved by (di, dj) pixels (east, south) against the imagery
+                shifted = m[S - dj:size - S - dj, S - di:size - S - di]
+                corr[dj + S, di + S] = float((shifted * dark[core]).sum())
+        k = np.unravel_index(np.argmax(np.abs(corr)), corr.shape)
+        sign = 1.0 if corr[k] > 0 else -1.0                # dark roads (+) or light roads (-)
+        corr *= sign / max(abs(corr[k]), 1e-9)
+        dx, dz = peak_offset(corr, S, px)
+        rows.append((ix, iz, km, sign, dx, dz, corr[S, S]))
+        tone = 'darker' if sign > 0 else 'lighter'
+        log(f'tile {ix},{iz}: {km:5.1f} km of main road ({tone} than around), '
+            f'best shift east {dx:+5.1f} m, south {dz:+5.1f} m (correlation at 0: {corr[S, S]:.2f} of the peak)')
+    # In town the contrast of the main roads is weak and other lines (rows of roofs, field edges)
+    # pull the peak around: the summary is the median of the tiles whose peak lies inside the
+    # search window and already shows at zero shift (half the peak or more).
+    good = [r for r in rows if r[6] >= 0.5 and abs(r[4]) < shift * px - 1 and abs(r[5]) < shift * px - 1]
+    if good:
+        dx, dz = float(np.median([r[4] for r in good])), float(np.median([r[5] for r in good]))
+        total = (f'{len(good)} of {len(rows)} tiles with a clear peak: median shift east {dx:+.1f} m, '
+                 f'south {dz:+.1f} m (one L0 pixel is {px:.2f} m)')
+    else:
+        total = f'no clear peak in {len(rows)} tiles'
+    log(total)
+    with open(os.path.join(rdir, 'check.txt'), 'w') as f:
+        f.write('Main roads (OpenStreetMap via Overture) against the L0 imagery (6.25 m pixels):\n'
+                'shift of the road mask that best matches the contrast of the imagery, per tile.\n\n')
+        for ix, iz, km, sign, dx, dz, c0 in rows:
+            tone = 'dark ' if sign > 0 else 'light'
+            f.write(f'tile {ix:2d},{iz:2d}  {km:6.1f} km  {tone}  east {dx:+6.2f} m  '
+                    f'south {dz:+6.2f} m  corr(0) {c0:.2f}\n')
+        f.write(f'\n{total}\n')
+    return rows
+
+
+def peak_offset(corr, S, px):
+    """Sub-pixel position (m east, m south) of the maximum of a (2S+1)^2 correlation surface."""
+    j, i = np.unravel_index(np.argmax(corr), corr.shape)
+
+    def sub(a, b, c):
+        d = a - 2 * b + c
+        return 0.0 if d >= 0 else 0.5 * (a - c) / d
+    fi = sub(corr[j, i - 1], corr[j, i], corr[j, i + 1]) if 0 < i < 2 * S else 0.0
+    fj = sub(corr[j - 1, i], corr[j, i], corr[j + 1, i]) if 0 < j < 2 * S else 0.0
+    return (i - S + fi) * px, (j - S + fj) * px
 
 
 if __name__ == '__main__':

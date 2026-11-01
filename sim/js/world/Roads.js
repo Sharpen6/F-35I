@@ -126,6 +126,9 @@ export class Roads {
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
     // off with ?roads=0, and on the stand-in terrain of ?stubs=1 (no height field to drape on)
     this.enabled = params.get('roads') !== '0' && !!terrain.hf;
+    // shown in the start menu after the terrain's credits (main.js); the data's own attribution
+    // (index.json, airfields.json) says the same
+    this.credits = this.enabled ? 'Roads, railways and airfields: \u00a9 OpenStreetMap contributors (ODbL), via Overture Maps Foundation.' : '';
     this.quality = 'high';
     this.Q = QUALITY.high;
     this.index = null;

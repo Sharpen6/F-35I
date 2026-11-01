@@ -156,7 +156,8 @@ class App {
     this.ui.buildMenu({
       spawns: this.terrain.spawns,
       settings: this.settings,
-      attribution: this.terrain.attribution || this.terrain.manifest?.attribution || '',
+      // the terrain's data credits, then each graphics module's (m.credits: roads track hook)
+      attribution: [this.terrain.attribution || this.terrain.manifest?.attribution || '', ...this.modules.map((m) => m.credits)].filter(Boolean).join(' '),
       model: 'Aircraft: the procedural F-35I Adir Blender model of this project (scripts/f35, scripts/pilot).',
     });
     if (!this.terrain.spawns[this.settings.spawn]) this.settings.spawn = Object.keys(this.terrain.spawns)[0];
