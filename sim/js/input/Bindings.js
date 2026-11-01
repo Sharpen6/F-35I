@@ -8,6 +8,9 @@
 //   {type: 'axisdir', index, dir: 1 | -1}      a button action on one side of an axis (> 0.5)
 //   {type: 'pov',    index, dir: 'up'|...}     one direction of a POV hat that the browser
 //                                              reports as a single axis (-1 = up ... 1, rest 1.29)
+// A button binding may also carry inAir: '<action>', the edge it fires while the aircraft is in
+// the air (the standard gamepad's L3 is the parking brake on the ground and the high-AoA mode in
+// the air: a gamepad has few buttons, and neither makes sense in the other place).
 // Throttle axes are absolute: the lever position is the throttle (0.75 = MIL).
 
 const STORAGE_KEY = 'f35i.bindings.v1';
@@ -28,6 +31,7 @@ export const BUTTON_ACTIONS = [
   { id: 'parkingBrakeToggle', label: 'Parking brake' },
   { id: 'canopyToggle', label: 'Canopy open / close' },
   { id: 'speedbrakeToggle', label: 'Speed brake' },
+  { id: 'highAoAToggle', label: 'High-AoA mode (50 deg) on / off' },
   { id: 'throttleUp', label: 'Throttle up (hold)' },
   { id: 'throttleDown', label: 'Throttle down (hold)' },
   { id: 'cameraNext', label: 'Next camera' },
@@ -50,7 +54,9 @@ export const HELD_ACTIONS = new Set(['brakes', 'throttleUp', 'throttleDown', 'lo
  * Defaults for a gamepad with mapping === 'standard' (Xbox / PlayStation layout):
  * left stick pitch and roll, right stick X rudder, right stick Y and the triggers throttle,
  * A brakes, X canopy, Y gear, B speed brake, bumpers camera, d-pad head look,
- * L3 parking brake, R3 look ahead, View/Back HMD, Menu/Start pause.
+ * L3 parking brake on the ground and high-AoA mode in the air, R3 look ahead, View/Back HMD,
+ * Menu/Start pause.  Rudder and throttle share the right stick, so Input locks it to whichever
+ * axis leaves the centre first.
  */
 export const STANDARD_GAMEPAD = {
   axes: {
@@ -69,7 +75,7 @@ export const STANDARD_GAMEPAD = {
     cameraNext: { type: 'button', index: 5 },
     hmdToggle: { type: 'button', index: 8 },
     pause: { type: 'button', index: 9 },
-    parkingBrakeToggle: { type: 'button', index: 10 },
+    parkingBrakeToggle: { type: 'button', index: 10, inAir: 'highAoAToggle' },
     lookCenter: { type: 'button', index: 11 },
     lookUp: { type: 'button', index: 12 },
     lookDown: { type: 'button', index: 13 },
@@ -107,8 +113,9 @@ function safeStorage() {
 export class Bindings {
   constructor() {
     this.devices = {};                  // gamepad id -> {axes: {}, buttons: {}}
-    // light expo: the F-35I's flight control system already softens the stick around the centre
-    this.tuning = { deadzone: 0.08, expo: 0.15, invertKeyboardPitch: false };
+    // light expo: the F-35I's flight control system already softens the stick around the centre.
+    // mouseRollReturn: the mouse stick's roll springs back to centre once the mouse rests.
+    this.tuning = { deadzone: 0.08, expo: 0.15, invertKeyboardPitch: false, mouseRollReturn: true };
     this.load();
   }
 
@@ -192,7 +199,7 @@ export class Bindings {
 export function describeBinding(b) {
   if (!b) return '-';
   if (b.type === 'axis') return `axis ${b.index}${b.invert ? ' (inverted)' : ''}`;
-  if (b.type === 'button') return `button ${b.index}`;
+  if (b.type === 'button') return `button ${b.index}${b.inAir ? ` (in the air: ${(BUTTON_ACTIONS.find((a) => a.id === b.inAir) || { label: b.inAir }).label})` : ''}`;
   if (b.type === 'axisdir') return `axis ${b.index} ${b.dir > 0 ? '+' : '-'}`;
   if (b.type === 'pov') return `hat (axis ${b.index}) ${b.dir}`;
   return '?';

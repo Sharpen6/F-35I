@@ -71,7 +71,13 @@ export class BindingsUI {
       }
       h += '</table>';
       if (pad.mapping === 'standard' && !(eff.axes && eff.axes.throttle)) {
-        h += '<p class="note">Throttle on this gamepad: right stick up / down and the triggers move it (bind a throttle axis to use a lever instead).</p>';
+        h += '<p class="note">Throttle on this gamepad: right stick up / down and the triggers move it (bind a throttle axis to use a lever instead). '
+          + 'Rudder and throttle share the right stick: it moves only the one you push first, until the stick is back in the centre.</p>';
+      }
+      const dual = Object.entries(eff.buttons || {}).filter(([, b]) => b && b.inAir);
+      for (const [id, b] of dual) {
+        const name = (x) => (BUTTON_ACTIONS.find((a) => a.id === x) || { label: x }).label.toLowerCase();
+        h += `<p class="note">${escapeHtml(describeBinding({ ...b, inAir: undefined }))}: ${escapeHtml(name(id))} on the ground, ${escapeHtml(name(b.inAir))} in the air.</p>`;
       }
       h += '<table class="bind-table" style="margin-top:12px"><tr><th>Button</th><th>Bound to</th><th></th></tr>';
       for (const a of BUTTON_ACTIONS) {
@@ -88,6 +94,7 @@ export class BindingsUI {
       + `<label>Deadzone <input type="range" min="0" max="0.3" step="0.01" value="${tun.deadzone}" data-tune="deadzone"><span>${tun.deadzone.toFixed(2)}</span></label>`
       + `<label title="The flight control system already softens the stick around the centre">Expo (softer centre) <input type="range" min="0" max="0.9" step="0.05" value="${tun.expo}" data-tune="expo"><span>${tun.expo.toFixed(2)}</span></label>`
       + `<label><input type="checkbox" data-tune="invertKeyboardPitch" ${tun.invertKeyboardPitch ? 'checked' : ''}> Keyboard: up arrow = nose up</label>`
+      + `<label title="Roll in, stop moving the mouse, and the bank is held (middle click centres the stick)"><input type="checkbox" data-tune="mouseRollReturn" ${tun.mouseRollReturn !== false ? 'checked' : ''}> Mouse stick: roll springs back to centre</label>`
       + '</div>';
     this.body.innerHTML = h;
     this._wire();

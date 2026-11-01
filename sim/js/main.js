@@ -383,10 +383,15 @@ class App {
     this._syncInput();
     this.renderer.domElement.focus({ preventScroll: true });
     const sp = this.spawn;
-    this.ui.toast(sp.on_ground !== false
-      ? 'Parking brake set: Shift+B releases it. Throttle: Shift / Page Up. F1: help'
-      : `${sp.label}. F1: help`, 4200);
-    if (this.settings.mouseStick) this.ui.toast('Mouse stick: click the view to capture the mouse', 3500);
+    // flight track: the hint names the controls of the device in use (gamepad: L3, right stick),
+    // and the mouse-stick hint is added to it (one toast replaces the other)
+    const pad = this.input.lastDevice === 'gamepad';
+    let hint = sp.on_ground !== false
+      ? (pad ? 'Parking brake set: L3 releases it. Throttle: right stick up or the right trigger. Start: menu'
+        : 'Parking brake set: Shift+B releases it. Throttle: Shift / Page Up. F1: help')
+      : `${sp.label}. ${pad ? 'Start: menu' : 'F1: help'}`;
+    if (this.settings.mouseStick && !pad) hint += '. Mouse stick: click the view to capture the mouse';
+    this.ui.toast(hint, 4200);
   }
 
   pause() {
@@ -566,7 +571,14 @@ class App {
     if (this.state !== 'flying') return;
     const st = this.fdm.state;
     const L = this.input.levers;
+    // flight track: hints for Input, used from the next frame: in the air L3 is the high-AoA mode
+    // (the parking brake on the ground); R restarts at once when crashed or stopped, but must be
+    // held for a second in flight, so a stray key press does not end the flight
+    this.input.airborne = !st.onGround;
+    this.input.resetNeedsHold = !(st.crashed || (st.onGround && (st.groundSpeed ?? 0) < 2));
     if (f.reset) { this.restart(); return; }
+    if (f.resetHint) ui.toast(this.input.lastDevice === 'keyboard' ? 'Hold R for a second to restart at the start point' : 'Hold the button for a second to restart', 2000);
+    if (f.highAoAToggle) ui.toast(L.highAoA ? 'High-AoA mode: AoA limit 50 deg' : 'Normal mode: AoA limit 25 deg');
     if (f.gearToggle) {
       if (!L.gearHandle && st.onGround) {
         L.gearHandle = true;
