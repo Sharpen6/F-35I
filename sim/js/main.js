@@ -245,6 +245,8 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+    // terrain quality tiers (ground detail, terrain shadow map size): Terrain.js TERRAIN_QUALITY
+    this.addModule(this.terrain.module);
   }
 
   /**

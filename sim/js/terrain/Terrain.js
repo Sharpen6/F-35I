@@ -44,7 +44,7 @@ const FADE_MS = 700;
 const DEFAULT_ATTRIBUTION = 'Copernicus DEM GLO-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018, '
   + 'provided under COPERNICUS by the European Union and ESA | ESA WorldCover 2021 (CC BY 4.0) | OurAirports (public domain)';
 
-/** Per quality: near ground materials, horizon map size (horizonMap.js), city light dots. */
+/** Per quality: near ground materials (groundMaterial in terrainShaders.js), horizon map size (horizonMap.js). */
 export const TERRAIN_QUALITY = {
   low: { groundDetail: 0, horizon: 'low' },
   medium: { groundDetail: 1, horizon: 'medium' },

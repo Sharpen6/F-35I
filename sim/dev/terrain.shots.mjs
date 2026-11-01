@@ -6,10 +6,12 @@
 //
 //   node sim/dev/terrain.shots.mjs [--port 8146] [--out DIR] [--quality high] [--size 960x540]
 //                                  [--scenes a,b,c] [--root SIM_FOLDER] [--tag suffix]
-//                                  [--url-extra "&terrainDetail=0"]
+//                                  [--url-extra "&terrainDetail=0"] [--view 1,5] [--perf]
 //
 // Every scene name is printed with its numbers; screenshots go to --out (default
-// /home/claude/simdata/shots/terrain/). Needs the data in sim/data (DESIGN.md).
+// /home/claude/simdata/shots/terrain/). Needs the data in sim/data (DESIGN.md). --view adds
+// false-colour shots per scene (terrain.debug.view: 1 classes, 2 row directions, 3 near detail,
+// 4 crop state, 5 terrain shadow). Before each shot it waits for the horizon maps and tiles.
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -36,6 +38,9 @@ const TAG = arg('tag', '');
 const EXTRA = arg('url-extra', '');
 // terrain.debug.view for false-colour checks (see Terrain.js): --view 1,2,4 shoots each scene per view
 const VIEWS = arg('view', '') ? arg('view', '').split(',').map(Number) : [0];
+// --perf: per scene, the frame time with each terrain feature switched off in turn (same page,
+// same view; on SwiftShader this is CPU time per pixel, i.e. the relative ALU cost)
+const PERF = argv.includes('--perf');
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -71,10 +76,14 @@ export const SCENES = [
   { name: 'hills150_0800_cockpit', spawn: { x: 9000, z: 5500, agl: 150, hdg: 60, speed: 150 }, time: 8, camera: 'cockpit', steps: 30, settle: 1500 },
   // Dead Sea shore (salt, mud flats, old shorelines), 150 m
   { name: 'deadsea_shore150_chase', spawn: { x: 38500, z: 6500, agl: 150, hdg: 150, speed: 150 }, time: 9, camera: 'chase', steps: 90, settle: 3500 },
+  // dawn: the Moab plateau's shadow over the Dead Sea's west shore, the Judean cliffs lit above it
+  { name: 'deadsea_dawn_chase', spawn: { x: 36000, z: 6500, agl: 400, hdg: 255, speed: 150 }, time: 5.35, camera: 'chase', steps: 30, settle: 2500 },
   // beach and dunes south of Ashdod, 120 m
   { name: 'dunes120_chase', spawn: { x: -41500, z: 11500, agl: 120, hdg: 20, speed: 150 }, time: 10, camera: 'chase', steps: 90, settle: 3500 },
   // night over Tel Aviv, 1,500 m
   { name: 'tlv_night_cockpit', spawn: { x: -20000, z: -27000, agl: 1500, hdg: 290, speed: 180 }, time: 21.5, camera: 'cockpit', steps: 30, settle: 2500 },
+  { name: 'tlv_night_chase', spawn: { x: -20000, z: -27000, agl: 1500, hdg: 290, speed: 180 }, time: 21.5, camera: 'chase', steps: 30, settle: 2500 },
+  { name: 'tlv_night400_chase', spawn: { x: -21500, z: -29500, agl: 400, hdg: 250, speed: 150 }, time: 21.5, camera: 'chase', steps: 30, settle: 2500 },
 ];
 
 async function startServer() {
@@ -172,7 +181,7 @@ async function main() {
       const hz = await S(async () => {
         const t = window.__sim.app.terrain, h = t.horizon;
         const t1 = performance.now();
-        const busy = () => (h && h.enabled && (h.busy || h.pending || !h.maps)) || t.stats.tilesLoading > 0 || t._pending.length > 0;
+        const busy = () => (h && h.enabled && (h.busy || h.pending || !h.ready)) || t.stats.tilesLoading > 0 || t._pending.length > 0;
         while (busy() && performance.now() - t1 < 120000) {
           t.update(window.__sim.app.camera);
           await new Promise((r) => setTimeout(r, 250));
@@ -189,7 +198,25 @@ async function main() {
         await page.screenshot({ path: v ? file.replace(/\.png$/, `_view${v}.png`) : file });
       }
       if (VIEWS.some((v) => v)) await S(() => { window.__sim.app.terrain.debug.view = 0; });
-      results.push({ name: sc.name, file, summary: sum, render: info, ms: tm.lastRenderMs, terrain: ter });
+      let perf = null;
+      if (PERF) {
+        perf = await S(() => {
+          const t = window.__sim.app.terrain;
+          const keep = { d: t.groundDetail, s: t.shadows, c: t.cityLights };
+          const cfgs = { all: [keep.d, keep.s, keep.c], noDetail: [false, keep.s, keep.c], noShadows: [keep.d, false, keep.c],
+            noCityLights: [keep.d, keep.s, 0], allOff: [false, false, 0] };
+          const out = {};
+          for (const [k, [d, sh, c]] of Object.entries(cfgs)) {
+            t.groundDetail = d; t.shadows = sh; t.cityLights = c;
+            window.__sim.render();
+            out[k] = Math.min(window.__sim.render().ms, window.__sim.render().ms);
+          }
+          t.groundDetail = keep.d; t.shadows = keep.s; t.cityLights = keep.c;
+          return out;
+        });
+        log(`  perf ${sc.name}: ` + Object.entries(perf).map(([k, v]) => `${k} ${v} ms`).join(', '));
+      }
+      results.push({ name: sc.name, file, summary: sum, render: info, ms: tm.lastRenderMs, terrain: ter, perf });
       log(`${sc.name}${TAG}: ${info.calls} calls, ${(info.triangles / 1e6).toFixed(2)} M tris, ${tm.lastRenderMs} ms, `
         + `alt ${sum.alt_m} m agl ${sum.agl_m} m, tiles ${ter.tilesResident}, horizon ${hz.enabled ? `${hz.ms} ms (waited ${hz.waited} ms)` : 'off'} `
         + `(${((Date.now() - ts) / 1000).toFixed(0)} s)`);

@@ -11,6 +11,13 @@ export const FRICTION = { runway: 0.8, ground: 0.6, water: 0.1, grass_runway: 0.
 
 export const LC_WATER = 80;
 
+// Paved overruns the terrain build measured too short: its test (low colour saturation) stops
+// where the extension is paler, more yellow concrete than the runway. Measured on the L0
+// imagery (6.25 m/px): a strip of the runway's width, in line with it, continues this far (m)
+// past the end, up to the perimeter road. Keyed 'ICAO end'. Painted as a blast pad with
+// chevrons and treated as pavement by the wheels.
+export const OVERRUN_FIX = { 'LLEK 36': 390, 'LLEK 15R': 390, 'LL59 21': 300 };
+
 export class Runways {
   constructor(airports = []) {
     this.list = [];
@@ -30,7 +37,8 @@ export class Runways {
           length, width, halfLength: length / 2, halfWidth: width / 2, paved,
           surface: rw.surface || 'asphalt',
           // paved overrun (blast pad) beyond each end, displaced threshold at each end (m)
-          overrun: paved ? [m(a.overrun_m), m(b.overrun_m)] : [0, 0],
+          overrun: paved ? [m(OVERRUN_FIX[`${ap.icao} ${a.id}`] ?? a.overrun_m),
+            m(OVERRUN_FIX[`${ap.icao} ${b.id}`] ?? b.overrun_m)] : [0, 0],
           displaced: [m(a.displaced_threshold_m), m(b.displaced_threshold_m)],
           y0: a.y ?? null, y1: b.y ?? null,
         });

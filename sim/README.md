@@ -187,6 +187,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
 | `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
+| `terrainDetail=0` / `terrainShadows=0` / `cityLights=0` | terrain: near ground materials, hill shadows, city lights off (`js/terrain/README.md`) |
 
 ## Files (the app shell)
 
@@ -342,6 +343,9 @@ then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
   cover: © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021)
   processed by ESA WorldCover consortium (CC BY 4.0). Airports: OurAirports (public domain).
   The menu shows the attribution of the data set it loaded.
+* **Terrain detail** (field rows, crops, orchards, terraces, sand, salt, the runway digits),
+  the terrain's hill shadows and the city lights are procedural, made in the browser from the
+  data above; no other textures or data.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here.

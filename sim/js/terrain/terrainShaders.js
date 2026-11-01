@@ -143,7 +143,7 @@ uniform vec2 uCamMod;                 // camera x, z modulo 256 m (exact, from t
 uniform vec2 uTreeCover;              // 3D trees within .x m (fade .y m): plain ground under them
 uniform float uDebugLod;
 uniform float uDebugHeight;           // 1: output (height, x, z) of the rendered surface (tests)
-uniform float uDebugView;             // 1 classes, 2 row direction, 3 near detail weight, 4 crop state
+uniform float uDebugView;             // 1 classes, 2 row direction, 3 near detail weight, 4 crop state, 5 terrain shadow
 
 #ifdef USE_L0
 uniform sampler2D uL0Color;           // 1024 x 1024 for this tile, 6.25 m / px
@@ -265,11 +265,12 @@ vec3 meanMix(vec3 C, vec3 Ca, float m, float f) {
 
 // Ground materials near the camera. C: imagery colour (raw albedo); Cm: the same at 25 m;
 // wA / wB: class weights; dir: row direction; rnd: region random (0..1); h: height (m);
-// g: terrain slope (dh/dx, dh/dz); fade: 1 near .. 0 where the patterns are sub-pixel.
+// g: terrain slope (dh/dx, dh/dz). Texture layers are mip-filtered; analytic patterns filter
+// themselves (box-filtered stripes, pixel-wide edges).
 // Returns the albedo; adds detail slopes to slope, multiplies sunVis by cast shadows and
 // cavity by sky occlusion.
 vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, float h, vec2 g,
-                    float fade, inout vec2 slope, inout float sunVis, inout float cavity) {
+                    inout vec2 slope, inout float sunVis, inout float cavity) {
   vec3 col = vec3(0.0);
   float wsum = 0.0;
   vec2 sl = vec2(0.0);
@@ -281,6 +282,9 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
   bool day = uSunDir.y > 0.0;
   vec2 xz = vWorldXZ;
   vec2 perp = vec2(-dir.y, dir.x);
+  // moisture, wear and tilth patches over the ground (5-30 m): visible where the fine layers
+  // are already filtered away (a low pass from the ground, 100-300 m away)
+  float patches = (dl(DL_MACRO, 64.0).r - dlMean(DL_MACRO).r) * 0.6;
 
   // -- crops: ploughed furrows, green rows or beds, stubble with windrows and bales -----
   if (wB.x > 0.01) {
@@ -297,8 +301,6 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
     float apx = abs(dot(gDX, dir)) + abs(dot(gDY, dir)) + 1e-4;     // along-row m per pixel
     vec4 soil = dl(DL_SOIL, 4.0);
     vec4 soilM = dlMean(DL_SOIL);
-    // soil moisture and tilth patches over the field (5-30 m)
-    float patches = (dl(DL_MACRO, 64.0).r - dlMean(DL_MACRO).r) * 0.6;
     vec3 c = vec3(0.0);
     vec2 s2 = vec2(0.0);
     if (kPlough > 0.0) {
@@ -351,16 +353,17 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
       float sw = across / header;
       float ww = wpx / header;
       float pass = stripes(sw * 0.5, ww * 0.5, 0.5) - 0.5;
-      float windrow = stripes(sw + 0.1, ww, 0.17) * step(0.3, r3) * step(r3, 0.7);
-      // bales: 2.4 x 1.2 m, on the windrow lines every 25-40 m (fields with r3 > 0.7)
+      float windrow = (stripes(sw + 0.1, ww, 0.17) - 0.17) * step(0.3, r3) * step(r3, 0.7);   // mean-free
+      // bales: 2.4 x 1.2 m, on the windrows the baler raked from three passes, every 30-50 m
+      // (fields with r3 > 0.7)
       float bale = 0.0, baleSh = 0.0;
       if (r3 > 0.7) {
-        float bl = 25.0 + 15.0 * r2;
-        vec2 cell = vec2(floor(along / bl), floor(sw));
+        float bl = 30.0 + 20.0 * r2;
+        vec2 cell = vec2(floor(along / bl), floor(sw / 3.0));
         vec2 jit = hash22(cell + 31.0 * rnd);
         float ba = along - (cell.x + 0.2 + 0.6 * jit.x) * bl;
-        float bc = across - (cell.y + 0.5) * header;
-        bool present = jit.y > 0.25;
+        float bc = across - (cell.y + 0.5) * header * 3.0;
+        bool present = jit.y > 0.3;
         bale = present ? aaBand(ba, -1.2, 1.2, apx) * aaBand(bc, -0.6, 0.6, wpx) : 0.0;
         // shadow on the ground: the bale (0.9 m tall) seen from the sun
         vec2 so = vec2(dot(sunH, dir), dot(sunH, perp)) * cotE * 0.9;
@@ -369,10 +372,10 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
       }
       float tram = across / (header * 3.0);
       float tw = wpx / (header * 3.0);
-      float tl = stripes(tram + 0.02, tw, 0.03) + stripes(tram - 0.07, tw, 0.03);
+      float tl = stripes(tram + 0.02, tw, 0.03) + stripes(tram - 0.07, tw, 0.03) - 0.06;
       // straw lying in tufts and swaths (1-4 m) between the passes
       float tufts = dl(DL_GRASS, 16.0).b - dlMean(DL_GRASS).b;
-      float lumMod = 1.0 + 0.6 * (st.b - stM.b) + 0.5 * tufts + 0.08 * pass + 0.25 * windrow - 0.22 * tl + patches;
+      float lumMod = 1.0 + 0.6 * (st.b - stM.b) + 0.5 * tufts + 0.14 * pass + 0.3 * windrow - 0.22 * tl + patches;
       vec3 cs = C * lumMod;
       cs = mix(cs, C * vec3(1.25, 1.12, 0.85), bale);
       c += kStub * cs;
@@ -429,7 +432,7 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
       c = meanMix(C, ground, m, tM.a) * (1.0 + 0.8 * (t.b - tM.b) * m);
       s2 = dlSlope(t, 64.0, 64.0) * 0.6;
       float ts = dlAt(DL_CANOPY, 64.0, sunH * cotE * 6.0).a;
-      sh = ts * (1.0 - m) * fade;
+      sh = ts * (1.0 - m);
       cavity += 0.35 * m;
     }
     // where another module draws 3D trees: the ground between them, no painted crowns
@@ -449,26 +452,27 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
     if (wA.z > 0.01) {
       float m = sb.a;
       vec3 ground = mix(soilOf(C) * 1.35, vec3(lumC * 1.45), 0.4 * hill);
-      vec3 c = meanMix(C, ground, m, sbM.a) * (1.0 + 0.5 * (sb.b - sbM.b));
+      vec3 c = meanMix(C, ground, m, sbM.a) * (1.0 + 0.5 * (sb.b - sbM.b) + patches);
       float ts = dlAt(DL_SHRUB, 16.0, sunH * cotE * 0.7).a;
       col += wA.z * c;
       sl += wA.z * dlSlope(sb, 16.0, 16.0);
-      shade += wA.z * ts * (1.0 - m) * fade;
+      shade += wA.z * ts * (1.0 - m);
       cavity += wA.z * 0.3 * m;
       wsum += wA.z;
     }
     float wg = wA.w + wB.w;
     if (wg > 0.01) {
       vec4 gt = dl(DL_GRASS, 4.0);
+      vec4 g16 = dl(DL_GRASS, 16.0);                  // clumps and tufts 0.2-1 m
       vec4 gM = dlMean(DL_GRASS);
       // scattered cushions and stones on the hills, wetter darker patches in wetlands
       float sparse = sb.a * hill * 0.6;
-      vec3 c = C * (1.0 + 0.7 * (gt.b - gM.b) * fade);
+      vec3 c = C * (1.0 + 0.6 * (gt.b - gM.b) + 0.45 * (g16.b - gM.b) + patches);
       c = mix(c, meanMix(c, vec3(lumC * 1.2), sparse, sbM.a * hill * 0.6), hill);
       c *= 1.0 - 0.25 * (wB.w / max(wg, 1e-3)) * (gt.a - gM.a);
       col += wg * c;
       sl += wg * (dlSlope(gt, 4.0, 4.0) + dlSlope(sb, 16.0, 16.0) * hill * 0.5);
-      shade += wg * dlAt(DL_SHRUB, 16.0, sunH * cotE * 0.6).a * sparse * fade;
+      shade += wg * dlAt(DL_SHRUB, 16.0, sunH * cotE * 0.6).a * sparse;
       cavity += wg * 0.15 * gt.a;
       wsum += wg;
     }
@@ -506,20 +510,22 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
     if (kSand > 0.0) {
       vec4 t = dl(DL_SAND, 8.0);
       vec4 tM = dlMean(DL_SAND);
-      c += kSand * C * (1.0 + 1.2 * (t.b - tM.b));
+      c += kSand * C * (1.0 + 1.2 * (t.b - tM.b) + patches * 0.5);
       s2 += kSand * dlSlope(t, 8.0, 8.0);
     }
     if (kRock > 0.0) {
       vec4 t = dl(DL_ROCK, 16.0);
+      vec4 t64 = dl(DL_ROCK, 64.0);                   // outcrops and scree, 1-6 m
       vec4 tM = dlMean(DL_ROCK);
-      c += kRock * C * (1.0 + 0.8 * (t.b - tM.b));
+      c += kRock * C * (1.0 + 0.8 * (t.b - tM.b) + 0.5 * (t64.b - tM.b) + patches * 0.5);
       s2 += kRock * dlSlope(t, 16.0, 16.0);
       cavity += wB.z * kRock * 0.4 * t.a;
     }
     if (kSoil > 0.0) {
       vec4 t = dl(DL_SOIL, 4.0);
+      vec4 t16 = dl(DL_SOIL, 16.0);
       vec4 tM = dlMean(DL_SOIL);
-      c += kSoil * C * (1.0 + 0.8 * (t.b - tM.b));
+      c += kSoil * C * (1.0 + 0.8 * (t.b - tM.b) + 0.5 * (t16.b - tM.b) + patches);
       s2 += kSoil * dlSlope(t, 4.0, 4.0);
     }
     col += wB.z * c;
@@ -676,32 +682,64 @@ vec3 l0Bicubic(vec2 uv) {
 }
 #endif
 
-// City lights at night: street lamps on a jittered grid along the street direction where the
-// land is built up, sodium orange and LED white; averaged where a lamp is under a pixel.
-vec3 cityLights(vec2 xz, float built, vec2 dir, float rnd, float detail) {
-  // Tel Aviv - Jaffa is the brightest, then Jerusalem; small towns dimmer
+// City lights at night: street lamps where the land is built up, along streets turned to the
+// district's street direction (field analysis) with irregular spacing (blocks of ~60-160 m)
+// and gentle bends; every fifth street is a main road with closer, brighter lamps. Sodium
+// orange and LED white per street, each lamp with a pool of light on the road. A lamp is drawn
+// as a spot of at least one pixel with its energy kept, so from altitude it stays a point; once
+// lamps are closer than about two pixels they merge into the district's glow. Tel Aviv - Jaffa
+// is the brightest, then Jerusalem; small towns are dimmer and patchier. The brightness is
+// artistic: the night exposure (at most 40x the noon one, Environment.js) is far from a
+// dark-adapted eye, so a lamp here is ~1.5 scene units * m^2 (about 45,000 cd, ~30x real).
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), f.x),
+             mix(hash12(i + vec2(0.0, 1.0)), hash12(i + 1.0), f.x), f.y);
+}
+vec3 cityLights(vec2 xz, float built, vec2 dir, float rnd, float px) {
   float tlv = exp(-length(xz - vec2(-22900.0, -31600.0)) / 14000.0);
   float jlm = exp(-length(xz - vec2(17900.0, 3500.0)) / 9000.0);
   float dens = built * (0.55 + 1.2 * tlv + 0.6 * jlm);
-  float led = clamp(0.25 + 0.6 * tlv + 0.3 * jlm + 0.3 * (fract(rnd * 5.1) - 0.5), 0.0, 1.0);
-  vec3 lampCol = mix(vec3(1.0, 0.52, 0.16), vec3(0.85, 0.9, 1.0), step(0.5, fract(rnd * 13.3 + led - 0.5)));
-  vec3 avgCol = mix(vec3(1.0, 0.52, 0.16), vec3(0.85, 0.9, 1.0), led);
-  const float SP = 32.0;                               // lamp spacing (m)
-  const float FLUX = 0.004;                            // per lamp, scene units * m^2
-  vec3 avg = avgCol * dens * FLUX / (SP * SP) * 2.2;   // lamps + lit ground and windows
+  float led = clamp(0.2 + 0.5 * tlv + 0.3 * jlm + 0.3 * (fract(rnd * 5.1) - 0.5), 0.0, 1.0);
+  const vec3 SODIUM = vec3(1.0, 0.5, 0.15);
+  const vec3 LEDW = vec3(0.85, 0.9, 1.0);
+  const float S = 32.0;                                   // lamp spacing along a street (m)
+  const float FLUX = 1.5;                                 // per lamp (scene units * m^2)
+  float B = S * (3.0 + floor(fract(rnd * 3.7) * 2.0));    // mean block size: 96 or 128 m
+  float onP = min(dens * 0.75, 1.0);                      // share of lamps that are lit
+  vec3 avg = mix(SODIUM, LEDW, led) * onP * FLUX * 5.0 / (S * B);   // lamps and pools, two streets a block
+  float detail = 1.0 - smoothstep(10.0, 20.0, px);
   vec3 e = avg;
   if (detail > 0.0) {
     vec2 lo = vec2(dot(xz, dir), dot(xz, vec2(-dir.y, dir.x)));
-    vec2 cell = floor(lo / SP);
-    vec2 hsh = hash22(cell + 17.0);
-    vec2 lamp = (cell + 0.5 + (hsh - 0.5) * 0.6) * SP;
-    float on = step(hsh.x * 0.7 + 0.3 * hsh.y, dens * 0.8);
-    float rs = max(1.2, gPx * 1.2);                    // spot radius grows with the pixel
-    float d = length(lo - lamp);
-    float spot = exp(-d * d / (rs * rs)) / (3.1416 * rs * rs);
-    float pool = exp(-d * d / 140.0) / (3.1416 * 140.0);
-    vec3 pts = lampCol * on * FLUX * (spot * 1.0 + pool * 1.2);
-    e = mix(avg, pts + avg * 0.3, detail);
+    lo += 40.0 * vec2(vnoise(xz / 420.0), vnoise(xz / 420.0 + 7.3)) - 20.0;   // bends
+    float best = 1e9, bright = 0.0, isLed = 0.0;
+    for (int a = 0; a < 2; a++) {
+      vec2 p = a == 0 ? lo : lo.yx;                       // streets along y, then along x
+      float k0 = floor(p.x / B + 0.5);
+      for (int t = -1; t <= 1; t++) {
+        float k = k0 + float(t);
+        vec2 hk = hash22(vec2(k, float(a) * 57.0 + floor(rnd * 64.0)));
+        float xs = (k + 0.5 * (hk.x - 0.5)) * B;          // irregular street spacing
+        float mainRd = step(0.8, hk.y);
+        float sp = mix(S, 22.0, mainRd);
+        float ph = hk.x * sp;
+        float jj = floor((p.y - ph) / sp + 0.5);
+        float d = length(p - vec2(xs, jj * sp + ph));
+        if (d < best) {
+          vec2 hl = hash22(vec2(jj, k * 1.37 + float(a) * 101.0));
+          best = d;
+          bright = step(hl.x, mix(onP, 1.0, mainRd)) * mix(0.75, 1.25, mainRd) * (0.8 + 0.4 * hl.y);
+          isLed = step(fract(hk.y * 13.7), mix(led, 0.6, mainRd));
+        }
+      }
+    }
+    float rs = max(1.0, px * 0.8);                        // the lamp, filtered over the pixel
+    float spot = exp(-best * best / (rs * rs)) / (3.1416 * rs * rs);
+    float pool = exp(-best * best / 140.0) / (3.1416 * 140.0);   // light on the road under it
+    vec3 pts = mix(SODIUM, LEDW, isLed) * bright * FLUX * (spot + pool * 1.2);
+    e = mix(avg, pts + avg * 0.2, detail);
   }
   return e;
 }
@@ -824,7 +862,7 @@ void main() {
   float sunVis = 1.0, cavity = 0.0;
   float fade = 1.0 - smoothstep(0.25, 1.2, px);
   if (nearK * land > 0.0) {
-    vec3 gm = groundMaterial(col, colMean, wA, wB, rowDir, rnd, vH, gradH, fade, dSlope, sunVis, cavity);
+    vec3 gm = groundMaterial(col, colMean, wA, wB, rowDir, rnd, vH, gradH, dSlope, sunVis, cavity);
     col = mix(col, gm, nearK * land);
     dSlope *= nearK * land;
     sunVis = mix(1.0, sunVis, nearK * land);
@@ -897,7 +935,7 @@ void main() {
 
   // ---- city lights at night ----
   if (uNight > 0.0 && uCityLights > 0.0 && wB.y > 0.05) {
-    radiance += cityLights(xz, wB.y * land, rowDir, rnd, clamp(l0w * (1.0 - smoothstep(6.0, 14.0, px)), 0.0, 1.0)) * uNight * uCityLights;
+    radiance += cityLights(xz, wB.y * land, rowDir, rnd, px) * uNight * uCityLights;
   }
 
   // ---- aerial perspective, and the far edge dissolving into the sky's own haze ----
@@ -924,12 +962,15 @@ void main() {
       dbg = (0.5 + 0.5 * cos(th + vec3(0.0, 2.09, 4.19))) * (0.6 + 0.4 * fract(rnd * 7.0));
     } else if (uDebugView < 3.5) {
       dbg = vec3(nearK * land, fade, sunVis);
-    } else {
+    } else if (uDebugView < 4.5) {
       float gr = colMean.g / (colMean.r + colMean.g + colMean.b + 1e-4) - 0.3333;
       float lm = dot(colMean, LUMA);
       float kGreen = smoothstep(0.018, 0.045, gr);
       float kStub = (1.0 - kGreen) * smoothstep(0.25, 0.33, lm);
       dbg = vec3(kStub, kGreen, 1.0 - kGreen - kStub) * wB.x;
+    } else {
+      // terrain shadow: grey = lit by the sun over the horizon map, red = behind a hill
+      dbg = mix(vec3(0.8, 0.0, 0.0), vec3(0.7), terrainVis) * (0.4 + 0.6 * max(NdL, 0.0));
     }
     gl_FragColor = vec4(dbg, 1.0);
     return;

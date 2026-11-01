@@ -4,6 +4,7 @@
 // (fieldAnalysis.js) on a synthetic pattern of striped fields.
 import { computeHorizon, decodeHorizon, EARTH_R } from '../js/terrain/horizonCore.js';
 import { analyzeTile, packCodes, CLASS_CODES } from '../js/terrain/fieldAnalysis.js';
+import { Runways } from '../js/terrain/Surface.js';
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -87,6 +88,13 @@ const pk = packCodes(new Uint8Array([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 
 check('packCodes maps ESA codes to class indices', pk[0] === 0, '');
 const pk2 = packCodes(new Uint8Array(16).map((_, i) => [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100, 0, 0, 0, 0][i]), 4);
 check('every ESA code round-trips', [...pk2.slice(0, 12)].every((v, i) => CLASS_CODES[v] === [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100][i]));
+
+// --- measured overrun corrections (Surface.js OVERRUN_FIX) --------------------------------
+const rws = new Runways([{ icao: 'LLEK', runways: [{ width_m: 45.7, surface: 'asphalt', ends: [
+  { id: '18', x: -19544.25, z: -5219.09, overrun_m: 215 }, { id: '36', x: -19662.59, z: -2812.92, overrun_m: 145 }] }] }]);
+const r36 = rws.list[0];
+check('Tel Nof 36 overrun follows the imagery (390 m)', r36.overrun[1] === 390 && r36.overrun[0] === 215);
+check('the pavement 300 m south of threshold 36 is runway', rws.find(-19662.59 + 300 * -0.0491, -2812.92 + 300 * 0.9988) === r36);
 
 if (failures) { console.log(`${failures} failure(s)`); process.exit(1); }
 console.log('all terrain analysis tests passed');
