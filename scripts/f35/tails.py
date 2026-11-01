@@ -14,6 +14,8 @@ RUD_HINGE = (13.42, 14.45)         # rudder hinge station at root / tip
 
 STAB_ROOT = (0.80, 0.22)
 STAB_TIP_HW = 3.43                 # official span 6.86 m (3-view is ~5 % oversize)
+STAB_DIHEDRAL = math.radians(4.5)  # tips at z ~0.43, level with the fin TE root (3-view side and
+                                   # front views, photos c14, c20, c26; the root stays put)
 _STAB_LE = Pchip([0.80, 1.30, 1.95, 2.20, 2.90, 3.66],
                  [12.70, 12.80, 12.92, 13.15, 13.62, 14.14])
 _STAB_TE = Pchip([0.80, 1.00, 2.30, 3.66], [15.64, 15.69, 15.37, 15.03])
@@ -49,12 +51,14 @@ def build(ctx):
         objs[f"Fin_{tag}"] = fin
         objs[f"Rudder_{tag}"] = rud
     # ----------------------------------------------------------- stabilators
-    span = STAB_TIP_HW - STAB_ROOT[0]
+    cd, sd = math.cos(STAB_DIHEDRAL), math.sin(STAB_DIHEDRAL)
+    span = (STAB_TIP_HW - STAB_ROOT[0]) / cd           # along the tilted span
     us = [span * i / 20 for i in range(21)]
     for side, tag in ((1, "L"), (-1, "R")):
-        fr = Frame(STAB_ROOT, (1, 0, 0), (0, 0, 1), mirror=(side < 0))
-        le = lambda u: _STAB_LE(STAB_ROOT[0] + u)
-        te = lambda u: _STAB_TE(STAB_ROOT[0] + u)
+        fr = Frame(STAB_ROOT, (cd, 0, sd), (-sd, 0, cd), mirror=(side < 0))
+        # the planform is given in plan view (half width x)
+        le = lambda u: _STAB_LE(STAB_ROOT[0] + u * cd)
+        te = lambda u: _STAB_TE(STAB_ROOT[0] + u * cd)
         tcf = lambda u: 0.045 - 0.010 * u / span
         stab = lifting_surface(f"Stabilator_{tag}", coll, fr, us, le, te, tcf,
                                M.get("skin"), n_chord=40)

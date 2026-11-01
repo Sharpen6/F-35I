@@ -44,7 +44,7 @@
 | Vertical-tail chords and taper | Root ≈ 2.4 m, tip ≈ 1.46 m, taper ≈ 0.6. S gives taper 0.59 | M / S |
 | Tail areas | Horizontal 11.96 m². Vertical 7.95 m² (apparently both fins together) | S |
 | Wing dihedral | About 0° (±0.5°; limited by resolution) | M |
-| Stabilator dihedral | About 0° to +2° | M |
+| Stabilator dihedral | About 4–5°: the tips sit level with the fin trailing-edge root (3-view side and front views; photos c14, c20, c26). An earlier reading of the drawing alone gave 0–2° | M |
 | Wheel track | 4.34 m (14.24 ft). A rear-quarter photo, scaled by the fin-tip spacing, gives at least about 4.1 m | S / P |
 | Wheelbase | 6.02 m (19.75 ft) | S |
 

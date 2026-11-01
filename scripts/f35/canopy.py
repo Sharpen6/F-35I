@@ -256,6 +256,10 @@ def build_glass(coll):
     glass = mesh_object("Canopy_Glass", verts, faces, coll, M.get("canopy"))
     _orient_outwards(glass)
     add_solidify(glass, FRAME_T, 1.0)
+    # split the sharp rim: with smooth normals the solidify rim bends the last row of glass
+    # normals and the glass shows a 3 cm amber band along the frame (photos show a hairline)
+    es = glass.modifiers.new("EdgeSplit", 'EDGE_SPLIT')
+    es.split_angle = math.radians(30.0)
     return glass
 
 

@@ -373,8 +373,9 @@ SWITCHABLE = {
     "nav_red":       ((0.45, 0.02, 0.02), (1.0, 0.03, 0.02), 25.0),
     "nav_green":     ((0.02, 0.40, 0.08), (0.05, 1.0, 0.25), 25.0),
     "nav_white":     ((0.80, 0.80, 0.80), (1.0, 1.0, 0.97), 20.0),
-    # electroluminescent strips: pale matte grey-green when off (photos ref_06, c51)
-    "formation":     ((0.12, 0.17, 0.14), (0.55, 1.0, 0.35), 6.0, 0.40),
+    # electroluminescent strips: pale matte grey-green when off, 1.5-2.5x the skin's brightness on
+    # screen in every light (photos ref_03, ref_05, ref_06, c00, c14, c20, c51)
+    "formation":     ((0.20, 0.27, 0.23), (0.55, 1.0, 0.35), 6.0, 0.60),
     # anti-collision lenses sit flush and read as dark smoked glass when off
     "beacon":        ((0.035, 0.035, 0.04), (1.0, 0.08, 0.04), 40.0, 0.05),
 }
