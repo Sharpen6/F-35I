@@ -375,7 +375,8 @@ def mask_outlet(C, M):
 
 
 def cable_exit_local():
-    return spec(0.0, -0.212, -0.040), np.array([0.0, -0.55, -0.83])
+    # the HMD cable leaves the shell low at the back left and runs down over the left shoulder
+    return spec(0.055, -0.187, -0.040), np.array([0.40, -0.50, -0.77]) / np.linalg.norm([0.40, -0.50, -0.77])
 
 
 def cable_exit(C, M):

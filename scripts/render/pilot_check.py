@@ -30,15 +30,18 @@ import review               # noqa: E402
 from history_stills import fix_sky   # noqa: E402
 
 # name: (camera, target, lens, canopy open, head (yaw, pitch, tilt))
+# the front views look in under the raised canopy from low on the left (it hinges at the front,
+# so a camera ahead of the jet sees the pilot through the glass)
+FRONT = ((2.55, -5.95, 1.42), (0.0, -4.35, 1.02), 52)
 VIEWS = {
     "left": ((2.35, -4.10, 1.55), (0.0, -4.30, 0.95), 50, 0.0, (0, 0, 0)),
     "left_open": ((2.35, -4.10, 1.55), (0.0, -4.30, 0.95), 50, 1.0, (0, 0, 0)),
-    "front_open": ((0.85, -6.70, 1.80), (0.0, -4.35, 0.95), 45, 1.0, (0, 0, 0)),
+    "front_open": FRONT + (1.0, (0, 0, 0)),
     "rhs_open": ((-1.25, -4.55, 1.50), (0.08, -4.35, 0.85), 26, 1.0, (0, 0, 0)),
-    "look_left": ((0.85, -6.70, 1.80), (0.0, -4.35, 0.95), 45, 1.0, (75, 5, 0)),
-    "look_right": ((0.85, -6.70, 1.80), (0.0, -4.35, 0.95), 45, 1.0, (-75, 5, 0)),
-    "look_up": ((0.85, -6.70, 1.80), (0.0, -4.35, 0.95), 45, 1.0, (0, 35, 0)),
-    "look_down": ((0.85, -6.70, 1.80), (0.0, -4.35, 0.95), 45, 1.0, (0, -35, 0)),
+    "look_left": FRONT + (1.0, (75, 5, 0)),
+    "look_right": FRONT + (1.0, (-75, 5, 0)),
+    "look_up": FRONT + (1.0, (0, 35, 0)),
+    "look_down": FRONT + (1.0, (0, -35, 0)),
 }
 POSES = [(0, 0, 0), (75, 5, 0), (-75, 5, 0), (0, 35, 0), (0, -35, 0), (20, 0, 25), (-20, 0, -25), (100, 0, 0)]
 

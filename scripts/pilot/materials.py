@@ -119,6 +119,47 @@ def fabric(name, color, rough=0.85, sheen=0.35, weave=900.0, bump=0.25, mottle=0
     return m
 
 
+def open_mesh(name, strand, hole, cell=0.0035, width=0.30, rough=0.8, bump=0.6):
+    """Open diamond mesh over a darker cloth, on the mesh's UV map in metres: strands along the
+    two diagonals every `cell`, the cloth showing through the holes."""
+    m = _new(name)
+    nt = m.node_tree
+    b = _bsdf(m)
+    b.inputs["Roughness"].default_value = rough
+    b.inputs["Sheen Weight"].default_value = 0.08
+    b.inputs["Specular IOR Level"].default_value = 0.25
+    uvn = nt.nodes.new("ShaderNodeUVMap")
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+    nt.links.new(uvn.outputs["UV"], sep.inputs["Vector"])
+
+    def op(kind, a, bb=None, clamp=False):
+        n = nt.nodes.new("ShaderNodeMath")
+        n.operation = kind
+        n.use_clamp = clamp
+        for i, x in enumerate((a, bb)):
+            if x is None:
+                continue
+            if isinstance(x, (int, float)):
+                n.inputs[i].default_value = float(x)
+            else:
+                nt.links.new(x, n.inputs[i])
+        return n.outputs[0]
+    lines = []
+    for kind in ("ADD", "SUBTRACT"):
+        d = op("MULTIPLY", op(kind, sep.outputs["X"], sep.outputs["Y"]), math.pi / cell)
+        w = op("ABSOLUTE", op("SINE", d))                     # 0 on a strand, 1 mid-hole
+        lines.append(op("SUBTRACT", 1.0, op("DIVIDE", w, width)))
+    mask = op("MAXIMUM", lines[0], lines[1], clamp=True)
+    mix = nt.nodes.new("ShaderNodeMix")
+    mix.data_type = 'RGBA'
+    mix.inputs[6].default_value = hole
+    mix.inputs[7].default_value = strand
+    nt.links.new(mask, mix.inputs[0])
+    nt.links.new(mix.outputs[2], b.inputs["Base Color"])
+    nt.links.new(_bump(nt, mask, bump, 0.0006), b.inputs["Normal"])
+    return m
+
+
 def plain(name, color, rough=0.5, metal=0.0, coat=0.0, spec=0.5, coat_rough=0.15):
     m = _new(name)
     b = _bsdf(m)
@@ -296,6 +337,28 @@ def flag_image(W=640, H=414):
     return np.dstack([img, np.ones((H, W))])
 
 
+def rank_tab_image(W=256):
+    """IAF rank tab as worn on the jacket's left sleeve: navy, with the single white leaf of a
+    rav-seren (major), a darker merrow edge."""
+    u, v = _grid(W, W)
+    navy = _hex01("#1F2A44")
+    img = np.ones((W, W, 3)) * navy
+    x, y = (u - 0.5) * 2.0, (v - 0.5) * 2.0
+    # the leaf: a pointed oval leaning a little, with a short stem and a darker midrib
+    a = math.radians(-12.0)
+    xr, yr = x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a)
+    yy = (yr - 0.06) / 0.62
+    half = 0.30 * np.clip(1.0 - yy * yy, 0.0, None) ** 0.75
+    leaf = (np.abs(yy) < 1.0) & (np.abs(xr) < half)
+    stem = (yr < -0.50) & (yr > -0.80) & (np.abs(xr + 0.04 * (yr + 0.5)) < 0.035)
+    rib = leaf & (np.abs(xr) < 0.022) & (yy < 0.85)
+    img[leaf | stem] = _hex01("#F1F1EC")
+    img[rib] = _hex01("#C9CBC6")
+    edge = (u < 0.045) | (u > 0.955) | (v < 0.045) | (v > 0.955)
+    img[edge] = navy * 0.7
+    return np.dstack([img, np.ones((W, W))])
+
+
 def unit_patch_image(W=512):
     """A generic round squadron patch: navy merrow border, gold ring, sky field with a white
     F-35 seen from above (squadron art of the F-35I units is not public in the references)."""
@@ -423,12 +486,26 @@ def all_materials():
         "suit": fabric("P2_FlightSuit", srgb("#646246"), rough=0.88, sheen=0.25, mottle=0.04, wrinkle=0.12,
                        folds=0.55),
         "tshirt": fabric("P2_TShirt", srgb("#E6E6E4"), rough=0.95, sheen=0.3, weave=2400.0, bump=0.15),
-        "gsuit": fabric("P2_GSuit", srgb("#585C43"), rough=0.8, sheen=0.2, weave=700.0, mottle=0.04,
-                        wrinkle=0.1, folds=0.45, fold_scale=6.0),
-        "webbing": fabric("P2_Webbing", srgb("#3a3c33"), rough=0.75, sheen=0.25, weave=1400.0, bump=0.5),
         "webbing_black": fabric("P2_WebbingBlack", srgb("#161616"), rough=0.8, sheen=0.2, weave=1600.0, bump=0.4),
-        "vest": fabric("P2_Vest", srgb("#4E5340"), rough=0.85, sheen=0.2, weave=800.0, mottle=0.05, folds=0.3,
-                       fold_scale=5.0),
+        # F-35 ensemble (Survitec): jacket and LPU cover in the IAF's greyish olive, grey binding,
+        # olive-tan mesh, anti-G trousers between the grey and the sage variants
+        "jacket": fabric("P2_Jacket", srgb("#5E5D4C"), rough=0.82, sheen=0.25, weave=1100.0, bump=0.2, mottle=0.04,
+                         wrinkle=0.08, folds=0.35, fold_scale=5.5),
+        "binding": fabric("P2_Binding", srgb("#7B807C"), rough=0.85, sheen=0.2, weave=1800.0, bump=0.35, mottle=0.02),
+        "lpu_mesh": open_mesh("P2_LPUMesh", srgb("#787240"), srgb("#4D4A31")),
+        "fcags": fabric("P2_FCAGS", srgb("#666A5A"), rough=0.6, sheen=0.3, weave=900.0, bump=0.2, mottle=0.03,
+                        wrinkle=0.1, folds=0.45, fold_scale=6.0),
+        "fcags_strip": fabric("P2_FCAGSStrip", srgb("#66705C"), rough=0.9, sheen=0.15, weave=420.0, bump=0.8,
+                              mottle=0.03),
+        "webbing_gg": fabric("P2_WebbingGreyGreen", srgb("#666C61"), rough=0.8, sheen=0.25, weave=1400.0, bump=0.5,
+                             mottle=0.02),
+        "velcro": fabric("P2_HookLoop", srgb("#4E5A3E"), rough=0.95, sheen=0.1, weave=2600.0, bump=0.9, mottle=0.02),
+        "lime_cord": fabric("P2_LimeCord", srgb("#7AD94E"), rough=0.7, sheen=0.3, weave=2400.0, bump=0.5, mottle=0.0),
+        "harness_seat": fabric("P2_SeatHarness", srgb("#4C4D49"), rough=0.75, sheen=0.25, weave=1500.0, bump=0.5,
+                               mottle=0.02),
+        "toggle": plain("P2_Toggle", srgb("#4A4B3A"), rough=0.6),
+        "pec": plain("P2_PEC", srgb("#141416"), rough=0.4, coat=0.2),
+        "rank_tab": textured("P2_RankTab", _image("P2_RankTabArt", rank_tab_image()), rough=0.7, sheen=0.3, bump=0.15),
         "skin": skin(),
         "glove": fabric("P2_GloveKnit", srgb("#6E6D57"), rough=0.9, sheen=0.4, weave=2200.0, bump=0.3),
         "glove_leather": leather("P2_GloveLeather", srgb("#74726A"), rough=0.55, grain=0.2),
@@ -445,7 +522,8 @@ def all_materials():
         "mask_seal": plain("P2_MaskSeal", srgb("#8A9096"), rough=0.45),
         "cuff": plain("P2_MaskCuff", srgb("#6A7076"), rough=0.6),
         "black_gloss": plain("P2_BlackGloss", srgb("#0C0C0C"), rough=0.25),
-        "hose": plain("P2_Hose", srgb("#6E747A"), rough=0.5, spec=0.4),
+        "hose": plain("P2_Hose", srgb("#8A929A"), rough=0.5, spec=0.4),
+        "hose_teal": plain("P2_HoseTeal", srgb("#3E7F76"), rough=0.5, spec=0.4),
         "hose_olive": plain("P2_HoseOlive", srgb("#5A5F48"), rough=0.55, spec=0.4),
         "cable": fabric("P2_CableBraid", srgb("#111111"), rough=0.6, sheen=0.2, weave=3000.0, bump=0.6, mottle=0.0),
         "metal": plain("P2_Metal", srgb("#B8BBBE"), rough=0.3, metal=1.0),
@@ -460,8 +538,6 @@ def all_materials():
         "screen": textured("P2_TabletScreen", _image("P2_TabletMap", screen_image()), rough=0.05,
                            sheen=0.0, emission=1.4, coat=1.0),
         "flag": textured("P2_FlagPatch", _image("P2_IsraeliFlag", flag_image()), rough=0.65, sheen=0.35, bump=0.15),
-        "unit_patch": textured("P2_UnitPatch", _image("P2_UnitPatchArt", unit_patch_image()), rough=0.65,
-                               sheen=0.35, bump=0.15),
         "watch_face": textured("P2_WatchDial", _image("P2_WatchDialArt", dial_image()), rough=0.3,
                                sheen=0.0, coat=1.0),
     }

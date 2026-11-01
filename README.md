@@ -26,15 +26,26 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
   wheels that spin with the distance rolled, nose-wheel steering.
 * **Weapon bays:** both internal bays with doors, a GBU-31 JDAM and an AIM-120 AMRAAM in each.
 * **Pilot:** modelled separately in detail ([`scripts/pilot/`](scripts/pilot), studio file
-  [`blend/F-35I_Pilot.blend`](blend), renders in [`renders/pilot/`](renders/pilot)): a 1.78 m body
-  in the IAF olive flight suit with a white T-shirt at the collar, Israeli flag and unit patches on the
-  sleeves, pen pocket, survival vest with pouches, harness with leg straps, G-suit with its hose and
-  abdominal bladder, sage Nomex gloves with grey leather palms, laced black leather boots, a steel dive
-  watch and a tablet kneeboard. The F-35 Gen III helmet (HMDS) has a carbon shell, the brow display
-  module with the night-vision camera, the wrap-around visor on its pivots, ear cups, the oxygen mask with
-  its corrugated hose and the helmet cable to the seat. In the jet the pilot sits in the ejection seat (the
-  seat bucket set for a 1.78 m pilot, eyes at the design eye), hands on the side-stick and throttle through IK,
-  boots on the rudder pedals; the head looks left / right / up / down and tilts.
+  [`blend/F-35I_Pilot.blend`](blend), renders in [`renders/pilot/`](renders/pilot), research notes in
+  [`docs/pilot.md`](docs/pilot.md)): a 1.78 m body in the IAF olive flight coverall with a white T-shirt at
+  the collar, sage Nomex gloves with grey leather palms, laced black leather boots, and over it the F-35
+  ensemble that F-35 pilots wear with the US16E seat (no torso harness or survival vest):
+  * a short sleeved jacket with the life preserver built in (a roll behind the neck and two lobes on the
+    chest, grey binding, inflation toggles), a flapped chest pocket, a box pouch, webbing keepers and side
+    rows, waist adjusters, two arm-restraint straps on each upper arm, the navy rank tab and a pocket with
+    the lime arm-restraint cord on the left sleeve, the Israeli flag on the right;
+  * full-coverage anti-G trousers with a rolled top edge, inseam zips and shin strips;
+  * the personal equipment connector on the left thigh, which takes the teal breathing-gas hose, the anti-G
+    hose and the helmet cable;
+  * the grey mask hose with the microphone lead wound round it, down to the disconnect on the sternum;
+  * a steel dive watch and a tablet kneeboard.
+
+  The F-35 Gen III helmet (HMDS) has a carbon shell, the brow display module with the night-vision camera,
+  the wrap-around visor on its pivots, ear cups, and the oxygen mask. In the jet the pilot sits in the
+  ejection seat (the seat bucket set for a 1.78 m pilot, eyes at the design eye), strapped in by the seat's
+  harness over the life-preserver lobes, the connector's lead plugged into the seat. The hands hold the
+  side-stick and throttle through IK, the boots rest on the rudder pedals, and the head looks left, right,
+  up and down and tilts.
 * **Cockpit switches:** 24 switches, each moves its lever (and guard), lights its LED when the battery
   is on, and drives the system it commands (lights, display, gear, bays, canopy, hook ...).
 * **Paint and light:** dark grey under a satin clear coat, tuned against two photos rendered from their
@@ -78,10 +89,10 @@ python3 scripts/damage/make_report.py     # regenerate the damage report
 ```bash
 # studio file + renders (renders/pilot/<prefix><view>.png); the meshes take ~4 minutes of numpy
 blender -b --factory-startup --python scripts/pilot/run_studio.py -- \
-    --views front34,side,back34,head34 --samples 96 --ratio 0.5 --prefix v4_
+    --views front34,side,back34,head34 --samples 96 --ratio 0.5 --prefix v5_
 # a 120-frame turntable from the saved studio file (frames in renders/frames/pilot_turntable_<prefix>)
 blender -b --factory-startup --python scripts/pilot/run_studio.py -- \
-    --open blend/F-35I_Pilot.blend --views "" --turntable 120 --samples 48 --prefix v4_
+    --open blend/F-35I_Pilot.blend --views "" --turntable 120 --samples 48 --prefix v5_
 ```
 The aircraft build (`f35/pilot.py`) poses the same pilot in the seat and caches its meshes in
 `blend/cache/pilot_seated.npz` (rebuilt when the pilot's code or the cockpit targets change).

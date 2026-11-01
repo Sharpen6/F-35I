@@ -45,9 +45,10 @@ def field_of(solids, h, pad=0.02):
     return f
 
 
-def build(j, F, h=0.004, hand_pose=None, sole_n=None, timings=None, only=None, cable_end=None):
+def build(j, F, h=0.004, hand_pose=None, sole_n=None, timings=None, only=None, cable_end=None, seat_harness=False):
     """Meshes for joints j / frames F.  sole_n: {"L": normal, "R": normal} of the surfaces the
-    boots stand on (default: the floor)."""
+    boots stand on (default: the floor).  seat_harness: add the seat's straps (cockpit);
+    cable_end: where the PEC's lead plugs into the seat."""
     hand_pose = hand_pose or {}
     sole_n = sole_n or {}
     tm = timings if timings is not None else {}
@@ -94,7 +95,7 @@ def build(j, F, h=0.004, hand_pose=None, sole_n=None, timings=None, only=None, c
         tm["helmet"] = round(time.time() - t, 2)
     t = time.time()
     if want("Gear"):
-        parts += gear.parts(j, F, cable_end=cable_end)
+        parts += gear.parts(j, F, cable_end=cable_end, seat_harness=seat_harness, timings=tm)
         tm["gear"] = round(time.time() - t, 2)
     return parts
 

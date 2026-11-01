@@ -85,8 +85,9 @@ def _place(j, F, bone, p):
     return a + F[bone][0] * x + F[bone][1] * (tt * L) + F[bone][2] * z
 
 
-def loft(j, F, table, side=None, rounds=(0.0, 0.0)):
-    """sdf.Loft through the stations of `table` (bones suffixed with side, x0 mirrored)."""
+def loft(j, F, table, side=None, rounds=(0.0, 0.0), band=0.05):
+    """sdf.Loft through the stations of `table` (bones suffixed with side, x0 mirrored).  Its
+    distances are exact up to about `band` off the surface (garments built far over it need more)."""
     sg = -1.0 if side == "R" else 1.0
     st = []
     for bone, t, sec in table:
@@ -97,7 +98,7 @@ def loft(j, F, table, side=None, rounds=(0.0, 0.0)):
         d["Z"] = F[bn][2]
         st.append(d)
     left = F["pelvis"][0]
-    return sdf.Loft(st, round0=rounds[0], round1=rounds[1], left=left)
+    return sdf.Loft(st, round0=rounds[0], round1=rounds[1], left=left, band=band)
 
 
 def solids(j, F, table=None):

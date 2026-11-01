@@ -31,19 +31,24 @@ BLEND = os.path.join(ROOT, "blend", "F-35I_Pilot.blend")
 TORSO = ["pelvis", "spine", "chest", "neck", "clavicle.L", "clavicle.R"]
 LEGS = ["pelvis", "thigh.L", "thigh.R", "shin.L", "shin.R"]
 # skinned parts (bone None): the bones each may follow (longest name prefix wins; None = all)
+ARMS = [f"{b}.{s}" for s in ("L", "R") for b in ("upperarm", "forearm", "hand")]
 SKIN_SETS = {
     "Suit": None,
     "Suit_Collar": ["neck", "chest", "head"],
-    "Vest": TORSO,
-    "Harness_Web": TORSO,
-    "Harness_Leg": LEGS,
-    "GSuit": ["spine"] + LEGS,
-    "Hose_Oxygen": ["head", "neck", "chest"],
-    "Hose_Connector": ["chest"],
-    "Hose_Regulator": ["chest", "spine", "pelvis", "thigh.L"],
-    "Hose_HipBlock": ["pelvis", "thigh.L"],
-    "Helmet_Cable": ["head", "neck", "chest", "spine", "pelvis"],
-    "Helmet_CableConnector": ["pelvis", "thigh.R"],
+    "Jacket": TORSO + ARMS,                     # the shell with its sleeves
+    "Jacket_": TORSO,                           # pockets, zip and webbing on the torso
+    "LPU": ["chest", "spine"],
+    "FCAGS": ["spine"] + LEGS,
+    "Hose_Mask": ["head", "neck", "chest"],
+    "Hose_MicCord": ["head", "neck", "chest"],
+    "Hose_Disconnect": ["chest"],
+    "Hose_Clip": ["chest"],
+    "Hose_BGHA": ["chest", "spine", "pelvis", "thigh.L"],
+    "Hose_AntiG": ["pelvis", "thigh.L"],
+    "Helmet_Cable": ["head", "neck", "chest", "spine", "pelvis", "thigh.L"],
+    "PEC_SeatLead": ["pelvis", "thigh.L"],
+    "PEC_SeatPlug": ["pelvis"],
+    "Harness": TORSO,
     "Kneeboard_Strap": ["thigh.R"],
 }
 
@@ -161,7 +166,8 @@ def objects_from_parts(coll, parts, arm, j, mats, prefix="Pilot", ratio=1.0):
             io.set_face_materials(ob, p["mi"])
         if "uv" in p:
             io.set_uv(ob, p["uv"])
-        decimate(ob, ratio)
+        # parametric meshes with material zones or UVs keep their exact layout
+        decimate(ob, 1.0 if ("mi" in p or "uv" in p) else ratio)
         if p["bone"] is None:
             io.skin(ob, arm, j, names=skin_set(p["name"]))
         else:

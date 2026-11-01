@@ -1,7 +1,9 @@
 """Seated F-35I pilot: the detailed pilot of scripts/pilot (lofted body in the IAF olive flight
-suit, gloves, boots, Gen III helmet with visor and oxygen mask, survival vest, harness, G-suit,
-hoses, helmet cable, kneeboard) posed in the ejection seat: right hand on the side-stick, left
-hand on the throttle, boots on the rudder pedals.
+coverall, gloves, boots, Gen III helmet with visor and oxygen mask, and the F-35 ensemble over it:
+short jacket with the LPU collar, full anti-G trousers, the PEC on the left thigh plugged into the
+seat, mask hose, breathing-gas hose and helmet cable, kneeboard) posed in the ejection seat and
+strapped in with the seat's harness: right hand on the side-stick, left hand on the throttle,
+boots on the rudder pedals.
 
 The rig keeps the interface of the first pilot (f35/pilot_legacy.py): armature 'Pilot_Rig' with
 IK_hand.L / IK_hand.R (rig.py ties them to the stick and throttle) and the head_yaw / head_pitch /
@@ -70,7 +72,9 @@ def targets():
     for s, x in (("L", 0.14), ("R", -0.14)):
         face = _v(W(x, 2.86 + 0.01, 0.26))
         feet[s] = (face + n_sole * 0.045, n_sole, fdir)
-    cable_end = hip + np.array([-0.20, 0.05, 0.05])            # seat-side connector, right
+    # the seat half of the PEC: on the inner face of the left bucket side wall, near its top, a
+    # little behind the pilot's connector on the left thigh
+    cable_end = hip + np.array([0.212, -0.03, 0.035])
     return dict(hip=hip, head=head, grips=grips, feet=feet, cable_end=cable_end)
 
 
@@ -95,7 +99,7 @@ def build(ctx):
     key = P.source_hash(json.dumps({k: np.round(np.asarray(v, float), 4).tolist() for k, v in j.items()},
                                    sort_keys=True) + json.dumps(np.round(t["cable_end"], 4).tolist()))
     parts, cached = P.cached_build(CACHE, key, j=j, F=F, h=0.004, hand_pose={"R": "grip", "L": "throttle"},
-                                   sole_n=sole_n, cable_end=t["cable_end"])
+                                   sole_n=sole_n, cable_end=t["cable_end"], seat_harness=True)
     t1 = time.time()
     coll = get_collection("Pilot", ctx["root"])
     mats = PM.all_materials()
