@@ -112,39 +112,66 @@ def serial_image(text, name, w=768, h=288, col=MARK_WHITE):
 
 
 # Squadron emblems: original stylised line drawings on a 100 x 100 grid (y down), the head facing
-# +x, which the decals turn towards the nose.  The photos (ref_04, ref_05, ref_06, ref_07) show a
-# perched eagle filling most of each fin and a flying eagle with raised wings on the inlet sides.
+# +x, which the decals turn towards the nose (so the left-side decals show them mirrored).
+#
+# Fin (photo ref_07 of 919, the only fin view; 901 had no fin emblem in 2016, ref_06): a big eagle
+# head with a hooked beak and a heavy brow, a line running from the crown aft and up towards the
+# fin's tip / trailing-edge corner, one breast curve hanging under the head, and the talons reaching
+# forward; no perch, folded wing or tail.  The head keeps its earlier size (about 30 % of the emblem
+# height, as in ref_07).
 _PERCHED = [
-    [(46, 31), (49, 22), (55, 15), (63, 11), (71, 10), (78, 11), (84, 14), (89, 18), (93, 24), (94, 30), (91, 35),
-     (89, 30), (85, 28)],                                                         # head and hooked beak
-    [(85, 28), (80, 29), (75, 28)], [(88, 31), (84, 34), (78, 35)],               # gape, jaw
-    [(78, 35), (77, 44), (75, 54), (71, 64), (65, 72), (58, 78), (52, 81)],     # breast
-    [(46, 31), (42, 36), (45, 37), (40, 42), (35, 50), (30, 60), (26, 70), (22, 80), (17, 91)],   # nape, back
-    [(52, 34), (60, 41), (64, 51), (63, 61), (58, 70), (49, 78), (38, 86), (27, 93)],              # folded wing
-    [(53, 46), (57, 54), (55, 63)], [(42, 63), (50, 67)], [(37, 71), (45, 75)], [(32, 79), (40, 83)],
-    [(17, 91), (22, 97), (27, 93)],                                               # tail
-    [(55, 80), (55, 87)], [(64, 75), (66, 87)],                                   # legs
-    [(51, 90), (53, 87), (58, 87), (60, 90)], [(62, 90), (64, 87), (69, 87), (71, 90)],          # talons
-    [(40, 91), (86, 91)],                                                         # perch
-    [(63, 16), (71, 16), (82, 21)],                                               # brow
+    [(9.6, 2.6), (16.4, 6.2), (23.6, 10.4), (31.0, 10.6), (40.0, 9.6), (49.6, 8.0), (59.0, 6.2), (67.6, 5.0),
+     (75.4, 5.4), (82.0, 8.4), (87.0, 13.2), (90.4, 19.2), (91.6, 25.6), (90.4, 31.4), (88.0, 35.2), (86.8, 31.0),
+     (84.6, 27.8)],                                                     # line from aft over the crown, hooked beak
+    [(84.6, 27.8), (80.0, 28.4), (75.4, 27.6)],                         # gape
+    [(87.0, 31.8), (82.6, 33.6), (76.0, 34.4), (69.6, 35.4), (64.6, 37.8), (61.4, 42.4), (59.8, 49.0), (59.2, 57.0),
+     (59.6, 65.0), (61.4, 72.0), (65.4, 77.6), (71.4, 81.4), (78.0, 83.2), (83.0, 83.4)],   # chin, throat, breast
+    [(83.0, 83.4), (88.2, 79.4), (92.8, 79.4), (95.6, 82.6), (95.0, 86.8), (92.2, 88.4)],
+    [(83.0, 83.4), (88.8, 86.6), (92.0, 90.4), (91.4, 94.4), (88.4, 95.4)],
+    [(82.0, 85.4), (83.6, 91.2), (81.6, 95.4)],                         # talons reaching forward
+    [(70.6, 81.0), (70.0, 88.6), (71.4, 95.2)], [(71.4, 95.2), (76.4, 95.2), (79.4, 97.2)],
+    [(71.4, 95.2), (66.8, 97.2)],                                       # the other leg and its foot
+    [(64.4, 12.6), (71.0, 11.8), (77.4, 13.2), (82.6, 17.4)],           # brow
 ]
-_PERCHED_EYE = (73.0, 21.5, 2.6)
+_PERCHED_EYE = (75.4, 18.4, 2.5)
+# Inlet sides (photos ref_05 of 901 and of a second jet behind it, ref_07 of 919, ref_04 of 926):
+# a swooping eagle, wider than tall (196 x 163 px in ref_05), its long pointed wings raised in a wide
+# V (the aft wing longer and higher) with parallel feather lines, a small head with a hooked beak low
+# and towards the nose, talons thrust forward and down under the head and a striated fanned tail
+# pointing aft and down.  About 85 units wide, so 0.47 m on the 0.55 m decal (ref_05: about 0.46 m).
 _FLYING = [
-    [(42, 58), (52, 52), (62, 48), (70, 46), (76, 42), (82, 40), (88, 41), (92, 45), (94, 50), (91, 54), (89, 49),
-     (85, 50)],                                                                   # back, head, beak
-    [(90, 52), (86, 56), (80, 58), (74, 64), (64, 70), (52, 71), (44, 67), (42, 64)],             # throat, belly
-    [(42, 58), (28, 55), (23, 61), (28, 68), (42, 64)],                           # tail
-    [(66, 47), (70, 37), (73, 26), (74, 15), (73, 6), (68, 1), (66, 8), (61, 3), (60, 10), (55, 6), (55, 14),
-     (50, 11), (51, 20), (47, 24), (52, 28), (48, 33), (53, 37), (50, 42), (56, 46), (57, 50)],  # near wing
-    [(48, 54), (44, 42), (40, 31), (35, 21), (29, 12), (26, 17), (22, 11), (21, 20), (17, 16), (19, 25), (15, 23),
-     (21, 32), (27, 40), (33, 47), (40, 55)],                                     # far wing
-    [(58, 70), (60, 80)], [(66, 68), (69, 79)],                                   # legs
-    [(57, 83), (60, 80), (63, 83)], [(66, 82), (69, 79), (72, 82)],               # talons
+    [(95.6, 22.4), (87.2, 28.2), (78.8, 34.0), (70.4, 39.8), (64.0, 44.2), (60.6, 46.6), (58.2, 47.8), (56.3, 47.7),
+     (54.8, 46.2), (53.2, 42.8), (50.9, 37.6), (47.8, 31.6), (43.9, 25.6), (39.0, 20.0), (33.0, 15.4), (26.0, 11.8),
+     (18.8, 9.4), (11.8, 8.0)],                                         # leading edges: fore wing, V, aft wing
+    [(11.8, 8.0), (15.2, 14.2), (19.3, 21.0), (23.9, 28.0), (28.9, 35.0), (34.2, 41.8), (39.8, 48.0), (45.2, 53.4),
+     (50.6, 58.0), (45.0, 67.6), (39.4, 77.2), (46.2, 75.9), (53.6, 74.5), (61.0, 73.0),
+     (67.6, 71.6)],                                                     # aft wing trailing edge, tail, belly
+    [(95.6, 22.4), (95.3, 28.4), (94.1, 34.4), (91.9, 40.0), (88.7, 44.8), (84.7, 48.4), (80.3, 50.6),
+     (76.2, 51.4)],                                                     # fore wing trailing edge
+    [(95.4, 26.2), (72.8, 41.8)], [(95.0, 30.1), (76.4, 42.9)], [(94.1, 34.4), (80.1, 44.0)],
+    [(92.1, 39.4), (83.1, 45.6)],                                       # fore wing feathers
+    [(45.4, 40.4), (42.6, 35.0), (39.2, 29.7), (35.2, 24.9), (30.2, 20.9), (24.0, 17.7), (17.6, 15.5)],  # coverts
+    [(22.6, 26.0), (29.7, 28.2)], [(26.6, 31.8), (34.0, 34.1)], [(30.8, 37.4), (37.8, 39.6)],
+    [(35.2, 42.9), (41.5, 44.8)], [(39.9, 48.1), (45.2, 49.7)],         # aft wing feathers
+    [(68.6, 54.4), (72.4, 52.6), (76.2, 51.4), (79.8, 51.0), (83.0, 51.6), (85.8, 53.0), (87.8, 55.0), (88.8, 57.4),
+     (88.4, 59.8), (87.0, 61.4)],                                       # nape, crown, hooked beak
+    [(86.7, 58.6), (84.4, 57.9), (81.2, 58.2)],                         # gape
+    [(86.2, 60.2), (83.6, 61.4), (80.6, 63.2), (77.8, 65.4), (75.4, 67.6)],   # throat
+    [(67.6, 71.6), (70.6, 69.8), (73.4, 68.6)],
+    [(73.4, 68.6), (77.6, 67.6), (80.8, 68.4), (82.2, 70.8), (81.4, 73.2), (79.6, 73.8)],
+    [(73.4, 68.6), (76.6, 71.2), (77.8, 74.2), (76.8, 76.4), (75.0, 76.6)],
+    [(72.0, 69.8), (70.8, 73.4), (71.8, 75.8)],                         # shank and talons
+    [(44.2, 76.1), (47.7, 69.6)], [(48.0, 75.4), (51.4, 66.8)], [(51.8, 74.6), (54.3, 64.9)],
+    [(55.6, 73.9), (56.6, 64.3)], [(59.4, 73.1), (58.9, 65.1)],         # tail feathers
 ]
-_FLYING_EYE = (84.0, 45.0, 2.0)
+_FLYING_EYE = (82.2, 54.0, 1.1)
+# the inlet eagle's fine line: 3.5 px on the 196 px bird in ref_05 (1.8 % of its width, about 0.8 cm);
+# the fin emblem keeps the heavier default line (ref_07: 2-3 px at about 1.3 cm/px)
+_FLYING_T = 1.6
 
 
 def emblem_image(name, polys, eye, size=1024, col=MARK_WHITE, t=2.6):
+    """A squadron emblem: the stroke table drawn with round-ended lines t grid units wide, plus the eye."""
     c = Canvas(size, size, (0, 0, 0))
     s = size / 100.0
     for poly in polys:
@@ -363,7 +390,8 @@ def build(ctx):
     roundel = decal_material("F35_Decal_Roundel", roundel_image("IAF_Roundel", 512, None, DISC))
     serial = decal_material("F35_Decal_Serial", serial_image(SERIAL, "IAF_Serial"))
     eagle_fin = decal_material("F35_Decal_Eagle", emblem_image("Sqn_Eagle_Perched", _PERCHED, _PERCHED_EYE))
-    eagle = decal_material("F35_Decal_Eagle_Flying", emblem_image("Sqn_Eagle_Flying", _FLYING, _FLYING_EYE))
+    eagle = decal_material("F35_Decal_Eagle_Flying", emblem_image("Sqn_Eagle_Flying", _FLYING, _FLYING_EYE,
+                                                                  t=_FLYING_T))
     rescue = {1: decal_material("F35_Decal_Rescue_L", rescue_image("Rescue_Stencil_L", 1)),
               -1: decal_material("F35_Decal_Rescue_R", rescue_image("Rescue_Stencil_R", -1))}
     seat = decal_material("F35_Decal_EjectSeat", danger_triangle_image("Danger_EjectSeat", ("EJECTION", "SEAT")))
@@ -407,9 +435,9 @@ def build(ctx):
                              (side, 0, 0), (0, -1, 0), (0, 0, -1), WING_ROUNDEL[2], WING_ROUNDEL[2], roundel))
             out.append(decal(f"Roundel_WingBot_{tag}", coll, wing, P(WING_ROUNDEL[0], side * WING_ROUNDEL[1], -0.2),
                              (-side, 0, 0), (0, -1, 0), (0, 0, 1), WING_ROUNDEL[2], WING_ROUNDEL[2], roundel))
-        # fins: a perched eagle over most of the outer face, aft of the formation-light strip (LE + 0.21 m)
-        # and running onto the rudder (its part is a second decal that moves with the rudder), and the
-        # serial low on the fin near mid-chord (photos ref_06 of 901, ref_07 of 919)
+        # fins: the eagle (head, breast, talons) over most of the outer face, aft of the formation-light strip
+        # (LE + 0.21 m) and running onto the rudder (its part is a second decal that moves with the rudder),
+        # and the serial low on the fin near mid-chord (photos ref_06 of 901, ref_07 of 919)
         fin = obj.get(f"Fin_{tag}")
         if fin is not None:
             from .tails import FIN_CANT, FIN_ROOT

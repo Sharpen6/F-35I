@@ -302,6 +302,8 @@ Positions are taken from the 3-view and from photos of 901, 905 and 926.
 | Fuselage roundel | Below the canopy. On the 3-view it is centred at X ≈ 2.66 m, Z ≈ 0, about 0.5 m across. Photos give about 0.45 m [P] |
 | Wing roundels (3-view) | Upper surface of both wings, centred at X ≈ 10.4 m, Y ≈ ±3.0 m, about 1.0 m across [M] |
 | Stencils | Rescue arrow with "RESCUE … master latch" text below the canopy rear; ejection-seat warning triangles; the canopy-cut warning on the frame |
+| Inlet eagle | White outline eagle swooping towards the nose on both inlet sides (901, 919, 926): long pointed wings raised in a wide V with parallel feather lines, a small hooked head low at the front, talons forward and down, a striated tail aft and down. About 0.46 m wide and wider than tall (196 × 163 px in ref_05), with a fine line about 1.8 % of its width (about 0.8 cm) [P] |
+| Fin eagle | On 919 (ref_07): a large hooked eagle head with a brow, one breast curve below it, talons reaching forward, and a line from the crown aft towards the tip / trailing-edge corner; no perch. The head is about 30 % of the emblem's height. 901 had no fin art in 2016 (ref_06) [P] |
 
 ### Roundel style
 
