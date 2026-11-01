@@ -65,6 +65,16 @@ float pnoise(vec2 x, float per) {
   float d = hash12(mod(i + vec2(1.0, 1.0), per));
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
+// the same with its own period per axis (anisotropic patterns: uv * per must wrap on both)
+float pnoise2(vec2 x, vec2 per) {
+  vec2 i = floor(x), f = fract(x);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash12(mod(i, per));
+  float b = hash12(mod(i + vec2(1.0, 0.0), per));
+  float c = hash12(mod(i + vec2(0.0, 1.0), per));
+  float d = hash12(mod(i + vec2(1.0, 1.0), per));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
 float pfbm(vec2 uv, float f, int oct) {
   float s = 0.0, a = 0.5, n = 0.0;
   for (int o = 0; o < 8; o++) {
@@ -143,7 +153,8 @@ void grass(vec2 uv, out float h, out float a, out float m) {
   float fine = smoothstep(0.55, 0.15, w2.x);
   float patchy = pfbm(uv + 0.37, 8.0, 3);
   float cover = clamp(tuft * (0.55 + 0.6 * patchy) + 0.45 * fine * patchy, 0.0, 1.0);
-  float blades = pnoise(uv * vec2(256.0, 64.0), 256.0) * pnoise(uv * vec2(64.0, 256.0) + 0.5, 256.0);
+  // (each axis wraps with its own frequency, or the tile edges would show as a grid of lines)
+  float blades = pnoise2(uv * vec2(256.0, 64.0), vec2(256.0, 64.0)) * pnoise2(uv * vec2(64.0, 256.0) + 0.5, vec2(64.0, 256.0));
   h = 0.05 * cover + 0.01 * blades;
   a = mix(0.34 + 0.08 * pfbm(uv, 64.0, 2), 0.6 + 0.18 * blades, cover);
   m = cover;
