@@ -125,7 +125,9 @@ export class CameraRig {
     // wheel zoom for the views without a distance (cockpit, fly-by, tower: field of view)
     const fov = this.fov[this.mode];
     if (Math.abs(cam.fov - fov) > 1e-3) { cam.fov = fov; cam.updateProjectionMatrix(); }
-    const near = this.mode === 'cockpit' ? 0.04 : 0.5;
+    // cockpit: 12 cm keeps the pilot's own face out of view (its skin sits a few cm ahead of the eye
+    // and comes into view when acceleration pushes the head back); the canopy bow is ~0.4 m away
+    const near = this.mode === 'cockpit' ? 0.12 : 0.5;
     if (cam.near !== near) { cam.near = near; cam.updateProjectionMatrix(); }
     cam.updateMatrixWorld();
   }
