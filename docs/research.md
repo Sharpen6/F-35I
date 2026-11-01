@@ -307,6 +307,12 @@ Positions are taken from the 3-view and from photos of 901, 905 and 926.
 
 - The "Have Glass" coating gives a slight metallic sheen depending on the light.
 - Modellers often use FS 36270 or 36231 for the lighter-looking RAM panels.
+- RAM tape frames (photos ref_06 of 901 from above, c51, c53): bold bands about 7-9 cm wide outline
+  the upper fuselage panels. The outer edges of each panel group step like a staircase (each jog about
+  one band width); inner rungs are straight; no seam shows inside most bands. Under sky light they
+  read 6-10 % lighter than the paint, in sun they read darker than the paint's sheen. The model's
+  layout (panels.layout) was traced from ref_06 mapped onto the top skin through its solved camera
+  (data/camera_matches/ref06.json) and checked on dark-band profiles of that rectified image.
 
 Approximate sRGB values (sources disagree, so treat these as guides only):
 

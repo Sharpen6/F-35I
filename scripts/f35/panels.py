@@ -15,7 +15,7 @@ doors, control surfaces and the canopy when they move, and to fragments when
 parts break off.
 
 Channels: R = panel line / fastener (darker, slight groove),
-          G = sealant tape along sawtooth edges (darker band),
+          G = sealant tape along sawtooth edges and RAM tape frames (bands),
           B = lighter coating (radome, leading-edge strips, repair squares).
 
 Everything is painted from the geometry: door and control-surface outlines
@@ -51,7 +51,8 @@ R, G, B = 0, 1, 2
 
 LINE_W = 1.35                  # panel line width (px)
 TAPE_W = 11.0                  # sealant tape band width along door outlines (px, ~3.3 cm; ref_03 4-5 cm)
-FRAME_W = 21.0                 # RAM tape frames over the upper fuselage seams (px, ~6.3 cm)
+BAND_W = 0.08                  # RAM tape frames over the upper fuselage seams (m; ref_06 of 901,
+                               # c51, c53: bold 7-9 cm bands)
 
 
 def images():
@@ -267,21 +268,42 @@ class Painter:
                 for run in self.trace(kind, offset_polyline(vp, off), sd):
                     self.dots(run, pitch)
 
-    def frame(self, kind, pts, mirror=True, step=0.09, amp=0.014, width=FRAME_W, value=0.8, rivets=None,
-              side=1):
-        """RAM tape frame over a seam (photos ref_05, ref_06 of 901, c14, c51, c53): the seam itself
-        (R) under a band whose edges step every ~9 cm (G), stepped on both sides."""
-        self.line(kind, pts, mirror=mirror, rivets=rivets, side=side)
-        sq = square_wave(list(pts), step, amp)
-        if kind == "side":
-            variants = [(sq, 1), (sq, -1)] if mirror else [(sq, side)]
-        else:
-            variants = [(sq, 1)]
-            if mirror:
-                variants.append(([(a, -b) for a, b in sq], 1))
-        for vp, sd in variants:
-            for run in self.trace(kind, vp, sd, step=0.006):
-                self.stroke(run, G, width, value)
+    def frame(self, kind, pts, mirror=True, width=BAND_W, value=0.8, crenel=None, seam=0.0, rivets=None):
+        """RAM tape frame over a seam (photos ref_06 of 901, c51, c53).  The band has a constant width
+        and square corners: every segment is filled as a rectangle straight into the projection map
+        (top / bottom), lengthened by half the width at both ends so the corners close.  The tape
+        hides the seam, so no panel line is drawn under it (seam > 0 draws a faint one, as on the
+        long shoulder rails).  crenel=(run, jog) turns the path into a square wave, runs of `run`
+        metres offset alternately by +-jog/2: a jog of about the band width gives the staircase
+        edges of the photos.  rivets=(offset, pitch) adds a fastener row inside the band."""
+        assert kind in ("top", "bottom")
+        path = square_wave(list(pts), crenel[0], crenel[1] * 0.5) if crenel else list(pts)
+        variants = [(path, list(pts))]
+        if mirror:
+            variants.append(([(a, -b) for a, b in path], [(a, -b) for a, b in pts]))
+        w, h = MAPS[kind]
+        hw = width * 0.5
+        for P, base in variants:
+            for (a0, b0), (a1, b1) in zip(P, P[1:]):
+                L = math.hypot(a1 - a0, b1 - b0)
+                if L < 1e-6:
+                    continue
+                ta, tb = (a1 - a0) / L * hw, (b1 - b0) / L * hw
+                na, nb = -tb, ta
+                quad = [(a0 - ta + na, b0 - tb + nb), (a1 + ta + na, b1 + tb + nb),
+                        (a1 + ta - na, b1 + tb - nb), (a0 - ta - na, b0 - tb - nb)]
+                px = []
+                for a, b in quad:
+                    u, v = uv(kind, (b, a - Y0, 0.0))
+                    px.append((u * w, v * h))
+                self.canvas.fill(kind, G, px, value)
+            if seam:
+                for run in self.trace(kind, base):
+                    self.stroke(run, R, LINE_W, seam)
+            if rivets:
+                off, pitch = rivets
+                for run in self.trace(kind, offset_polyline(base, off) if off else base):
+                    self.dots(run, pitch, value=0.6)
 
     def patch(self, kind, poly, c=B, value=0.5, mirror=True, side=1):
         """Filled coating patch, drawn directly in its own map (no ray cast)."""
@@ -377,6 +399,17 @@ def square_wave(pts, step, amp):
             out.append((a0 + (a1 - a0) * t0 + na * o, b0 + (b1 - b0) * t0 + nb * o))
             out.append((a0 + (a1 - a0) * t1 + na * o, b0 + (b1 - b0) * t1 + nb * o))
             k += 1
+    return out
+
+
+def stairs(p0, p1, n):
+    """Axis-aligned staircase from p0 to p1 in n steps (each step: across in b, then along in a)."""
+    (a0, b0), (a1, b1) = p0, p1
+    out = [(a0, b0)]
+    for i in range(1, n + 1):
+        a, b = a0 + (a1 - a0) * i / n, b0 + (b1 - b0) * i / n
+        out.append((out[-1][0], b))
+        out.append((a, b))
     return out
 
 
@@ -554,13 +587,35 @@ def layout(pt):
     # canopy over both shoulders and along the spine to the aft deck (photos ref_05, ref_06 of 901,
     # c14, c51, c53).  They read darker or lighter than the paint depending on the light.
     pt.line("top", rect(1.55, 1.90, -0.22, 0.22), mirror=False, closed=True)
-    pt.frame("top", [(5.10, 0.30), (11.2, 0.30)], rivets=(0.045, 0.035))
-    for s in (6.6, 8.0, 9.4):
-        pt.frame("top", [(s, -0.30), (s, 0.30)], mirror=False)
     pt.line("top", [(4.95, 0.52), (4.95, 1.48)], saw=(5, 0.06), tape=True)
-    pt.frame("top", [(5.0, 0.80), (10.8, 0.86)], rivets=(0.045, 0.035))
-    for s in (6.4, 7.9, 9.5):
-        pt.frame("top", [(s, 0.32), (s, 1.45)])
+    # The frames were traced from ref_06 (901 seen from above left) mapped onto the skin with the
+    # solved camera (x scaled about the spine to put the refuelling markings on the centre line and
+    # the gun-fairing ridge over the model's).  Panel outlines are bold 8 cm bands; the outer edges
+    # of each group are stepped (staircase or crenellated), the inner rungs straight:
+    #   * a trapezoid beside the spine just aft of the canopy,
+    #   * a U-shaped panel on each shoulder opening outboard (s 6.4-7.0),
+    #   * stepped crossings at s 7.35 and 8.05 and a small box (8.0-8.6) above a long rail at x 0.46,
+    #   * a three-bay ladder over each shoulder (9.2-11.2) whose front edge steps down to the spine,
+    #   * a crenellated band across the spine at its aft end and across the aft deck.
+    # positions measured on dark-band profiles of the rectified photo
+    XO, XL, XB, XU, XM, XI = 1.17, 0.92, 0.80, 0.73, 0.46, 0.15
+    CR = (0.14, BAND_W)                       # crenellation: 14 cm runs jogging a band width
+    pt.frame("top", [(5.12, 0.07), (5.02, 0.32), (5.90, 0.32)])
+    pt.frame("top", [(5.90, 0.32), (5.90, 0.10)], crenel=CR)
+    pt.frame("top", stairs((6.58, XO), (6.44, XU + 0.02), 2))
+    pt.frame("top", [(6.40, XU), (7.04, XU)], rivets=(0.0, 0.035))
+    pt.frame("top", [(7.0, XU), (7.0, XO)], crenel=CR)
+    pt.frame("top", [(7.34, XO), (7.36, XM)], crenel=CR)
+    pt.frame("top", [(7.00, XM), (11.30, XM)], seam=0.35)
+    pt.frame("top", [(8.00, 1.04), (8.00, XM)], crenel=CR)
+    pt.frame("top", [(7.97, XB), (8.50, XB)], rivets=(0.0, 0.035))
+    pt.frame("top", [(8.47, XB), (8.47, XM)], crenel=CR)
+    pt.frame("top", stairs((9.25, XL), (8.97, 0.0), 5))
+    pt.frame("top", [(9.20, XL), (11.30, XL)])
+    for s in (9.70, 10.33, 10.89):
+        pt.frame("top", [(s, XL), (s, XI)])
+    pt.frame("top", [(9.02, XI), (11.30, XI)])
+    pt.frame("top", [(11.30, 0.96), (11.30, -0.96)], mirror=False, crenel=CR)
     pt.line("top", [(5.05, 1.40), (6.80, 1.55), (8.20, 1.66)], rivets=(-0.03, 0.035))
     # gun fairing (left only): a rectangular access panel two-thirds of the way aft, lighter in
     # c20 and ref_05 (901), and the fastener row along its inboard foot
@@ -578,9 +633,8 @@ def layout(pt):
     pt.line("top", [(4.62, 0.98), (4.82, 1.50)], tape=True)
 
     # ---- top: engine bay and aft deck ------------------------------------
-    pt.frame("top", [(11.2, 0.62), (13.9, 0.62)], rivets=(0.045, 0.04))
-    for s in (11.2, 12.5):
-        pt.frame("top", [(s, -0.62), (s, 0.62)], mirror=False)
+    pt.frame("top", [(11.30, 0.62), (13.9, 0.62)])
+    pt.frame("top", [(12.45, -0.62), (12.45, 0.62)], mirror=False, crenel=CR)
     pt.line("top", [(13.9, -0.62), (13.9, 0.62)], saw=(6, 0.07), mirror=False, tape=True)
     pt.line("top", [(11.2, 0.62), (11.2, 1.25), (12.6, 1.30)])
 

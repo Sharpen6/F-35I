@@ -252,11 +252,11 @@ def skin_material():
             else:
                 links.new(v, n.inputs[i])
         return n.outputs[0]
-    # RAM tape and caulk differ from the paint mostly in sheen: a touch lighter, rougher and
-    # without the satin coat, so a frame reads darker or lighter depending on the light (ref_06
-    # against ref_05 / c51)
+    # RAM tape and caulk differ from the paint mostly in sheen: lighter, rougher and without the
+    # satin coat, so a frame reads 6-10 % lighter under sky light (c51, c53) and darker than the
+    # sunlit sheen of the paint (ref_06)
     dark = _m('MULTIPLY', _m('SUBTRACT', 1.0, _m('MULTIPLY', line, 0.45)),
-              _m('ADD', 1.0, _m('MULTIPLY', tape, 0.10)))
+              _m('ADD', 1.0, _m('MULTIPLY', tape, 0.22)))
     fac = _m('MULTIPLY', dark, _m('ADD', 1.0, _m('MULTIPLY', light, 0.30)))
     pmul = nodes.new("ShaderNodeMix")
     pmul.data_type = 'RGBA'

@@ -1,0 +1,69 @@
+{
+ "image": "references/ref_06_IAF-F-35I-2016-12-13.jpg",
+ "size": [
+  2941,
+  1997
+ ],
+ "points": {
+  "NOSE": [
+   294,
+   834
+  ],
+  "WT_R_le": [
+   2006,
+   494
+  ],
+  "WT_R_te": [
+   2201,
+   488
+  ],
+  "WT_L_le": [
+   974,
+   1522
+  ],
+  "WT_L_te": [
+   1172,
+   1532
+  ],
+  "FIN_L_tip_le": [
+   1655,
+   948
+  ],
+  "FIN_L_tip_te": [
+   1848,
+   968
+  ],
+  "FIN_R_tip_te": [
+   2262,
+   540
+  ]
+ },
+ "solve": {
+  "rms": 17.0,
+  "f_px": 15561.609507509263,
+  "lens": 190.4855295036836,
+  "cam": [
+   55.48589346746345,
+   59.700127747608285,
+   46.91652742463747
+  ],
+  "rot": [
+   [
+    -0.5658315021518786,
+    -0.5679621531427614,
+    0.5977070384142946
+   ],
+   [
+    0.7735824292162377,
+    -0.11483935575593851,
+    0.6232031350831491
+   ],
+   [
+    -0.28531550322485694,
+    0.8150036288060314,
+    0.5043452673045988
+   ]
+  ]
+ },
+ "note": "Look-at camera solved from clicked wing-tip, fin-tip and nose points (rms ~17 px). Used to map the photo onto the top skin to trace the RAM tape frames; the spine drifts ~0.1 m sideways along s, so the frame positions were also measured on dark-band profiles."
+}

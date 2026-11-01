@@ -8,6 +8,7 @@
 * canopy-frame warning, RESCUE stencils (different on the two sides), DANGER EJECTION SEAT and
   DANGER JET INTAKE triangles, laid out from close photos of an Adir (right side) and an F-35A
   (left side)
+* white crescent index marks on the fasteners of the left rescue door and the inlet-side panels
 
 Images are painted procedurally with the small numpy rasteriser and packed
 into the .blend, so the model has no external texture dependencies.
@@ -190,6 +191,38 @@ def danger_triangle_image(name, lines, size=256):
     return c.to_image(name)
 
 
+# white crescent index marks on quick-release fasteners (photos: c34 of the left rescue door, c51 and
+# c20 of the inlet-side panels): (s, z) of each mark, about 3 cm across
+DOOR_MARKS = [(3.45, 0.21), (3.65, 0.125), (3.39, -0.06), (3.34, -0.285), (3.56, -0.26)]
+DOOR_LABELS = [((3.34, -0.215), ("FWD MASTER", "LATCH F30 HEX")), ((3.555, -0.205), ("AFT MASTER", "LATCH F30 HEX"))]
+INLET_MARKS = [(6.38, -0.02), (6.16, -0.02), (5.955, -0.015), (5.83, -0.07), (5.83, -0.145), (6.455, -0.05),
+               (6.47, -0.145), (6.38, -0.218), (6.22, -0.218), (6.065, -0.218), (5.877, -0.212)]
+
+
+def index_marks_image(name, side, s_c, z_c, size_u, size_v, marks, labels=(), ppm=1000):
+    """White crescents (and small stencils) for one panel, laid out in (s, z).  The decal's u axis
+    runs aft on the left side and forwards on the right (decal_on), image y runs down."""
+    w, h = int(round(size_u * ppm)), int(round(size_v * ppm))
+    c = Canvas(w, h, (0, 0, 0))
+
+    def px(s, z):
+        x = (s - (s_c - size_u / 2)) if side > 0 else ((s_c + size_u / 2) - s)
+        return x * ppm, ((z_c + size_v / 2) - z) * ppm
+    r = 0.015 * ppm
+    for k, (s, z) in enumerate(marks):
+        x, y = px(s, z)
+        c.circle(x, y, r, MARK_WHITE)
+        a = 0.6 + 1.9 * k                      # the open side of each crescent turns a little
+        c.circle(x + 0.42 * r * math.cos(a), y + 0.42 * r * math.sin(a), 0.74 * r, (0, 0, 0))
+    for (s, z), lines in labels:
+        x, y = px(s, z)
+        sc = 2
+        for k, line in enumerate(lines):
+            _centred(c, x, y - 7 * sc - 3 + k * (7 * sc + 6), line, sc)
+    _alpha_from_rgb(c)
+    return c.to_image(name)
+
+
 def decal_material(name, img):
     mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -358,6 +391,15 @@ def build(ctx):
             sc = root + Vector((0, 12.45, 0)) + span * 0.36
             out.append(decal(f"Serial_Fin_{tag}", coll, fin, sc + nrm * 0.3, u, span, -nrm, 0.68, 0.255, serial,
                              nu=24, nv=10))
+        # crescent index marks: round the left rescue door (with its two latch stencils) and round the
+        # fastened access panel on each inlet side
+        if side > 0:
+            img = index_marks_image("Index_Marks_Door_L", side, 3.475, -0.05, 0.72, 0.76, DOOR_MARKS, DOOR_LABELS)
+            out.append(decal_on("IndexMarks_Door_L", coll, fus, 3.475, side, -0.05, 0.72, 0.76,
+                                decal_material("F35_Decal_IndexMarks_Door_L", img), nu=24, nv=24))
+        img = index_marks_image(f"Index_Marks_Inlet_{tag}", side, 6.135, -0.115, 0.90, 0.40, INLET_MARKS)
+        out.append(decal_on(f"IndexMarks_Inlet_{tag}", coll, fus, 6.135, side, -0.115, 0.90, 0.40,
+                            decal_material(f"F35_Decal_IndexMarks_Inlet_{tag}", img), nu=28, nv=14))
         # inlet side eagle (smaller): under the forward formation strip, just ahead of the fastened
         # access panel (photos ref_04, ref_05, ref_07 of three IAF jets)
         out.append(decal(f"Eagle_Inlet_{tag}", coll, fus, P(5.10, side * 2.0, -0.18), u_bird, (0, 0, 1), ray,

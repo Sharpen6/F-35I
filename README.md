@@ -28,16 +28,16 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
 * **Pilot:** modelled separately in detail ([`scripts/pilot/`](scripts/pilot), studio file
   [`blend/F-35I_Pilot.blend`](blend), renders in [`renders/pilot/`](renders/pilot), research notes in
   [`docs/pilot.md`](docs/pilot.md)): a 1.78 m body in the IAF olive flight coverall with a white T-shirt at
-  the collar, sage Nomex gloves with grey leather palms, laced black leather boots, and over it the F-35
+  the collar, sage Nomex gloves with black leather palms, laced black leather boots, and over it the F-35
   ensemble that F-35 pilots wear with the US16E seat (no torso harness or survival vest):
-  * a short sleeved jacket with the life preserver built in (a roll behind the neck and two lobes on the
+  * a short grey sleeved jacket with the life preserver built in (a roll behind the neck and two lobes on the
     chest, grey binding, inflation toggles), a flapped chest pocket, a box pouch, webbing keepers and side
     rows, waist adjusters, two arm-restraint straps on each upper arm, the navy rank tab and a pocket with
     the lime arm-restraint cord on the left sleeve, the Israeli flag on the right;
   * full-coverage anti-G trousers with a rolled top edge, inseam zips and shin strips;
-  * the personal equipment connector on the left thigh, which takes the teal breathing-gas hose, the anti-G
+  * the personal equipment connector on the left thigh, which takes the teal-grey breathing-gas hose, the anti-G
     hose and the helmet cable;
-  * the grey mask hose with the microphone lead wound round it, down to the disconnect on the sternum;
+  * the grey corrugated mask hose down to the disconnect on the sternum;
   * a steel dive watch and a tablet kneeboard.
 
   The F-35 Gen III helmet (HMDS) has a carbon shell, the brow display module with the night-vision camera,
@@ -58,6 +58,11 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
 * **Paint and light:** dark grey under a satin clear coat, tuned against two photos rendered from their
   solved cameras, so sides read charcoal and sky-facing panels read silver as on the real jet. The
   scene is lit by a CC0 partly cloudy airfield sky (HDRI from Poly Haven) with a matched sun lamp.
+* **Panel lines and RAM tape:** door outlines, sawtooth edges and fastener rows are painted from the
+  geometry. The stepped RAM tape frames over the spine and shoulders (bold 8 cm bands with square,
+  crenellated edges: a U panel, stepped crossings and a three-bay ladder over each shoulder) were
+  traced from a top photo of Adir 901 mapped onto the model with its solved camera. White crescent
+  index marks ring the left rescue door and the inlet-side access panels.
 * **Damage model:** 30 hitboxes, health per component, intact flight attributes and what each kind of
   damage changes (tilt after losing a wing, top speed after engine damage, fuel leaks, gear collapse ...).
   Parts break off with burnt, torn edges, the skin gets soot and scorch marks, smoke and fuel-vapour trails.
