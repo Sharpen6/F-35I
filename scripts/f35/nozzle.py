@@ -28,13 +28,15 @@ R_EXIT_OPEN = 0.56      # ... with the afterburner lit
 CHEVRON = 0.025         # chevron depth of the outer flap tips
 T_FLAP = 0.006          # flap plate thickness
 SHINGLE = 0.006         # each outer flap rises this much across its width: it laps over the next
+CROWN = 0.014           # outer flaps bow outward across their width: rounded ribs with grooves
+                        # between them, as in the rear-quarter photos (c26, c27), not flat facets
 WIDEN = 1.05            # flap width / sector width (overlap)
 CONV = (13.20, 0.535)                   # convergent flaps: root (station, radius)
 THROAT = (13.62, 0.405)                 # convergent / divergent hinge line (dry power)
 DIV_EXIT = (S_EXIT + 0.025, 0.455)      # divergent flap tips: just past the outer flaps
 DIV_CHEVRON = 0.03
 AB_THROAT = 1.20        # afterburner: convergent / divergent flaps open by this factor
-N_S, N_W = 12, 6        # stations along / points across a flap
+N_S, N_W = 12, 10       # stations along / points across a flap
 
 OUTER, CONVERGENT, DIVERGENT, LINER = range(4)
 
@@ -83,8 +85,8 @@ def _plate(verts, faces, grid_o, grid_i):
         faces.append((o(ns - 1, j), o(ns - 1, j + 1), n(ns - 1, j + 1), n(ns - 1, j)))
 
 
-def _flaps(verts, faces, s0, s1, r_fn, chevron, phase, thick, shingle, widen):
-    """PETALS flat flaps around the axis, each lapping over the next."""
+def _flaps(verts, faces, s0, s1, r_fn, chevron, phase, thick, shingle, widen, crown=0.0):
+    """PETALS flaps around the axis, each lapping over the next; `crown` bows them outward."""
     for k in range(PETALS):
         ac = math.pi / 2 + 2 * math.pi * (k + phase) / PETALS
         hw = math.pi / PETALS * widen
@@ -101,7 +103,7 @@ def _flaps(verts, faces, s0, s1, r_fn, chevron, phase, thick, shingle, widen):
                 a0, a1 = ac - hw, ac + hw
                 x = r * math.cos(a0) + (r * math.cos(a1) - r * math.cos(a0)) * v
                 z = r * math.sin(a0) + (r * math.sin(a1) - r * math.sin(a0)) * v
-                lift = shingle * v
+                lift = shingle * v + crown * math.sin(math.pi * v) * min(1.0, 4.0 * u)
                 x, z = x + nrm[0] * lift, z + nrm[1] * lift
                 ro.append(P(s, x, NOZ_Z + z))
                 ri.append(P(s, x - nrm[0] * thick, NOZ_Z + z - nrm[1] * thick))
@@ -151,7 +153,7 @@ def build(ctx):
         mats.extend([mat] * (len(faces) - len(mats)))
         parts.extend([part] * (len(verts) - len(parts)))
     # dark outer flaps
-    _flaps(verts, faces, S_ROOT, S_EXIT, r_outer, CHEVRON, 0.0, T_FLAP, SHINGLE, WIDEN)
+    _flaps(verts, faces, S_ROOT, S_EXIT, r_outer, CHEVRON, 0.0, T_FLAP, SHINGLE, WIDEN, CROWN)
     tag(OUTER, 0)
     # convergent flaps (sooty), augmentor to throat
     _flaps(verts, faces, CONV[0], THROAT[0], r_convergent, 0.0, 0.5, 0.006, 0.003, 1.04)

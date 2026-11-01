@@ -21,12 +21,12 @@
  },
  {
   "script": "history_stills.py",
-  "tag": "history_00_01_15_16_17",
+  "tag": "history_18_19_20",
   "args": [
    "--views",
    "fl34,side,rr34",
    "--only",
-   "00,01,15,16,17",
+   "18,19,20",
    "--force"
   ]
  },
