@@ -5,10 +5,31 @@ The detailed pilot (`scripts/pilot/`, used standing in the studio and seated in 
 Main findings:
 
 * **Helmet.** The F-35 Gen III Helmet Mounted Display System: a carbon dome with a brow display module, a one-piece wrap-around visor, a night camera in the brow, and the HMD cable leaving the back of the shell. Positions below are in a head frame: origin between the corneas, +Y forward, +Z up, +X the pilot's left.
-* **Coverall.** IAF aircrew wear a one-piece olive coverall in the CWU-27/P layout, with sage Nomex gloves with grey leather palms and black lace-up boots.
+* **Coverall.** IAF aircrew wear a one-piece olive coverall in the CWU-27/P layout, with sage Nomex gloves (black leather palms, see the corrections below) and black lace-up boots.
 * **Ensemble.** F-35 pilots wear the Survitec F-35 ensemble and sit in the Martin-Baker US16E seat, whose harness belongs to the seat. The pilot wears no torso harness, no Koch fittings, no leg garters and no survival vest. Over the coverall go a short sleeved jacket with the life preserver (LPU) built in, full-coverage anti-G trousers (FCAGS), and the personal equipment connector (PEC) on the left thigh, where the breathing-gas hose, the anti-G hose and the helmet cable meet.
 
 Heights (Z) are for the standing pilot without boots unless a line says otherwise. The model adds a 25 mm sole.
+
+### Corrections after a photo check of these notes (model v5.1)
+
+A last pass checked the notes against the photos again, with white balance taken from whites in the same
+frame. Where it found the notes wrong, the model follows the check; the sections below keep the
+original wording.
+
+* **Jacket and LPU cover:** a neutral mid grey, about #5A5958. The IAF cockpit photo p01 white-balances to
+  neutral grey; the warm khaki-grey in the notes could not be reproduced. USAF and RAAF jackets are sage
+  (#66705C). Confidence 0.45 (one overcast photo).
+* **Gloves:** black leather palm and finger panels with an olive/sage knit back (p21, the one clear photo
+  of F-35 flight gloves). No photo shows grey leather palms.
+* **Breathing-gas hose:** a dark, low-saturation teal-grey, about #52605D. In daylight (p22) it is close to
+  the grey trousers; the vivid teal in p27 is night lighting.
+* **Mask hose:** plain corrugation. The microphone lead wound round it shows only in the older photos
+  (p28 from 2014, p17 from 2015); the banding in p01, p25 and p27 is the shading of the corrugation.
+  (`gear.MIC_CORD` puts the lead back.)
+* **Seat harness:** dark neutral grey, about #404247, in the IAF cockpit photo.
+* **Not changed (uncertain):** the HMDS cable. In p01 a ~14 mm cable leaves the back of the helmet and drops
+  onto the left shoulder outside the collar, as modelled; where it goes from there is not visible. p27 is a
+  front-left three-quarter view, not a front view, so widths taken from it carry 10-15 % error.
 
 ## 1. Helmet (Gen III HMDS), oxygen mask, hose and leads
 

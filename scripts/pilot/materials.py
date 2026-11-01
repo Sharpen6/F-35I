@@ -487,9 +487,10 @@ def all_materials():
                        folds=0.55),
         "tshirt": fabric("P2_TShirt", srgb("#E6E6E4"), rough=0.95, sheen=0.3, weave=2400.0, bump=0.15),
         "webbing_black": fabric("P2_WebbingBlack", srgb("#161616"), rough=0.8, sheen=0.2, weave=1600.0, bump=0.4),
-        # F-35 ensemble (Survitec): jacket and LPU cover in the IAF's greyish olive, grey binding,
+        # F-35 ensemble (Survitec): jacket and LPU cover a neutral mid grey (the IAF photo p01
+        # white-balances to ~#5A5958; USAF/RAAF jackets are sage #66705C), grey binding,
         # olive-tan mesh, anti-G trousers between the grey and the sage variants
-        "jacket": fabric("P2_Jacket", srgb("#5E5D4C"), rough=0.82, sheen=0.25, weave=1100.0, bump=0.2, mottle=0.04,
+        "jacket": fabric("P2_Jacket", srgb("#5A5958"), rough=0.82, sheen=0.25, weave=1100.0, bump=0.2, mottle=0.04,
                          wrinkle=0.08, folds=0.35, fold_scale=5.5),
         "binding": fabric("P2_Binding", srgb("#7B807C"), rough=0.85, sheen=0.2, weave=1800.0, bump=0.35, mottle=0.02),
         "lpu_mesh": open_mesh("P2_LPUMesh", srgb("#787240"), srgb("#4D4A31")),
@@ -501,14 +502,16 @@ def all_materials():
                              mottle=0.02),
         "velcro": fabric("P2_HookLoop", srgb("#4E5A3E"), rough=0.95, sheen=0.1, weave=2600.0, bump=0.9, mottle=0.02),
         "lime_cord": fabric("P2_LimeCord", srgb("#7AD94E"), rough=0.7, sheen=0.3, weave=2400.0, bump=0.5, mottle=0.0),
-        "harness_seat": fabric("P2_SeatHarness", srgb("#4C4D49"), rough=0.75, sheen=0.25, weave=1500.0, bump=0.5,
+        # the seat's harness: dark neutral grey in the IAF cockpit photo (p01)
+        "harness_seat": fabric("P2_SeatHarness", srgb("#404247"), rough=0.75, sheen=0.25, weave=1500.0, bump=0.5,
                                mottle=0.02),
         "toggle": plain("P2_Toggle", srgb("#4A4B3A"), rough=0.6),
         "pec": plain("P2_PEC", srgb("#141416"), rough=0.4, coat=0.2),
         "rank_tab": textured("P2_RankTab", _image("P2_RankTabArt", rank_tab_image()), rough=0.7, sheen=0.3, bump=0.15),
         "skin": skin(),
         "glove": fabric("P2_GloveKnit", srgb("#6E6D57"), rough=0.9, sheen=0.4, weave=2200.0, bump=0.3),
-        "glove_leather": leather("P2_GloveLeather", srgb("#74726A"), rough=0.55, grain=0.2),
+        # black leather palm and finger panels (p21, the one clear photo of F-35 flight gloves)
+        "glove_leather": leather("P2_GloveLeather", srgb("#1E1E1F"), rough=0.5, grain=0.25),
         "leather": leather("P2_Leather", srgb("#2a231e"), rough=0.55),
         "boot": leather("P2_Boot", srgb("#1C1B1A"), rough=0.52, coat=0.0, grain=0.25),
         "sole": plain("P2_Sole", srgb("#1b1a19"), rough=0.85),
@@ -523,7 +526,9 @@ def all_materials():
         "cuff": plain("P2_MaskCuff", srgb("#6A7076"), rough=0.6),
         "black_gloss": plain("P2_BlackGloss", srgb("#0C0C0C"), rough=0.25),
         "hose": plain("P2_Hose", srgb("#8A929A"), rough=0.5, spec=0.4),
-        "hose_teal": plain("P2_HoseTeal", srgb("#3E7F76"), rough=0.5, spec=0.4),
+        # breathing-gas hose: a dark, low-saturation teal-grey in daylight (p22); the vivid teal
+        # in p27 is night lighting
+        "hose_teal": plain("P2_HoseTeal", srgb("#52605D"), rough=0.5, spec=0.4),
         "hose_olive": plain("P2_HoseOlive", srgb("#5A5F48"), rough=0.55, spec=0.4),
         "cable": fabric("P2_CableBraid", srgb("#111111"), rough=0.6, sheen=0.2, weave=3000.0, bump=0.6, mottle=0.0),
         "metal": plain("P2_Metal", srgb("#B8BBBE"), rough=0.3, metal=1.0),

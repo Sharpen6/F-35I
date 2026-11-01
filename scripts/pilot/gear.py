@@ -802,8 +802,13 @@ def pec_parts(j, F, fb, leg, cable_end=None):
 
 
 # ----------------------------------------------------------------------------------- hoses
+# the microphone lead wound round the mask hose shows only in older photos (RAAF 2014, USAF 2015);
+# the newer ones (2016, 2018) have a plain corrugated hose
+MIC_CORD = False
+
+
 def hose_parts(j, F, top, fb, pec):
-    """Mask hose (grey, corrugated, the microphone lead wound round it) down to the disconnect on
+    """Mask hose (grey, corrugated; MIC_CORD winds the microphone lead round it) down to the disconnect on
     the sternum; the teal breathing-gas hose (BGHA) from there across the jacket and the belly to
     the PEC's elbow; the anti-G hose from the left hip into the PEC; the helmet cable from the back
     of the helmet over the LPU and the left shoulder, down the left side to the PEC."""
@@ -829,8 +834,9 @@ def hose_parts(j, F, top, fb, pec):
     path = push_out(path, top, 0.0145)
     v, q = sweep(path, 0.0125, n=16, amp=0.0011, pitch=0.007, step=0.001)
     out.append(dict(name="Hose_Mask", v=v, q=q, mat="hose", bone=None))
-    v, q = sweep(helix(path[2:-2], 0.0157, 0.012, step=0.0008), 0.0021, n=6, step=0.0012)
-    out.append(dict(name="Hose_MicCord", v=v, q=q, mat="cable", bone=None))
+    if MIC_CORD:
+        v, q = sweep(helix(path[2:-2], 0.0157, 0.012, step=0.0008), 0.0021, n=6, step=0.0012)
+        out.append(dict(name="Hose_MicCord", v=v, q=q, mat="cable", bone=None))
     # BGHA: down and to the left across the jacket front and the belly into the PEC elbow
     R = F["thigh.L"]
     b0 = conn - ax * 0.024

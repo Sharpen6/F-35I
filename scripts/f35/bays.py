@@ -51,8 +51,10 @@ NOSE_WELL_Z = (-1.20, 0.04)        # cutter bottom (below the skin) / well roof
 NOSE_TEETH = 2                     # sawtooth teeth across each door's front edge
 NOSE_TOOTH = 0.10
 NOSE_AFT_RAKE = 0.05
-NOSE_DOOR_LEAN = 15.0              # open doors hang with their free edge this far inboard of vertical (deg)
-                                   # (head-on photo c22: the doors close in towards the bottom)
+NOSE_DOOR_LEAN = 25.0              # open doors hang with their free edge this far inboard of vertical (deg)
+                                   # (head-on photos c22, c29, c50: the doors close in towards the strut and
+                                   # stay inside the hinge width; 25 deg keeps the free edges 0.21 m off the
+                                   # centre line, clear of the trailing arm and tow lug at |x| <= 0.18)
 MAIN_WELL_S = (8.20, 10.72)        # the stowed wheel reaches s 8.34
 # (x, z) cross-section of the main-gear well (left side; mirrored for right).
 # Its lower edge runs outside the skin from the belly corner to under the
