@@ -9,7 +9,7 @@ import { F35I_CONFIG, loadF35IConfig, configWithRig } from './fdm/f35i_config.js
 
 const config = await loadF35IConfig('data/aircraft/');   // or configWithRig(F35I_CONFIG, visual.info)
 const fdm = new FlightModel(config, terrain);             // terrain: {heightAt, normalAt, surfaceAt}
-const { throttle, gearDown } = fdm.reset(terrain.spawns.telnof_36);  // match the input levers to these
+const { throttle, gearDown, apc } = fdm.reset(terrain.spawns.telnof_36);  // match the input levers to these
 // every frame:
 fdm.step(dt, input);                                      // input as in DESIGN.md (+ optional extras)
 visual.setPose(fdm.state.position, fdm.state.quaternion);
@@ -17,12 +17,12 @@ visual.setControls(fdm.state.controls);
 ```
 
 Tests: run `node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs` from the repo root. The
-`--only takeoff,landing` option runs a subset. The suite has 98 checks and takes about 3 s. Each check
+`--only takeoff,landing` option runs a subset. The suite has 104 checks and takes a few seconds. Each check
 prints its value, its band and the reason for the band. The exit code is 1 if any check fails.
 
 | file | contents |
 |---|---|
-| `FlightModel.js` | state, fixed sub-stepping, forces and moments, integration, spawn and trim, crash detection, published `state` |
+| `FlightModel.js` | state, fixed sub-stepping, forces and moments, integration, spawn and trim, the approach auto-throttle, crash detection, published `state` |
 | `f35i_config.js` | every number: mass and inertia, aero tables, engine, gear, FCS gains, limits; rig helpers |
 | `aero.js` | coefficient model: lift, drag and side force; moments with the control-free part and the control effectiveness kept separate (for the FCS inversion) |
 | `engine.js` | F135: N2 spool, afterburner light-off and fill, thrust lapse with density and Mach, fuel flow, flame-out |
@@ -232,7 +232,24 @@ and yaw are inverted together as a 2×2 system.
   (Using n directly left a bias of cos γ - cos θ, 0.014 g on a 13° approach: the path flattened and
   the jet bled speed on the back of the drag curve.)
 * On the approach the jet is on the back of the drag curve: with the path held and the throttle
-  fixed, a speed error grows (e-folding about 40 s). Fly the AoA (on-speed 13°) with the throttle.
+  fixed, a speed error grows, doubling about every 9 s (2 kt fast at 140 KIAS becomes 20 kt after
+  30 s; hands off, the jet slides to the front side of the curve, about 300 kt down the path). Fly
+  the AoA (on-speed 13°) with the throttle, or let the auto-throttle do it (below).
+
+**Auto-throttle (approach power compensator, `config.apc`)**
+
+* With `input.apc` and the gear down in the air, the throttle flies the on-speed AoA (13°) while the
+  FCS holds the flight path, as the real jet's approach mode does: a PI loop on the AoA error (0.08
+  throttle per degree, integral 1.2/s per rad) with damping on the acceleration along the path
+  (filtered over 0.4 s), from idle to MIL (never the burner), slewed at 0.3/s. It starts from the
+  throttle in use, so engaging it does not jump.
+* It gives way on the ground, with the gear moving, in the 50° AoA mode, below 30 m/s and with the
+  engine out; `state.apc` says when it flies. At touchdown it retards to idle until `input.apc` is
+  cleared (the input layer does that, with the lever following the engine meanwhile).
+* Hands off from the 10 km final (140 KIAS, 45 % fuel) it holds 13.0° within 0.01° and 140.4-140.7
+  KIAS down to the runway, touching down 243 m past the threshold at 3.6 m/s (no flare: hard, not a
+  crash). From 160 or 125 KIAS it settles on-speed within 40 s; a turn on the approach moves the
+  speed by about 1 kt.
 * Bank compensation 1/cos φ holds the height in turns up to 70° bank, which is 2.9 g. Beyond 70° it
   eases to 0 at knife edge, and cos φ applies inverted.
 * Rolling into a turn adds a 0.35 s lead on the bank rate, because the load factor lags the C\*
@@ -362,6 +379,7 @@ All the DESIGN.md fields are present.
 * `lastTouchdown`: `{time, sink, closing, ias, gs, pitch, alpha, wheel, bounces, hard}` of the last
   landing (its first contact; `sink`/`closing` the worst of its bounces).
 * `highAoA`: the 50° AoA mode is selected (`input.highAoA`).
+* `apc`: the auto-throttle is flying the throttle (`input.apc`, the gear down in the air).
 * `trimThrottle`.
 
 ## Interface notes (additions to DESIGN.md, all backward compatible)
@@ -369,8 +387,9 @@ All the DESIGN.md fields are present.
 **`reset(spawn)`**
 
 * Accepts the spawns.json entries. It also uses `throttle`, `gear` (bool or 0..1), `fuel` (fraction),
-  `fuelKg` and `flight_path_deg`.
-* It returns `{throttle, gearDown}`, the values it set up. The input layer can set its levers to them.
+  `fuelKg`, `flight_path_deg` and `apc` (start on the auto-throttle: the 10 km final).
+* It returns `{throttle, gearDown, apc}`, the values it set up (`apc` only in the air with the gear
+  down). The input layer can set its levers to them.
 * **On the ground.** The wheels are put on `heightAt(x, z)` and the struts are settled on the parking
   brake for 2.5 s of simulated time. The jet is then put back exactly on the spot.
 * **In the air.** `y` is the altitude MSL and `speed_ms` the true airspeed. The jet is trimmed for 1 g
@@ -379,6 +398,7 @@ All the DESIGN.md fields are present.
 **Optional inputs**
 
 * `highAoA` (bool) selects the 50° AoA limit.
+* `apc` (bool) selects the auto-throttle; `throttle` is then ignored while it flies.
 * `speedbrake` is a bool or 0..1.
 * `brakeLeft` and `brakeRight` (0..1) give differential braking.
 
@@ -410,6 +430,7 @@ All the DESIGN.md fields are present.
 | max A/B with the parking brake left on | 565 m roll (1.58 × 357 m); warning on the ground only (before: 0.98 ×, warning in the air) | the brake drags once the wheels slide |
 | full stick at 25° AoA, ~111 KIAS | 90° of bank in 3.05 s, peak 37°/s, β ≤ 6.2° (before: 3.38 s, 33°/s) | coordinated within the rudder authority |
 | hands-off final, 140 KCAS / 13° AoA, gear down, 45 % fuel | path within 0.02° of -3° for 10 s (before: 0.23°); +1.9 kt in 20 s | no 1 g bias in the hold |
+| the same on the auto-throttle, to the runway | 13.0° AoA within 0.01°, 140.4-140.7 KIAS; touchdown 243 m past the threshold, 3.6 m/s, then idle | a stable on-speed approach (fixed throttle: 300 kt in 100 s) |
 | 3° path into the runway without a flare, 146 KCAS | 3.8 m/s first contact, 1 bounce, logged hard, no crash (before: logged 0.54 m/s) | 3.05 m/s hard .. 4.6 m/s collapse |
 | climb, 300 KCAS, MIL, 1.6-3 km | 76.5 m/s (15,000 ft/min) | excess-power estimate 11,000-20,000 ft/min |
 | hands-off level, 350 KCAS, 5,000 m, 60 s | 0.3 m drift | < 30 m |
@@ -442,6 +463,7 @@ All the DESIGN.md fields are present.
 | stability feel (FCS off) | `aero.staticMargin`, `Cnbeta`, `Clbeta`, damping derivatives |
 | gear | `gear.main`/`nose` (static compression, stroke, damping), `brakeMu`, `steering.maxAngle`/`lateralAccel`, `retractTime`, `touchdownHardSink`/`touchdownCrashSink`, `bounceTime` |
 | engine response | `engine.spoolUp`/`spoolDown`, `abLightDelay`/`abRateUp`; fuel `tsfcDry`/`tsfcAb` |
+| auto-throttle | `apc.alpha` (on-speed AoA), `kp`/`ki`/`kd` (gains), `vdotTau`, `min`/`max` (throttle range), `rate` (slew) |
 | physics rate | `substepHz` (240; keep ≥ 200) |
 
 ## Known limitations
