@@ -11,6 +11,7 @@ Two builders for the sim's ground network, and the runtime that draws it:
 | `sim/js/world/roadsWorker.js` | module worker around roadMesh.js |
 | `sim/js/world/roadShaders.js` | road / rail / taxiway / apron shader: surfaces, markings, lighting, depth bias |
 | `sim/js/world/AirportLights.js` | runway, approach, PAPI, taxiway and floodlight sprites |
+| `sim/js/world/Traffic.js` | head and tail lights of cars on the main roads at night |
 
 Data: **© OpenStreetMap contributors, ODbL 1.0, via the Overture Maps Foundation** (release
 `2026-10-21.0`, themes `transportation` and `base/infrastructure`). Anyone who shares the data
@@ -160,7 +161,14 @@ simplified to 0.15 m.
   of the excess, in HDR (bright lights exceed 1 for bloom). PAPI white above its unit's angle,
   red below (2 white 2 red on 3 deg). Runway, approach and taxiway lights on from sun 8 deg
   (dimmer steps at night), floodlights from sunset, PAPI always.
-* URL parameters: `roads=0` (no roads, airfield surfaces or lights), `airportlights=0`.
+* **Traffic at night** (`Traffic.js`): cars on the lanes of motorways, trunk and primary roads
+  within 3.8 / 2.8 / 1.8 km (high / medium / low, at most 7000 / 3500 / 1200), right-hand
+  traffic, one sprite each with the lights' shader: warm white low beams seen from ahead (500 cd,
+  a 30 deg beam), red tail lights from behind (18 cd). Positions are a function of the clock
+  along each lane (rebuilding the set as the camera moves keeps the cars where they were). From
+  sunset to sunrise only: there are no car models by day.
+* URL parameters: `roads=0` (no roads, airfield surfaces or lights), `airportlights=0` (no
+  airfield lights, no traffic), `traffic=0`.
 * Shader samplers (the D3D11 limit is 16): the road program 5, 6 with the sun's shadow map
   (atmosphere transmittance LUT, the two sky-view LUTs, noise, overview colour), the lights 0.
 

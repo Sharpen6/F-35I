@@ -7,9 +7,9 @@
 // that at a grazing angle. So every ribbon quad (and every apron triangle) is cut along the grid
 // lines and the diagonals into convex pieces that each lie inside one terrain triangle, and every
 // piece takes that triangle's plane: the road surface is the terrain surface, to float precision,
-// at any distance and angle. A small depth bias in the shader (js/world/Roads.js) then decides who
-// is on top, with no z-fighting and no gaps. Where the terrain is one plane over several cells
-// (flattened airfields) a piece spans them all.
+// at any distance and angle. A small depth bias in the shader (js/world/roadShaders.js) then
+// decides who is on top, with no z-fighting and no gaps. Where the terrain is one plane over
+// several cells (flattened airfields) a piece spans up to 4 x 4 of them.
 //
 // Input: a road tile (sim/tools/world/ROADS.md: polylines in 0.1 m units from the tile's NW
 // corner, cross-section, flags, junctions), the airfield surfaces of the tile and the terrain

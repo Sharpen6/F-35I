@@ -187,7 +187,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
 | `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
-| `roads=0` / `airportlights=0` | no roads, railways and airfield surfaces / no airfield lights (see Roads) |
+| `roads=0` / `airportlights=0` / `traffic=0` | no roads, railways and airfield surfaces / no airfield lights / no night traffic (see Roads) |
 
 ## Files (the app shell)
 
@@ -220,8 +220,9 @@ by `tools/world/roads.py` and `airfields.py`) exactly on the terrain within 3.4 
 km (medium) or 1.5 km (low), with lane markings, kerbs, rails, taxiway lines and holding
 positions, street lights and floodlit aprons at night, fading into the imagery beyond. It owns
 `js/world/AirportLights.js`: runway edge, threshold, centreline and touchdown lights, approach
-lights with flashers, PAPI, blue taxiway lights and floodlight masts, switched by the sun.
-Without the data it draws nothing. Formats, layouts and rebuild: `tools/world/ROADS.md`.
+lights with flashers, PAPI, blue taxiway lights and floodlight masts, switched by the sun, and
+`js/world/Traffic.js`: the head and tail lights of cars on the main roads at night. Without the
+data it draws nothing. Formats, layouts and rebuild: `tools/world/ROADS.md`.
 
 ### How the shell runs
 

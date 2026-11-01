@@ -331,7 +331,6 @@ export class AirportLights {
   }
 
   update(f) {
-    if (!this._built) return;
     const env = this.env;
     const el = env.sunElevationDeg ?? 30;
     // runway / approach / taxiway lights from sun 8 deg (dusk, dawn, night), floods from sunset;

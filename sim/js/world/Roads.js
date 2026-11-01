@@ -12,14 +12,17 @@
 // per 1600 m chunk), shaded by class with markings (js/world/roadShaders.js) and faded into the
 // imagery before the terrain mesh coarsens (3.84 km): main roads, railways and airfields over
 // the quality's long range, residential streets, service roads and tracks over a shorter one.
-// The airfield lights are js/world/AirportLights.js, owned by this module (one hook in main.js).
+// The airfield lights are js/world/AirportLights.js and the cars' lights at night
+// js/world/Traffic.js, both owned by this module (one hook in main.js).
 //
-// URL parameters: roads=0 turns roads and airfield surfaces off, airportlights=0 the lights.
+// URL parameters: roads=0 turns roads and airfield surfaces off, airportlights=0 the lights (and
+// the traffic), traffic=0 the traffic.
 
 import * as THREE from 'three';
 import { HGRID, TILE_M, CORE_HALF, CHUNK_M, CHUNKS } from './roadMesh.js';
 import { ROAD_VERT, ROAD_FRAG, MAX_MASTS } from './roadShaders.js';
 import { AirportLights, skyIlluminance } from './AirportLights.js';
+import { Traffic } from './Traffic.js';
 
 const FAR_HALF = 204800;
 const LUX_TO_SCENE = 1 / 32000;          // scene irradiance unit (Environment SUN_ILLUMINANCE 4 = ~128 klux)
@@ -170,6 +173,7 @@ export class Roads {
     };
     this.materials = [this._makeMaterial(0), this._makeMaterial(1)];
     this.lights = params.get('airportlights') === '0' ? null : new AirportLights({ renderer, scene, camera, env, terrain, app, roads: this });
+    this.traffic = this.lights && this.enabled ? new Traffic({ roads: this, lights: this.lights, terrain, env }) : null;
 
     this._worker = null;
     if (this.enabled) this._load();
@@ -227,6 +231,7 @@ export class Roads {
     this.Q = QUALITY[this.quality];
     this._selFrame = -1e9;
     this.lights?.setQuality(q);
+    this.traffic?.setQuality(this.quality);
   }
 
   setTime(h, day) {
@@ -247,6 +252,7 @@ export class Roads {
     const Q = this.Q;
     for (let g = 0; g < 2; g++) this.materials[g].uniforms.uFade.value.set(Q.range[g] * (1 - Q.fade), Q.range[g]);
     this._updateLightUniforms(cam);
+    this.traffic?.update(cam);
 
     if (this._frame - this._selFrame > 20 || cam.distanceToSquared(this._lastSel) > 60 * 60) this._select(cam);
     this._pump();
@@ -472,6 +478,7 @@ export class Roads {
     for (const m of this.materials) m.dispose();
     this._noise.dispose();
     this._grey?.dispose();
+    this.traffic?.dispose();
     this.lights?.dispose();
   }
 }
