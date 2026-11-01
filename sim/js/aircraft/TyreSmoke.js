@@ -102,6 +102,7 @@ export class TyreSmoke {
     this.points.geometry.attributes.aInfo.needsUpdate = true;
     this.points.visible = false;
     this._wow = {};
+    this._last = -1e9;
     if (st && st.wheels) for (const w of st.wheels) this._wow[w.name] = !!w.wow;
   }
 

@@ -50,8 +50,17 @@ export class AircraftFX {
     this.smoke = this.enabled.smoke && ok ? new TyreSmoke(this.group) : null;
     this.pool = this.enabled.pool && ok && ctx.terrain ? new LandingPool(this.group, ctx.terrain) : null;
     this.quality = 'high';
+    this.on = true;
     this._fresh = true;                 // reset the touchdown detector on the next update
     this._shown = true;
+  }
+
+  /** All the effects on or off at run time (off: nothing drawn or updated). */
+  setEnabled(on) {
+    this.on = !!on;
+    this.group.visible = this.on;
+    if (!this.on && this.vapor) this.vapor.reset();
+    this._fresh = true;
   }
 
   setQuality(q) {
@@ -70,7 +79,7 @@ export class AircraftFX {
   update(f) {
     const app = this.ctx.app, v = this.ctx.visual;
     const st = app && app.fdm && app.fdm.state;
-    if (!st || !v || !v.object3d) return;
+    if (!this.on || !st || !v || !v.object3d) return;
     if (this._fresh) {
       if (this.smoke) this.smoke.reset(st);
       this._fresh = false;

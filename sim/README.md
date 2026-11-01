@@ -187,6 +187,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
 | `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
+| `acfx=0` | none of the aircraft's effects (vapour, contrail, tyre smoke, landing-light pool); `vapour=0`, `tyresmoke=0`, `landingpool=0` one each |
 
 ## Files (the app shell)
 
@@ -245,6 +246,8 @@ The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terr
 node sim/tests/e2e.mjs   [--port 8110] [--out DIR] [--size 960x540] [--quality low|medium|high] [--root SIM_FOLDER]
 node sim/tests/smoke.mjs [--mode stubs|real|both] [--port 8103] [--out DIR] [--root SIM_FOLDER]
 node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs        (flight model, no browser)
+node --import ./sim/tests/node-three.mjs sim/tests/aircraft_fx.test.mjs  (lights, burner, vapour models)
+node sim/tests/aircraft_scenes.mjs [--port 8150] [--only park_,ab_] [--shots chase,side]   (the jet's looks)
 ```
 
 Both browser tests start `serve.py` on their port and open the app in headless Chromium
@@ -307,6 +310,18 @@ and radians unless a name says otherwise (`_kt`, `_deg`, `Ft`).
 Example (Playwright, after `waitForFunction(() => window.__sim?.ready)`):
 `page.evaluate(() => { __sim.start('telnof_36', {time: 12}); __sim.autopilot('takeoff'); return __sim.fly({until: 'climb'}); })`,
 then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
+
+## The jet up close
+
+`js/aircraft` (see its README): the skin calibrated against photos of IAF F-35Is (satin, no clear
+coat: the exported Cycles values read as chrome plastic in three.js), a heat-stained nozzle whose
+petals open at idle and in burner, white wells, rubber tyres; photometric exterior lights (nav
+lights in their sectors, alternating anti-collision flashes, formation strips, a landing light
+that lights the runway at night, glare only in the dark); a burner that is short and pale by day
+and long with attached shock diamonds at night, never a white ball; and, as the graphics module
+`AircraftFX`, vortex trails and vapour sheets in hard turns, the vapour cone near Mach 1 low over
+the sea, a contrail above ~9 km and tyre smoke at touchdown. `sim/tools/aircraft` can bake ambient
+occlusion into the export (ORM texture + per vertex); the app uses it when the data has it.
 
 ## Notes and small deviations from DESIGN.md
 

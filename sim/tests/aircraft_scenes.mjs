@@ -111,6 +111,7 @@ const PARK = (time, tag) => ({
     { name: 'rear34', cam: [35, 10, 22, 40] },
     { name: 'side', cam: [92, 2, 24, 40] },
     { name: 'chase', cam: 'chase' },
+    { name: 'tower', cam: 'tower' },
     // the landing light's pool on the ground ahead (gear down, lights on)
     ...(tag === 'night' ? [{ name: 'pool', cam: [-160, 16, 34, 55] }] : []),
   ],
@@ -135,6 +136,7 @@ const SCENES = [
     setup: `async () => { window.__sim.start('tlv_3000', { time: 12.5, camera: 'chase' }); window.__sim.step(120); }`,
     shots: [
       { name: 'chase', cam: 'chase' },
+      { name: 'flyby', cam: 'flyby' },
       { name: 'below34', cam: [-130, -25, 24, 40] },
       { name: 'side', cam: [95, 6, 26, 40] },
       { name: 'above', cam: [150, 35, 26, 40] },
@@ -145,6 +147,7 @@ const SCENES = [
     setup: `async () => { window.__sim.start('jerusalem_sunset', { camera: 'chase' }); window.__sim.step(120); }`,
     shots: [
       { name: 'chase', cam: 'chase' },
+      { name: 'flyby', cam: 'flyby' },
       { name: 'side', cam: [95, 6, 26, 40] },
       { name: 'front34', cam: [-140, 8, 24, 40] },
     ],

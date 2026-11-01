@@ -191,6 +191,7 @@ function coneGeometry() {
 }
 
 const _p = new THREE.Vector3();
+const _cam = new THREE.Vector3();
 
 export class Vapor {
   /**
@@ -246,6 +247,8 @@ export class Vapor {
   reset() {
     for (const t of [...this.trails, this.contrail]) t.r.clear();
     for (const k in this.amount) this.amount[k] = 0;
+    this.sheets.visible = false;
+    for (const m of this.cone) m.visible = false;
     this._t = null;
   }
 
@@ -282,7 +285,7 @@ export class Vapor {
     this.contrail.r.o.fadeIn = 40 / V;                     // ~40 m of clear exhaust first
     this.contrail.r.push(_p, t, A.contrail > 0.01 ? A.contrail : 0);
     if (!draw || !camera) return;
-    const cam = camera.getWorldPosition(new THREE.Vector3());
+    const cam = camera.getWorldPosition(_cam);
     for (const tr of this.trails) tr.r.build(t, cam);
     this.contrail.r.build(t, cam);
     for (const m of [this.sheetMat, ...this.coneMat]) m.uniforms.uTime.value = t % 1000;
