@@ -40,8 +40,9 @@ Options: `--atlas N` skin atlas size (default 4096; 1024 for a quick test), `--p
    distance) or a general **rigid motion** (quaternion + translation per sample: gear links,
    oleos, pedals, the pilot's head). Samples are thinned while linear interpolation stays within
    1.5 mm everywhere on the part. When all of a node's controls turn it about one line, the node
-   gets one hinge whose angles add and are clamped like the Blender driver (stabilator, flaperon,
-   rudder, LEF). Three pseudo-controls `strut_nose / strut_left / strut_right` are added to the
+   gets one hinge whose angles add and, when more than one control moves it, are clamped like
+   the Blender driver (stabilator, flaperon, rudder); single-control hinges (doors, canopy, LEF)
+   carry no limits. Three pseudo-controls `strut_nose / strut_left / strut_right` are added to the
    oleo drivers so the app can compress the shock struts.
 3. **Reference data** (`info.py`): eye point (between the seated pilot's corneas, from the pilot
    skeleton), gear contacts, nose-wheel steering axis, nozzle, light positions and directions,
@@ -96,7 +97,8 @@ controls    name -> {default, min, max, desc, unit, x: [sample positions, ascend
             head_yaw, head_pitch, head_tilt (rad; + = look left / up / tilt), strut_nose,
             strut_left, strut_right (m of compression from the modelled parked pose)
 nodes       name -> {rest: [x,y,z] (model frame), controls: {...}, hinge?: {pivot, axis, min?, max?}}
-            with a node hinge:      controls[c] = {a: [angle per sample]}  (angles add, then clamp)
+            with a node hinge:      controls[c] = {a: [angle per sample]}  (angles add, then clamp
+                                    to min / max, written only for nodes with 2+ controls)
             otherwise per control:  {pivot, axis, a: [...]}                 hinge of its own
                                     {q: [[x,y,z,w]...], t: [[x,y,z]...]}    rigid motion per sample
                                     {spin: {pivot, axis, rate}}             angle = rate * value

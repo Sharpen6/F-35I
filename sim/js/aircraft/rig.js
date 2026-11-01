@@ -89,10 +89,16 @@ export class RigPlayer {
       const rest = v3(nd.rest || [object.position.x, object.position.y, object.position.z]);
       const entry = { name, object, rest, hinge: null, parts: [] };
       if (nd.hinge) {
+        const parts = Object.entries(nd.controls).map(([c, d]) => ({ control: c, xs: rig.controls[c].x, a: d.a }));
+        // The clamp is the Blender drivers' limit on a MIXED command (stick + pedals + flaps). A node
+        // moved by one control needs none, and its limits can be in another sense than its samples:
+        // the main and nose gear doors rest open (gear down) and their angles run negative to shut,
+        // so clamping to [0, max] held them open with the gear up.
+        const mixed = parts.length > 1;
         entry.hinge = {
           pivot: v3(nd.hinge.pivot), axis: v3(nd.hinge.axis).normalize(),
-          min: nd.hinge.min ?? -Infinity, max: nd.hinge.max ?? Infinity,
-          parts: Object.entries(nd.controls).map(([c, d]) => ({ control: c, xs: rig.controls[c].x, a: d.a })),
+          min: mixed ? nd.hinge.min ?? -Infinity : -Infinity, max: mixed ? nd.hinge.max ?? Infinity : Infinity,
+          parts,
         };
       } else {
         for (const [c, d] of Object.entries(nd.controls)) {

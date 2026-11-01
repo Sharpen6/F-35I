@@ -359,7 +359,10 @@ def _nodes_to_json(per_node, groups, limits):
                 sign = -1.0                   # angles in the driver's sense (bone Y axis)
             axis = ax0 * sign
             hj = {"pivot": rnd(C @ pv0, 6), "axis": rnd(C @ axis, 6)}
-            if lim is not None:
+            # the limits clamp a MIXED command (stick + pedals + flaps), as the drivers do; a node
+            # moved by one control needs none, and its limits may be in another sense than its
+            # samples (the gear doors rest open and their angles run negative to shut)
+            if lim is not None and len(ctrls) > 1:
                 hj["min"] = rnd(lim[0] * DEG, 6)
                 hj["max"] = rnd(lim[1] * DEG, 6)
             node["hinge"] = hj
