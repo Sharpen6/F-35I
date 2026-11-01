@@ -25,16 +25,18 @@ S_EXIT = 14.04          # outer flap trailing edges (chevron roots)
 R_ROOT = 0.58           # outer flaps at the root (shroud skin r 0.605)
 R_EXIT = 0.47           # outer flaps at the exit
 R_EXIT_OPEN = 0.56      # ... with the afterburner lit
-CHEVRON = 0.025         # chevron depth of the outer flap tips
+CHEVRON = 0.085         # chevron depth of the outer flap tips: 15 deep V tips, 7-11 cm in the
+                        # photos (ref_06, ref_07, c26, c27)
 T_FLAP = 0.006          # flap plate thickness
-SHINGLE = 0.006         # each outer flap rises this much across its width: it laps over the next
-CROWN = 0.014           # outer flaps bow outward across their width: rounded ribs with grooves
-                        # between them, as in the rear-quarter photos (c26, c27), not flat facets
+SHINGLE = 0.012         # each outer flap rises this much across its width (ramped in from the root,
+                        # under the shroud teeth): it laps over the next with a dark step
+CROWN = 0.004           # outer flaps: nearly flat plates, each with its own tone (photos ref_06,
+                        # ref_07, c27); a stronger crown read as one smooth can
 WIDEN = 1.05            # flap width / sector width (overlap)
 CONV = (13.20, 0.535)                   # convergent flaps: root (station, radius)
 THROAT = (13.62, 0.405)                 # convergent / divergent hinge line (dry power)
 DIV_EXIT = (S_EXIT + 0.025, 0.455)      # divergent flap tips: just past the outer flaps
-DIV_CHEVRON = 0.03
+DIV_CHEVRON = 0.05
 AB_THROAT = 1.20        # afterburner: convergent / divergent flaps open by this factor
 N_S, N_W = 12, 10       # stations along / points across a flap
 
@@ -85,9 +87,11 @@ def _plate(verts, faces, grid_o, grid_i):
         faces.append((o(ns - 1, j), o(ns - 1, j + 1), n(ns - 1, j + 1), n(ns - 1, j)))
 
 
-def _flaps(verts, faces, s0, s1, r_fn, chevron, phase, thick, shingle, widen, crown=0.0):
-    """PETALS flaps around the axis, each lapping over the next; `crown` bows them outward."""
+def _flaps(verts, faces, s0, s1, r_fn, chevron, phase, thick, shingle, widen, crown=0.0, ids=None):
+    """PETALS flaps around the axis, each lapping over the next; `crown` bows them outward.
+    ids: list extended with the flap number of every vertex added."""
     for k in range(PETALS):
+        n0 = len(verts)
         ac = math.pi / 2 + 2 * math.pi * (k + phase) / PETALS
         hw = math.pi / PETALS * widen
         nrm = (math.cos(ac), math.sin(ac))
@@ -103,13 +107,15 @@ def _flaps(verts, faces, s0, s1, r_fn, chevron, phase, thick, shingle, widen, cr
                 a0, a1 = ac - hw, ac + hw
                 x = r * math.cos(a0) + (r * math.cos(a1) - r * math.cos(a0)) * v
                 z = r * math.sin(a0) + (r * math.sin(a1) - r * math.sin(a0)) * v
-                lift = shingle * v + crown * math.sin(math.pi * v) * min(1.0, 4.0 * u)
+                lift = (shingle * v + crown * math.sin(math.pi * v)) * min(1.0, 4.0 * u)
                 x, z = x + nrm[0] * lift, z + nrm[1] * lift
                 ro.append(P(s, x, NOZ_Z + z))
                 ri.append(P(s, x - nrm[0] * thick, NOZ_Z + z - nrm[1] * thick))
             go.append(ro)
             gi.append(ri)
         _plate(verts, faces, go, gi)
+        if ids is not None:
+            ids.extend([k] * (len(verts) - n0))
 
 
 def _ring(s, r, n):
@@ -153,7 +159,8 @@ def build(ctx):
         mats.extend([mat] * (len(faces) - len(mats)))
         parts.extend([part] * (len(verts) - len(parts)))
     # dark outer flaps
-    _flaps(verts, faces, S_ROOT, S_EXIT, r_outer, CHEVRON, 0.0, T_FLAP, SHINGLE, WIDEN, CROWN)
+    flap_of = []
+    _flaps(verts, faces, S_ROOT, S_EXIT, r_outer, CHEVRON, 0.0, T_FLAP, SHINGLE, WIDEN, CROWN, ids=flap_of)
     tag(OUTER, 0)
     # convergent flaps (sooty), augmentor to throat
     _flaps(verts, faces, CONV[0], THROAT[0], r_convergent, 0.0, 0.5, 0.006, 0.003, 1.04)
@@ -177,6 +184,10 @@ def build(ctx):
     bm.to_mesh(me)
     bm.free()
     me.set_sharp_from_angle(angle=math.radians(20))
+    # each outer flap its own tone (0..1, golden-ratio steps: neighbours always differ)
+    tone = me.attributes.new("flap_tone", 'FLOAT', 'POINT')
+    vals = [((k * 0.618034) % 1.0) for k in flap_of] + [0.5] * (len(me.vertices) - len(flap_of))
+    tone.data.foreach_set("value", vals)
     # shape key: afterburner (throat and exit open)
     noz.shape_key_add(name="Basis")
     sk = noz.shape_key_add(name="AB_Open")

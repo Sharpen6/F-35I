@@ -419,6 +419,31 @@ def _make(name):
             if k in b.inputs:
                 b.inputs[k].default_value = v
         return mat
+    if name == "nozzle":
+        # outer flaps: reddish-taupe gunmetal (ref_06 of 901, c26), each flap a slightly different
+        # tone (attribute 'flap_tone' 0..1 -> x0.86..1.14; 0 where the attribute is missing)
+        color = (0.20, 0.155, 0.15)
+        mat = principled("F35_nozzle", color, rough=0.46, metal=0.60)
+        nt = mat.node_tree
+        b = _bsdf(mat)
+        at = nt.nodes.new("ShaderNodeAttribute")
+        at.attribute_type = 'GEOMETRY'
+        at.attribute_name = "flap_tone"
+        mr = nt.nodes.new("ShaderNodeMapRange")
+        mr.inputs["To Min"].default_value = 0.86
+        mr.inputs["To Max"].default_value = 1.14
+        nt.links.new(at.outputs["Fac"], mr.inputs["Value"])
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = 'RGBA'
+        mix.blend_type = 'MULTIPLY'
+        mix.inputs[0].default_value = 1.0
+        mix.inputs[6].default_value = (*color, 1.0)
+        comb = nt.nodes.new("ShaderNodeCombineColor")
+        for i in range(3):
+            nt.links.new(mr.outputs["Result"], comb.inputs[i])
+        nt.links.new(comb.outputs["Color"], mix.inputs[7])
+        nt.links.new(mix.outputs[2], b.inputs["Base Color"])
+        return mat
     if name == "nozzle_ceramic":
         return sooty("F35_nozzle_ceramic", (0.56, 0.53, 0.48), (0.24, 0.21, 0.18), rough=0.7)
     table = {
@@ -441,8 +466,6 @@ def _make(name):
         "intake_dark": dict(color=(0.03, 0.03, 0.035), rough=0.7),
         # outer flaps: dark gunmetal; divergent flaps: light ceramic coating
         # (photos of the exit: a whitish-tan serrated ring inside the dark flaps)
-        # outer flaps: reddish-taupe gunmetal, darker and warmer than the skin (ref_06 of 901, c26)
-        "nozzle":    dict(color=(0.20, 0.155, 0.15), rough=0.46, metal=0.60),
         "nozzle_in": dict(color=(0.07, 0.065, 0.06), rough=0.6, metal=0.3),
         "bay":       dict(color=(0.78, 0.79, 0.78), rough=0.55),
         "gear":      dict(color=(0.82, 0.83, 0.82), rough=0.4, metal=0.1),
