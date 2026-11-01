@@ -74,7 +74,8 @@ attribute vec4 iWall;         // rgb (sRGB), style / 255
 attribute vec4 iRoof;         // rgb (sRGB), roof style / 255
 attribute vec4 iInfo;         // floor height (0.05 m), bay (0.05 m), seed, floors
 uniform uvec2 uMask;          // chunks of this tile drawn in full detail (bit per chunk)
-uniform vec3 uVis;            // visibility distance per metre of size, growth band (fraction), extra wall depth per m
+uniform vec4 uVis;            // visibility distance per metre of size, growth band (fraction), extra wall depth per m,
+                              // the streaming distance (m)
 #ifndef DEPTH_PASS
   varying vec4 vWall;
   varying vec4 vRoof;
@@ -94,6 +95,8 @@ void main() {
   float d = length(mid);
   float rv = vsize * uVis.x;
   float grow = clamp((rv - d) / (uVis.y * rv), 0.0, 1.0);
+  // near the streaming distance everything grows in too: a tile that loads late never pops
+  grow *= clamp((uVis.w - d) / (0.1 * uVis.w), 0.0, 1.0);
   grow = grow * grow * (3.0 - 2.0 * grow);
   // shape: 0 flat (the two "slopes" are the flat roof), 1 gabled, 2 hipped, 3 pyramidal
   float rl = shape < 1.5 ? ha : (shape < 2.5 ? max(ha - hb, 0.0) : 0.0);
@@ -134,7 +137,7 @@ attribute vec4 aInf;          // floor height (0.05 m), bay (0.05 m), seed, floo
 #endif
 ${EMIT}
 
-uniform vec3 uVis;            // .z: extra wall depth per metre beyond 3.5 km (as the boxes)
+uniform vec4 uVis;            // .z: extra wall depth per metre beyond 3.5 km (as the boxes)
 
 void main() {
   vec3 n = normalize(aNrm.xyz);

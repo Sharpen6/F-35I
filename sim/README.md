@@ -331,9 +331,9 @@ neighbours and region (`sim/tools/world/README.md`).
 
 | quality | full detail within | boxes up to | full-detail chunks |
 | --- | --- | --- | --- |
-| low | 1.2 km | 15 km (a house to ~2 km) | 24 |
-| medium | 2 km | 21 km (a house to ~3 km) | 44 |
-| high | 3 km (towers further) | 28 km (a house to ~4.5 km) | 72 |
+| low | 1.2 km | 15 km (a house to ~2.3 km) | 24 |
+| medium | 2 km | 21 km (a house to ~3.5 km) | 44 |
+| high | 3 km (towers further) | 28 km (a house to ~5 km) | 72 |
 
 ## Notes and small deviations from DESIGN.md
 

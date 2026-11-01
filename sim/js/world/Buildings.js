@@ -6,7 +6,8 @@
 //   boxes   every building of a tile within `far` is one instance of a 10-vertex box with a
 //           ridge (one draw call per tile). Instances are sorted by visibility size, so a far
 //           tile draws only the first n (those big enough to be seen from there); each one grows
-//           out of the ground over the last quarter of its distance (size x visK), so nothing pops.
+//           out of the ground over the last quarter of its distance (size x visK) and over the
+//           last tenth of the streaming distance `far`, so nothing pops (not even a late tile).
 //   chunks  800 m chunks within `near` (further for chunks with tall buildings) get the full
 //           geometry: walls along the real footprint, parapets, roof houses, pitched roofs, domes,
 //           vaults. The tile's boxes of those chunks are masked in the vertex shader.
@@ -119,7 +120,7 @@ export class Buildings {
     this._shared = {
       uLight: { value: new THREE.Vector4() },
       uAlbedo: { value: new THREE.Vector3(0.78, terrain?.albedoGain ?? 0.7, 1) },
-      uVis: { value: new THREE.Vector3(this.Q.visK, 0.25, 0.0012) },
+      uVis: { value: new THREE.Vector4(this.Q.visK, 0.25, 0.0012, this.Q.far) },
       uDebug: { value: params.get('buildingsDebug') === '1' ? 1 : 0 },
     };
     this._template = boxTemplate();
@@ -274,6 +275,7 @@ export class Buildings {
     this.quality = q;
     this.Q = QUALITY[q];
     this._shared.uVis.value.x = this.Q.visK;
+    this._shared.uVis.value.w = this.Q.far;
   }
 
   reset() {
