@@ -18,6 +18,7 @@ Options:
     --blend PATH        skip the build: use an already built .blend (as saved by build_f35i.py)
     --save-blend PATH   also save the export scene (debugging)
     --work DIR          scratch folder for the baked images (default: a temp folder)
+    --no-ao             no ambient occlusion (ORM R stays 1, no COLOR_0): the export of before
 """
 import json
 import os
@@ -49,13 +50,16 @@ def parse(argv):
     else:
         argv = argv[1:]
     opt = {"out": os.path.join(common.REPO, "sim", "data", "aircraft"), "atlas": 4096, "pilot_tris": 60000,
-           "blend": None, "save_blend": None, "work": None}
+           "blend": None, "save_blend": None, "work": None, "ao": True}
     i = 0
     while i < len(argv):
         k = argv[i]
         if k in ("--out", "--blend", "--save-blend", "--work"):
             opt[k[2:].replace("-", "_")] = argv[i + 1]
             i += 2
+        elif k == "--no-ao":
+            opt["ao"] = False
+            i += 1
         elif k in ("--atlas", "--pilot-tris"):
             opt[k[2:].replace("-", "_")] = int(argv[i + 1])
             i += 2
@@ -91,6 +95,7 @@ def export(opt):
     import bake as BAKE
     import gltf_materials as GM
     import glb as GLB
+    import vertex_ao as VAO
     from f35 import gear as G
 
     t0 = time.time()
@@ -128,15 +133,27 @@ def export(opt):
     # ------------------------------------------------------------------------ skin bake
     log(f"baking the skin atlases ({opt['atlas']} px)")
     files = BAKE.bake_skin(all_copies, os.path.join(work, "bake"), size=opt["atlas"], nrm_size=opt["atlas"],
-                           orm_size=max(512, opt["atlas"] // 2))
+                           orm_size=max(512, opt["atlas"] // 2), ao_spp=8 if opt["ao"] else 0)
     log("  baked:", files)
+    ao_orm = bool(files.get("A", {}).get("ao") and files.get("B", {}).get("ao"))
     # ------------------------------------------------------------------------ materials, join
     GM.convert_all(all_copies)
+    # per-vertex occlusion of the parts outside the atlases (gear, wells, bays, cockpit, pilot ...)
+    ao_vertex = 0
+    if opt["ao"]:
+        log("vertex occlusion (parts outside the skin atlases)")
+        try:
+            ao_vertex = VAO.bake_vertex_ao(all_copies)
+        except Exception as e:                     # the export goes on without it
+            log(f"WARNING vertex occlusion failed: {e}")
+            ao_vertex = 0
     node_objs = []
     for name, lst in copies.items():
         if not lst:
             continue
         o = prepare.join(lst, name, coll)
+        if ao_vertex:
+            VAO.set_active_color(o.data)           # (join keeps the first object's active colour)
         node_objs.append(o)
     log(f"{len(node_objs)} nodes:", ", ".join(sorted(o.name for o in node_objs)))
     # only the export collection is exported
@@ -152,14 +169,31 @@ def export(opt):
     glb_path = os.path.join(opt["out"], "f35i.glb")
     tmp_glb = os.path.join(work, "f35i.glb")
     log("writing glTF")
-    bpy.ops.export_scene.gltf(
+    gltf_kw = dict(
         filepath=tmp_glb, export_format='GLB', use_selection=True, export_yup=True, export_apply=False,
         export_texcoords=True, export_normals=True, export_tangents=True, export_materials='EXPORT',
         export_image_format='AUTO', export_jpeg_quality=92, export_image_quality=92,
-        export_vertex_color='NONE', export_animations=False, export_skins=False, export_morph=True,
+        export_animations=False, export_skins=False, export_morph=True,
         export_morph_normal=True, export_try_sparse_sk=False, export_lights=False, export_cameras=False,
         export_extras=False, export_attributes=False)
+    # the vertex occlusion goes out as COLOR_0: the active colour attribute ("AO", vertex_ao.py)
+    try:
+        bpy.ops.export_scene.gltf(**gltf_kw, export_vertex_color='ACTIVE' if ao_vertex else 'NONE')
+    except TypeError as e:
+        if not ao_vertex:
+            raise
+        log(f"WARNING the glTF exporter refused export_vertex_color='ACTIVE' ({e}): no vertex occlusion")
+        ao_vertex = 0
+        bpy.ops.export_scene.gltf(**gltf_kw, export_vertex_color='NONE')
     doc, binc = GLB.read(tmp_glb)
+    prims = [p for m in doc.get("meshes", []) for p in m.get("primitives", [])]
+    color0 = sum(1 for p in prims if "COLOR_0" in p.get("attributes", {}))
+    occl = sum(1 for m in doc.get("materials", []) if "occlusionTexture" in m)
+    log(f"  occlusion: ORM {'yes' if ao_orm else 'no'} ({occl} materials with occlusionTexture), "
+        f"COLOR_0 on {color0} of {len(prims)} primitives")
+    if ao_vertex and not color0:
+        log("WARNING no COLOR_0 in the glb: the vertex occlusion did not export")
+        ao_vertex = 0
     patch_doc(doc)
     GLB.write(glb_path, doc, binc)
     st = GLB.stats(doc)
@@ -205,6 +239,15 @@ def export(opt):
             "all": mats,
         },
         "info": ref,
+        "ao": {
+            "orm": ao_orm,
+            "vertex": bool(ao_vertex),
+            "occlusionTexture": occl > 0,
+            "distance_m": {"orm": BAKE.AO_DISTANCE, "vertex": VAO.DISTANCE},
+            "note": "ambient occlusion, applied to ambient light only. orm: the skin atlases' ORM R "
+                    "(the airframe on itself, doors and gear left out); vertex: COLOR_0.r of every "
+                    "other part (rest pose, gear down; not a colour)",
+        },
         "stats": {"triangles": st["triangles"], "nodes": st["nodes"], "primitives": st["primitives"],
                   "glb_mb": round(size_mb, 2), "seconds": round(time.time() - t0, 1)},
     }

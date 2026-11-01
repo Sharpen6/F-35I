@@ -11,10 +11,17 @@ that shader into images:
                        plus the inlet duct lining and the nozzle (own material, no clear coat)
 
     <atlas>_base.jpg   base colour (sRGB)                    EMIT pass of the Base Color input
-    <atlas>_orm.png    G = roughness, B = metallic (R = 1)    EMIT passes of those inputs
+    <atlas>_orm.png    R = ambient occlusion, G = roughness, B = metallic
+                                                           AO node / EMIT passes of those inputs
     <atlas>_nrm.png    tangent-space normals: panel-line grooves and fastener heads (NORMAL pass)
 
 The colour passes use Emission rewiring, so what is baked is exactly the BSDF input (no lighting).
+The occlusion pass (an Ambient Occlusion node into the Emission) is the airframe's occlusion of
+itself within AO_DISTANCE: wing roots, intakes, fins, the fuselage between the tails. The doors are
+moved out of the way for it (closed in flight, they must not shade the skin beside them) and the
+gear is not there at all (in its wells in flight); the image material wires R into the glTF
+exporter's "glTF Material Output" Occlusion socket, so the glb carries an occlusionTexture that
+shares the ORM image. With ao_spp=0 R stays 1, as before.
 """
 import math
 import os
@@ -22,12 +29,16 @@ import time
 
 import bpy
 import numpy as np
+from mathutils import Vector
 
 from common import log
 
 SKIN = "F35_Skin_RAM"
 MISC = {"F35_intake": "Bake_Intake", "F35_nozzle": "Bake_Nozzle", "F35_nozzle_ceramic": "Bake_NozzleCeramic"}
 ATLAS_B_OBJECTS = ("Wing_", "Stabilator_", "Fin_", "Flaperon_", "LEF_", "Rudder_")
+AO_DISTANCE = 0.8              # m: how far the skin's occlusion looks
+AO_RAYS = 16                   # rays per shader evaluation of the AO node (x the bake samples)
+DOOR_SHIFT = 1000.0            # m: doors moved away from the airframe for the occlusion pass
 
 
 def atlas_of(src_name):
@@ -74,8 +85,9 @@ class Atlas:
         self.key = key
         self.size = size
         self.img = {}
+        self.ao_baked = False
         for p, s, cs in (("base", size, 'sRGB'), ("rough", orm_size, 'Non-Color'), ("metal", orm_size, 'Non-Color'),
-                         ("nrm", nrm_size, 'Non-Color')):
+                         ("nrm", nrm_size, 'Non-Color'), ("ao", orm_size, 'Non-Color')):
             name = f"F35_Atlas{key}_{p}"
             old = bpy.data.images.get(name)
             if old is not None:
@@ -165,6 +177,41 @@ def _rewire_emit(mat, input_name):
     return (mat, old)
 
 
+def _rewire_ao(mat, distance, rays):
+    """Material output <- Emission(Ambient Occlusion node's AO: 1 open .. 0 enclosed). Undo record."""
+    nt = mat.node_tree
+    out = _out(mat)
+    old = out.inputs["Surface"].links[0].from_socket if out.inputs["Surface"].is_linked else None
+    ao = nt.nodes.new("ShaderNodeAmbientOcclusion")
+    ao["bake_tmp"] = 1
+    ao.samples = rays
+    ao.inside = False
+    ao.only_local = False
+    ao.inputs["Distance"].default_value = distance
+    em = nt.nodes.new("ShaderNodeEmission")
+    em["bake_tmp"] = 1
+    em.inputs["Strength"].default_value = 1.0
+    nt.links.new(ao.outputs["AO"], em.inputs["Color"])
+    nt.links.new(em.outputs[0], out.inputs["Surface"])
+    return (mat, old)
+
+
+def _is_door(o):
+    return "Door" in str(o.get("node", "")) or "Door" in str(o.get("src", ""))
+
+
+def _fill(img, value):
+    n = img.size[0] * img.size[1] * 4
+    img.pixels.foreach_set(np.full(n, value, np.float32))
+
+
+def _blur3(a):
+    """3 x 3 box blur (the occlusion's sampling noise), edges clamped."""
+    p = np.pad(a, 1, mode='edge')
+    return (p[:-2, :-2] + p[:-2, 1:-1] + p[:-2, 2:] + p[1:-1, :-2] + p[1:-1, 1:-1] + p[1:-1, 2:] +
+            p[2:, :-2] + p[2:, 1:-1] + p[2:, 2:]) / 9.0
+
+
 def _restore(rec):
     mat, old = rec
     nt = mat.node_tree
@@ -195,7 +242,7 @@ def _clear_target(mat):
         mat.node_tree.nodes.remove(n)
 
 
-def _bake(objs, kind, samples, margin):
+def _bake(objs, kind, samples, margin, clear=True):
     sc = bpy.context.scene
     sc.cycles.samples = samples
     vl = bpy.context.view_layer
@@ -204,7 +251,7 @@ def _bake(objs, kind, samples, margin):
     for o in objs:
         o.select_set(True)
     vl.objects.active = objs[0]
-    kw = dict(type=kind, margin=margin, margin_type='EXTEND', use_clear=True, target='IMAGE_TEXTURES')
+    kw = dict(type=kind, margin=margin, margin_type='EXTEND', use_clear=clear, target='IMAGE_TEXTURES')
     if kind == 'NORMAL':
         kw.update(normal_space='TANGENT', normal_r='POS_X', normal_g='POS_Y', normal_b='POS_Z')
     with bpy.context.temp_override(active_object=objs[0], object=objs[0], selected_objects=objs,
@@ -212,9 +259,10 @@ def _bake(objs, kind, samples, margin):
         bpy.ops.object.bake(**kw)
 
 
-def _make_proxy(targets):
+def _make_proxy(targets, shift=None):
     """A temporary object holding copies of all bake targets in world space (they share the atlas
     UVs, so baking it fills the same texels).  Every other object is hidden from render.
+    shift(o) -> (dx, dy, dz) or None moves a target's copy (the doors, for the occlusion pass).
     Returns (proxy, objects hidden)."""
     sc = bpy.context.scene
     dups = []
@@ -222,7 +270,12 @@ def _make_proxy(targets):
         d = o.copy()
         d.data = o.data.copy()
         sc.collection.objects.link(d)
+        off = shift(o) if shift else None
+        if off:
+            d.location = d.location + Vector(off)
         dups.append(d)
+    if shift:
+        bpy.context.view_layer.update()     # the moved copies' matrices, for the join
     proxy = dups[0]                         # join into a copy: it carries the UV map and attributes
     proxy.name = "BakeProxy"
     with bpy.context.temp_override(active_object=proxy, object=proxy, selected_objects=dups,
@@ -256,9 +309,10 @@ def _mute_fine_bump(mat):
     return out
 
 
-def bake_skin(copies, outdir, size=4096, nrm_size=4096, orm_size=2048, samples=4):
+def bake_skin(copies, outdir, size=4096, nrm_size=4096, orm_size=2048, samples=4, ao_spp=8):
     """copies: all export copies (objects).  Bakes, saves the images in outdir and swaps the skin,
-    intake and nozzle materials for image-based ones.  Returns {material: [image files]}."""
+    intake and nozzle materials for image-based ones.  ao_spp: samples of the occlusion pass (0: none).
+    Returns {atlas: {base, orm, nrm: image files, ao: whether ORM R holds the occlusion}}."""
     sc = bpy.context.scene
     sc.render.engine = 'CYCLES'
     sc.cycles.device = 'CPU'
@@ -339,6 +393,12 @@ def bake_skin(copies, outdir, size=4096, nrm_size=4096, orm_size=2048, samples=4
             n.inputs["Strength"].default_value = v
     finally:
         _drop_proxy(proxy, hidden)
+    # ---------------------------------------------------------- ambient occlusion -> ORM R
+    if ao_spp > 0:
+        try:
+            _bake_ao(targets, mats_of, atlases, ao_spp)
+        except Exception as e:                           # the export goes on without it (R = 1)
+            log(f"  WARNING the occlusion bake failed, ORM R stays 1: {e}")
     # ---------------------------------------------------------- save
     os.makedirs(outdir, exist_ok=True)
     files = {}
@@ -366,8 +426,29 @@ def bake_skin(copies, outdir, size=4096, nrm_size=4096, orm_size=2048, samples=4
     return files
 
 
+def _bake_ao(targets, mats_of, atlases, spp):
+    """The airframe's occlusion of itself into each atlas's "ao" image, the doors moved away."""
+    for at in atlases.values():
+        _fill(at.img["ao"], 1.0)                         # texels outside the islands stay open
+    proxy, hidden = _make_proxy(targets, shift=lambda o: (0.0, 0.0, DOOR_SHIFT) if _is_door(o) else None)
+    recs = []
+    try:
+        for key, mats in mats_of.items():
+            for m in mats:
+                recs.append(_rewire_ao(m, AO_DISTANCE, AO_RAYS))
+                _set_target(m, atlases[key].img["ao"])
+        log(f"  baking occlusion ({spp} spp x {AO_RAYS} rays, {AO_DISTANCE} m, doors moved away)")
+        _bake([proxy], 'EMIT', spp, 16, clear=False)
+        for at in atlases.values():
+            at.ao_baked = True
+    finally:
+        for r in recs:
+            _restore(r)
+        _drop_proxy(proxy, hidden)
+
+
 def _save_atlas(at, outdir):
-    """base -> JPEG; roughness + metallic -> one ORM PNG (G, B); normals -> PNG."""
+    """base -> JPEG; occlusion + roughness + metallic -> one ORM PNG (R, G, B); normals -> PNG."""
     out = {}
     base = at.img["base"]
     path = os.path.join(outdir, f"f35i_skin{at.key}_base.jpg")
@@ -383,6 +464,9 @@ def _save_atlas(at, outdir):
     r = np.array(at.img["rough"].pixels[:], np.float32).reshape(s, s, 4)
     m = np.array(at.img["metal"].pixels[:], np.float32).reshape(s, s, 4)
     orm = np.ones((s, s, 4), np.float32)
+    if at.ao_baked and at.img["ao"].size[0] == s:
+        a = np.array(at.img["ao"].pixels[:], np.float32).reshape(s, s, 4)
+        orm[:, :, 0] = np.clip(_blur3(a[:, :, 0]), 0.0, 1.0)
     orm[:, :, 1] = r[:, :, 0]
     orm[:, :, 2] = m[:, :, 0]
     img = bpy.data.images.new(f"F35_Atlas{at.key}_orm", s, s, alpha=False)
@@ -393,6 +477,7 @@ def _save_atlas(at, outdir):
     img.file_format = 'PNG'
     img.save()
     out["orm"] = path
+    out["ao"] = bool(at.ao_baked)
     nrm = at.img["nrm"]
     path = os.path.join(outdir, f"f35i_skin{at.key}_nrm.png")
     nrm.filepath_raw = path
@@ -400,6 +485,21 @@ def _save_atlas(at, outdir):
     nrm.save()
     out["nrm"] = path
     return out
+
+
+def _gltf_output_group():
+    """The node group Blender's glTF exporter reads extra outputs from (Occlusion, Thickness), as
+    its own add-on creates it."""
+    g = bpy.data.node_groups.get("glTF Material Output")
+    if g is not None:
+        return g
+    g = bpy.data.node_groups.new("glTF Material Output", 'ShaderNodeTree')
+    g.interface.new_socket("Occlusion", in_out='INPUT', socket_type='NodeSocketFloat')
+    th = g.interface.new_socket("Thickness", in_out='INPUT', socket_type='NodeSocketFloat')
+    th.default_value = 0.0
+    g.nodes.new('NodeGroupOutput')
+    g.nodes.new('NodeGroupInput')
+    return g
 
 
 def _load(path, colorspace):
@@ -427,6 +527,15 @@ def image_material(name, files, coat):
     nt.links.new(to.outputs["Color"], sep.inputs["Color"])
     nt.links.new(sep.outputs["Green"], b.inputs["Roughness"])
     nt.links.new(sep.outputs["Blue"], b.inputs["Metallic"])
+    if files.get("ao"):
+        # ORM R -> the exporter's occlusionTexture (it shares the ORM image with metallicRoughness)
+        try:
+            grp = nt.nodes.new("ShaderNodeGroup")
+            grp.node_tree = _gltf_output_group()
+            grp.label = "glTF Material Output"
+            nt.links.new(sep.outputs["Red"], grp.inputs["Occlusion"])
+        except Exception as e:
+            log(f"  WARNING no occlusionTexture for {name}: {e}")
     tn = nt.nodes.new("ShaderNodeTexImage")
     tn.image = _load(files["nrm"], 'Non-Color')
     nm = nt.nodes.new("ShaderNodeNormalMap")

@@ -21,9 +21,11 @@ On Windows: `"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" -b --
 
 Options: `--atlas N` skin atlas size (default 4096; 1024 for a quick test), `--pilot-tris N` (60000),
 `--blend file.blend` (skip the build, use a model saved by `build_f35i.py`), `--save-blend file`
-(keep the export scene for inspection), `--work DIR` (keep the baked images). A full run takes about
+(keep the export scene for inspection), `--work DIR` (keep the baked images), `--no-ao` (no ambient
+occlusion: the export of before, a few minutes faster). A full run takes about
 6 minutes on 4 shared cores (building the model ~1 min, rig sampling 8 s, mesh copies 30 s, UV unwrap
-30 s, bake ~3.5 min at 4096 of which the normal maps take 2.5 min, export 5 s). A quick test,
+30 s, bake ~3.5 min at 4096 of which the normal maps take 2.5 min, export 5 s); the occlusion
+adds an estimated 2-4 min (skin pass ~1-3 min, vertex rays ~1 min; not timed yet). A quick test,
 `--atlas 1024 --blend model.blend`, takes about 80 s.
 
 `python3 sim/tools/aircraft/glb.py sim/data/aircraft/f35i.glb` prints a summary of a glb.
@@ -61,15 +63,26 @@ Options: `--atlas N` skin atlas size (default 4096; 1024 for a quick test), `--p
    with everything else hidden from render (Cycles otherwise rebuilds the whole scene per object).
    The skin materials become `F35_Skin_A`, `F35_Skin_B` (satin coat 0.5 / roughness 0.3, sheen 0.15
    as in Blender) and `F35_Misc_B` (inlet, nozzle; no coat).
+   **Occlusion** (unless `--no-ao`): one more pass bakes the airframe's ambient occlusion of itself
+   (Cycles Ambient Occlusion node, 0.8 m, 8 samples x 16 rays) into ORM **R**, with the doors moved
+   1 km away and the gear absent (the flight state: closed doors and stowed legs must not shade the
+   skin), 3 x 3 blurred. The image materials wire R into a `glTF Material Output` group's Occlusion
+   socket, so the glb's atlas materials get an `occlusionTexture` that shares the ORM image.
 6. **Materials** (`gltf_materials.py`): the other procedural materials become constant PBR with the
    same average look (ramps, mixes, checker weaves and noise reduced to their means); image textures
    are kept (decals, the PCD page, the pilot's patches and tablet). Light lenses keep their names
    (`F35_nav_red`, `F35_nav_green`, `F35_beacon`, `F35_formation`, `F35_landing_light`, plus the
    cockpit `F35_SwitchLED`) with emission strength 1 (the app switches them). Look-alike materials
    are merged (mostly the pilot's fabrics): 93 materials.
-7. **Join** the copies per node, export glTF (Y up, tangents, the nozzle's `AB_Open` shape key as
-   a morph target, no animations / skins), mark the decal materials `alphaMode BLEND`, write the
-   rig json.
+7. **Vertex occlusion** (`vertex_ao.py`, unless `--no-ao`): every vertex of a part outside the
+   atlases (gear, wells, bays, doors' insides, cockpit, pilot, small details) casts 24
+   cosine-weighted rays against the whole model at the rest pose (gear down, doors open: as these
+   parts are seen; glass and decals left out); a hit at d counts 1 - (d / 0.6 m)^2. One smoothing
+   pass. Stored as a colour attribute `AO` (R = G = B, 1 = open), the active one, on every copy of
+   a node that has such parts (white elsewhere); other colour attributes are removed.
+8. **Join** the copies per node, export glTF (Y up, tangents, the nozzle's `AB_Open` shape key as
+   a morph target, `COLOR_0` = the `AO` attribute, no animations / skins), mark the decal
+   materials `alphaMode BLEND`, write the rig json (`ao`: what was baked).
 
 ## Nodes
 
@@ -106,6 +119,9 @@ nodes       name -> {rest: [x,y,z] (model frame), controls: {...}, hinge?: {pivo
 morphs      node -> target -> control -> [weight per sample]   (Nozzle / AB_Open / throttle)
 materials   {lights: material -> role, canopy: [...], decals: [...], all: [...]}
 info        reference data, body frame (below)
+ao          {orm, vertex, occlusionTexture, distance_m: {orm, vertex}, note}: ORM R holds the skin's
+            occlusion / COLOR_0.r every other part's (an occlusion, not a colour: the app darkens
+            the ambient light with it); absent in exports from before
 stats       triangles, nodes, primitives, glb_mb, seconds
 ```
 
@@ -140,7 +156,10 @@ the Blender stance.
   parts and the helmet turns with `head_*` (forearms do not bend, so large throttle travel shows a
   small gap at the wrist from outside).
 * The nose-gear lamp sits square to the raked leg (its lens axis points ~12 deg up); the app aims
-  the beam 3 deg below the body axis.
+  the beam 5 deg below the body axis.
+* Occlusion is baked at one pose: the skin's without doors and gear (right in flight; parked, the
+  open doors and legs add none to it), the gear's and wells' with the gear down (right when they
+  are seen). It applies to ambient light only, so it never darkens sunlit parts.
 * The afterburner flame (`AB_Flame` in Blender) is not exported: the app draws a volumetric plume.
 * Glass materials keep `KHR_materials_transmission` (canopy: gold-tinted, IOR 1.5, a 131 nm thin
   film of n 1.62 in Blender); the app replaces it by a cheaper two-pass glass.

@@ -28,6 +28,7 @@ import { Effects } from './ui/Effects.js';
 import { EngineSound } from './audio/EngineSound.js';
 import { Buildings } from './world/Buildings.js';       // graphics module: 3D buildings (sim/js/world)
 import { Clouds } from './env/Clouds.js';      // lighting: cumulus and cirrus, weather presets
+import { AircraftFX } from './aircraft/AircraftFX.js';     // graphics module: vapour, tyre smoke, landing-light pool
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -265,6 +266,7 @@ class App {
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
     this.addModule(new Buildings(ctx));
     if (!STUBS) this.addModule(new Clouds(ctx));          // lighting: clouds (?clouds=, menu Weather), drawn by Post
+    this.addModule(new AircraftFX(ctx));      // aircraft: vapour, contrail, tyre smoke, landing-light pool, burner quality
   }
 
   /**

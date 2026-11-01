@@ -205,6 +205,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
 | `buildings=0` | no 3D buildings (the menu's option turns them off too) |
 | `buildingsDebug=1` | buildings tinted by level of detail: boxes blue, full detail red |
+| `acfx=0` | none of the aircraft's effects (vapour, contrail, tyre smoke, landing-light pool); `vapour=0`, `tyresmoke=0`, `landingpool=0` one each |
 
 ## Files (the app shell)
 
@@ -265,6 +266,8 @@ node sim/tests/smoke.mjs [--mode stubs|real|both] [--port 8103] [--out DIR] [--r
 node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs        (flight model, no browser)
 node sim/tests/input.test.mjs                                          (keyboard, mouse stick, gamepad; no browser)
 node sim/tests/lighting_shots.mjs [--port 8148] [--out DIR] [--set quick|times|night|sky|clouds|shadows|all] [--only a,b] [--quality q] [--resume]
+node --import ./sim/tests/node-three.mjs sim/tests/aircraft_fx.test.mjs  (lights, burner, vapour models)
+node sim/tests/aircraft_scenes.mjs [--port 8150] [--only park_,ab_] [--shots chase,side]   (the jet's looks)
 ```
 
 Both browser tests start `serve.py` on their port and open the app in headless Chromium
@@ -361,6 +364,16 @@ neighbours and region (`sim/tools/world/README.md`).
 Cost over Tel Aviv at 300 m (`sim/tools/world/shots.mjs`): high +55 draw calls, +2.2 M triangles,
 +54 MB geometry; medium +34, +1.7 M, +35 MB; low +26, +1.2 M, +23 MB. The building shaders
 use 4 texture units (3 atmosphere tables and the sun's shadow map).
+## The jet up close
+`js/aircraft` (see its README): the skin calibrated against photos of IAF F-35Is (satin, no clear
+coat: the exported Cycles values read as chrome plastic in three.js), a heat-stained nozzle whose
+petals open at idle and in burner, white wells, rubber tyres; photometric exterior lights (nav
+lights in their sectors, alternating anti-collision flashes, formation strips, a landing light
+that lights the runway at night, glare only in the dark); a burner that is short and pale by day
+and long with attached shock diamonds at night, never a white ball; and, as the graphics module
+`AircraftFX`, vortex trails and vapour sheets in hard turns, the vapour cone near Mach 1 low over
+the sea, a contrail above ~9 km and tyre smoke at touchdown. `sim/tools/aircraft` can bake ambient
+occlusion into the export (ORM texture + per vertex); the app uses it when the data has it.
 
 ## Notes and small deviations from DESIGN.md
 
