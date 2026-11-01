@@ -24,7 +24,7 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
 * **Undercarriage:** nose and main gear with solved retraction kinematics, doors sequenced to the legs
   (two long nose-gear doors with sawtooth fronts that stay open beside the leg, as on the real jet),
   wheels that spin with the distance rolled, nose-wheel steering. Measured from photos in tyre
-  diameters: the jet sits 1.45° nose-up; the nose leg has the white steering housing with its two lamps,
+  diameters: the jet sits 1.45° nose-up; the nose leg has the white steering housing with its lamp in a square bezel,
   a short chrome piston and torque links; the main wheels have twelve lightening holes and a triangular
   cap plate, with brake hoses clamped down the legs.
 * **Weapon bays:** both internal bays with doors, a GBU-31 JDAM and an AIM-120 AMRAAM in each.
