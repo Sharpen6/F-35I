@@ -540,18 +540,20 @@ export class Clouds {
     U.uCloudWind.value.y = this.wind[1];
     const env = this.env;
     env.lightScale = 1;
-    // (frames that are not drawn skip env.update, which resets the light: nothing to do)
-    if (!this.layer || !this.enabled || f.draw === false) return;
-    // the shadow on the jet (and on everything the directional light reaches)
-    const jet = this.ctx.visual?.object3d;
-    const at = jet ? jet.getWorldPosition(_v) : f.camera.getWorldPosition(_v);
-    const dir = env.lightDirection || env.sunDirection;
-    const sh = shadowAt(at.x, at.y, at.z, dir, this.layer, this.wind);
-    env.sunLight.color.multiplyScalar(sh);
-    // what the exposure meter sees (the eye adapts a little): less in a cloud's shadow, much less
-    // inside a cloud
-    const cam = f.camera.getWorldPosition(_v);
+    if (!this.layer || !this.enabled) return;
     const L = this.layer;
+    const dir = env.lightDirection || env.sunDirection;
+    // the shadow on the jet (and on everything the directional light reaches). Only on drawn
+    // frames: env.update, which resets the light, runs only on those, and the dimming would pile up
+    if (f.draw !== false) {
+      const jet = this.ctx.visual?.object3d;
+      const at = jet ? jet.getWorldPosition(_v) : f.camera.getWorldPosition(_v);
+      env.sunLight.color.multiplyScalar(shadowAt(at.x, at.y, at.z, dir, L, this.wind));
+    }
+    // what the exposure meter sees (the eye adapts a little): less in a cloud's shadow, much less
+    // inside a cloud. On every frame: the test API's settle() adapts the exposure between frames
+    // that are not drawn
+    const cam = f.camera.getWorldPosition(_v);
     let scale = 0.55 + 0.45 * shadowAt(cam.x, cam.y, cam.z, dir, L, this.wind);
     if (cam.y > L.base && cam.y < L.top) {
       const v = fieldAt((cam.x + this.wind[0]) / L.scale, (cam.z + this.wind[1]) / L.scale);
