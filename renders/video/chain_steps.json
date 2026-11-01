@@ -1,0 +1,50 @@
+[
+ {
+  "script": "clips.py",
+  "tag": "turntable_canopy_open_pilot_look_startup_v6",
+  "args": [
+   "turntable",
+   "canopy_open",
+   "pilot_look",
+   "startup",
+   "--engine",
+   "CYCLES",
+   "--res",
+   "1280x720",
+   "--samples",
+   "48",
+   "--fps",
+   "24",
+   "--suffix",
+   "_v6"
+  ]
+ },
+ {
+  "script": "history_stills.py",
+  "tag": "history_00_01_15",
+  "args": [
+   "--views",
+   "fl34,side,rr34",
+   "--only",
+   "00,01,15",
+   "--force"
+  ]
+ },
+ {
+  "script": "../video/make_video.py",
+  "tag": "video_1080p",
+  "args": []
+ },
+ {
+  "script": "../video/make_video.py",
+  "tag": "video_720p",
+  "args": [
+   "--res",
+   "1280x720",
+   "--crf",
+   "LOW",
+   "--out",
+   "renders/video/F-35I_Adir_making_of_720p.mp4"
+  ]
+ }
+]

@@ -631,6 +631,7 @@ def main():
     args.res = tuple(int(v) for v in args.res.lower().split("x"))
     args.hdri = tuple(v for v in args.hdri.split(",") if v)
     args.gif_width = args.gif_width or None
+    print("CLIPARGS", {k: v for k, v in vars(args).items() if k not in ("blend", "work")}, flush=True)
     os.makedirs(os.path.join(ROOT, "renders", "gifs"), exist_ok=True)
     os.makedirs(os.path.join(ROOT, "renders", "animation"), exist_ok=True)
     for name in (args.clips or list(CLIPS)):

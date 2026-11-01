@@ -89,7 +89,7 @@ PROGRESS = {
     "034": "Pilot rebuilt: skinned body, IAF flight gear, HMDS helmet",
 }
 CLIPS = [  # (file stem, title, caption)
-    ("turntable_v5", "Turntable", "Final paint and sky"),
+    ("turntable_v6", "Turntable", "Final paint, sky and the new pilot"),
     ("gear_retract_v6", "Landing gear", "Retraction: legs fold, wheels turn, doors sequence"),
     ("canopy_open_v6", "Canopy", "Canopy opens on its forward hinge"),
     ("pilot_look_v6", "Pilot", "Head look: left, right, up and down"),
@@ -100,11 +100,12 @@ CLIPS = [  # (file stem, title, caption)
     ("walkaround_v6", "Walk-around", "A slow walk round the parked jet"),
 ]
 FALLBACK = {  # older takes used when a clip has not been rendered yet
+    "turntable_v6": "turntable_v5",
     "gear_retract_v6": "gear_retract_v4", "canopy_open_v6": "canopy_open_v4", "pilot_look_v6": "pilot_look_v4",
     "controls_v6": "controls_v4", "weapon_bays_v6": "weapon_bays_v4",
 }
 VERSIONS = [  # (title, [clip stems oldest -> newest])
-    ("Turntable, four versions", ["turntable_v2", "turntable_v3", "turntable_v4", "turntable_v5"]),
+    ("Turntable, five versions", ["turntable_v2", "turntable_v3", "turntable_v4", "turntable_v5", "turntable_v6"]),
     ("Gear retraction, four versions", ["gear_retract", "gear_retract_v3", "gear_retract_v4", "gear_retract_v6"]),
     ("Pilot look, three versions", ["pilot_look", "pilot_look_v4", "pilot_look_v6"]),
 ]
@@ -374,7 +375,7 @@ def build(tl, only=None):
     # title
     tl.card("F-35I  ADIR", "A procedural Blender model: built, rigged, animated and broken.  The making-of.",
             seconds=8.0)
-    tl.movie(clip("turntable_v5"), "Built entirely from Python scripts: no hand modelling")
+    tl.movie(clip("turntable_v6"), "Built entirely from Python scripts: no hand modelling")
     tl.movie(clip("afterburner_v5"))
     if want(1):
         tl.chapter(1, "Research", "Public photos, a 3-view drawing and published dimensions")
@@ -471,10 +472,13 @@ def main():
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--stills", default="")
     ap.add_argument("--frames", default="")
+    ap.add_argument("--crf", default="HIGH", help="H.264 quality: HIGH, MEDIUM, LOW, VERYLOW, ...")
     args = ap.parse_args(argv)
     if args.root:
         DATA[0] = os.path.abspath(args.root)
     out = args.out or R("renders", "video", "F-35I_Adir_making_of.mp4")
+    if not os.path.isabs(out):
+        out = R(out)
     res = tuple(int(v) for v in args.res.lower().split("x"))
     only = {int(v) for v in args.only.split(",") if v}
 
@@ -519,7 +523,7 @@ def main():
     r.image_settings.file_format = 'FFMPEG'
     r.ffmpeg.format = 'MPEG4'
     r.ffmpeg.codec = 'H264'
-    r.ffmpeg.constant_rate_factor = 'HIGH'
+    r.ffmpeg.constant_rate_factor = args.crf
     r.ffmpeg.ffmpeg_preset = 'GOOD'
     r.ffmpeg.gopsize = FPS * 2
     r.ffmpeg.audio_codec = 'NONE'
