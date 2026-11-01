@@ -235,8 +235,13 @@ export class Buildings {
     for (const m of [box, chunk]) { m.frustumCulled = false; m.receiveShadow = true; tmp.add(m); }
     const done = () => { g.dispose(); cg.dispose(); };
     try {
-      const p = this.renderer.compileAsync ? this.renderer.compileAsync(tmp, cam, this.scene) : (this.renderer.compile(tmp, cam, this.scene), Promise.resolve());
-      p.then(done, (e) => { console.warn('Buildings: precompile', e); done(); });
+      // in parallel where the browser can (KHR_parallel_shader_compile), else now (the menu shows)
+      if (this.renderer.extensions.has('KHR_parallel_shader_compile')) {
+        this.renderer.compileAsync(tmp, cam, this.scene).then(done, (e) => { console.warn('Buildings: precompile', e); done(); });
+      } else {
+        this.renderer.compile(tmp, cam, this.scene);
+        done();
+      }
     } catch (e) {
       console.warn('Buildings: precompile', e);
       done();
@@ -497,7 +502,7 @@ export class Buildings {
     const k = dark * dark * (3 - 2 * dark);
     const U = this._shared.uLight.value;
     const h = this.hours;
-    U.set(litFraction(h), 0.026 * k, 0.008 * k, h > 22.5 || h < 6 ? 0.25 : 0.85);
+    U.set(litFraction(h), 0.014 * k, 0.008 * k, h > 22.5 || h < 6 ? 0.25 : 0.85);
     const S = this.stats;
     S.tiles = tiles; S.boxes = boxes; S.chunks = chunks; S.chunkVertices = verts;
     S.chunkMB = +(chunkBytes / 1048576).toFixed(1); S.boxMB = +(boxBytes / 1048576).toFixed(1);

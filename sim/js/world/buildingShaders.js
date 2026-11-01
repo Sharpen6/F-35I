@@ -134,8 +134,16 @@ attribute vec4 aInf;          // floor height (0.05 m), bay (0.05 m), seed, floo
 #endif
 ${EMIT}
 
+uniform vec3 uVis;            // .z: extra wall depth per metre beyond 3.5 km (as the boxes)
+
 void main() {
   vec3 n = normalize(aNrm.xyz);
+  vec3 p = position;
+  // wall bottoms (below floor 0) reach further down far away, where the terrain is coarser
+  if (aFac.y < 0.0 && aNrm.w < 0.5 / 127.0) {          // walls only (roof coordinates go negative too)
+    float d = length((modelMatrix * vec4(p, 1.0)).xyz - uCameraPos);
+    p.y -= uVis.z * max(d - 3500.0, 0.0);
+  }
   #ifndef DEPTH_PASS
     vN = n;
     vFac = aFac * 0.1;
@@ -143,7 +151,7 @@ void main() {
     vInf = vec4(aInf.x * 0.05, aInf.y * 0.05, aInf.z, aInf.w);
     vKind = aNrm.w * 127.0;
   #endif
-  emit(position, n);
+  emit(p, n);
 }
 `;
 
@@ -437,8 +445,9 @@ void main() {
     float litP = (shops && groundCell) ? uLight.w : min(uLight.x * busy, 1.0);
     float lit = mix(litP, step(h2, litP), detail);
     float curtainIn = mix(0.3, step(h3, 0.3), detail);
-    vec3 tint = mix(vec3(1.0, 0.70, 0.42), vec3(1.0, 0.86, 0.68), mix(0.5, h3, detail));
-    tint = mix(tint, vec3(0.82, 0.90, 1.0), resid ? 0.15 : 0.45);
+    // warm homes (2700-3000 K), whiter offices and shops
+    vec3 tint = mix(vec3(1.0, 0.58, 0.26), vec3(1.0, 0.74, 0.44), mix(0.5, h3, detail));
+    tint = mix(tint, vec3(0.86, 0.90, 1.0), resid ? 0.12 : 0.5);
     float glassW = win * (1.0 - shut * (groundCell && shops ? 0.0 : 1.0));
     float shutW = win - glassW;
 
