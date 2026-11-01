@@ -5,7 +5,9 @@
 * three-digit IAF serial (9xx) on the nose sides
 * squadron eagle on the outer faces of both fins and on the inlet sides
   (an original stylised drawing, not a copy of the real emblem artwork)
-* RESCUE stencil and ejection-seat warning triangle below the canopy
+* canopy-frame warning, RESCUE stencils (different on the two sides), DANGER EJECTION SEAT and
+  DANGER JET INTAKE triangles, laid out from close photos of an Adir (right side) and an F-35A
+  (left side)
 
 Images are painted procedurally with the small numpy rasteriser and packed
 into the .blend, so the model has no external texture dependencies.
@@ -100,32 +102,69 @@ def eagle_image(name, size=1024, col=MARK_WHITE, t=None):
     return c.to_image(name)
 
 
-def rescue_image(name, w=512, h=256):
+def _text_w(text, scale):
+    return len(text) * 6 * scale - scale
+
+
+def _centred(c, cx, y, text, scale, col=MARK_WHITE):
+    c.text(int(cx - _text_w(text, scale) / 2), int(y), text, col, scale=scale)
+
+
+def canopy_warning_image(name, w=1024, h=112):
+    """Two lines on the canopy frame band (both sides)."""
     c = Canvas(w, h, (0, 0, 0))
-    c.rect(8, 8, w - 8, h - 8, MARK_WHITE, fill=False, t=8)
-    c.text(52, 38, "RESCUE", MARK_WHITE, scale=11)
-    c.line(60, 160, 420, 160, MARK_WHITE, 12)
-    c.line(420, 160, 380, 130, MARK_WHITE, 12)
-    c.line(420, 160, 380, 190, MARK_WHITE, 12)
+    sc = 5
+    top = (h - (2 * 7 * sc + 14)) // 2
+    _centred(c, w / 2, top, "WARNING - DO NOT CUT CANOPY", sc)
+    _centred(c, w / 2, top + 7 * sc + 14, "WITHIN 3 INCHES OF CANOPY FRAME", sc)
     _alpha_from_rgb(c)
     return c.to_image(name)
 
 
-def triangle_image(name, size=256):
-    c = Canvas(size, size, (0, 0, 0))
-    cx = size / 2
+def rescue_image(name, side):
+    """Left side (rescue access): an arrow pointing forward round a RESCUE box, with the latch
+    instructions under it. Right side: a RESCUE box and 'release on other side'.
+    The decal's u axis runs aft on the left side, so 'forward' is towards the image's left there."""
+    if side > 0:
+        w, h = 768, 352
+        c = Canvas(w, h, (0, 0, 0))
+        t = 6
+        tip, x1, y0, y1, hy0, hy1 = 14, w - 14, 40, 128, 14, 154      # shaft y0..y1, head hy0..hy1
+        xh = 96                                                         # head base
+        for a, b in (((tip, (hy0 + hy1) / 2), (xh, hy0)), ((tip, (hy0 + hy1) / 2), (xh, hy1)),
+                     ((xh, hy0), (xh, y0)), ((xh, hy1), (xh, y1)), ((xh, y0), (x1, y0)), ((xh, y1), (x1, y1)),
+                     ((x1, y0), (x1, y1))):
+            c.line(a[0], a[1], b[0], b[1], MARK_WHITE, t)
+        bx0, bx1 = 300, 700
+        c.rect(bx0, y0 + 12, bx1, y1 - 12, MARK_WHITE, fill=False, t=5)
+        _centred(c, (bx0 + bx1) / 2, (y0 + y1) / 2 - 3.5 * 7, "RESCUE", 7)
+        for k, line in enumerate(("TURN FWD MASTER LATCH", "AND AFT MASTER LATCH", "TO OPEN DOOR")):
+            _centred(c, w / 2, 186 + k * 54, line, 5)
+    else:
+        w, h = 640, 280
+        c = Canvas(w, h, (0, 0, 0))
+        bx0, bx1 = 120, 520
+        c.rect(bx0, 14, bx1, 118, MARK_WHITE, fill=False, t=6)
+        _centred(c, w / 2, 66 - 3.5 * 8, "RESCUE", 8)
+        _centred(c, w / 2, 152, "EMERGENCY CANOPY", 5)
+        _centred(c, w / 2, 206, "RELEASE ON OTHER SIDE", 5)
+    _alpha_from_rgb(c)
+    return c.to_image(name)
 
-    def tri(r, col):
-        pts = [(cx - r, size * 0.16), (cx + r, size * 0.16), (cx, size * 0.16 + r * 1.732)]
-        m = np.ones((size, size), dtype=bool)
-        for i in range(3):
-            (x0, y0), (x1, y1) = pts[i], pts[(i + 1) % 3]
-            cr = (x1 - x0) * (c.yy - y0) - (y1 - y0) * (c.xx - x0)
-            m &= cr <= 0
-        c.px[m, :3] = col
-    tri(size * 0.42, MARK_WHITE)
-    tri(size * 0.30, (0.55, 0.06, 0.04))
-    tri(size * 0.12, MARK_WHITE)
+
+def danger_triangle_image(name, lines, size=256):
+    """Low-visibility warning: DANGER above a point-down white outline triangle with the hazard
+    written inside it (photos: 'EJECTION SEAT' below the canopy, 'JET INTAKE' on the inlet)."""
+    h = int(size * 1.125)
+    c = Canvas(size, h, (0, 0, 0))
+    _centred(c, size / 2, 6, "DANGER", 4)
+    top, half, depth, t = 46, size * 0.46, size * 0.80, 7
+    pts = [(size / 2 - half, top), (size / 2 + half, top), (size / 2, top + depth)]
+    for i in range(3):
+        a, b = pts[i], pts[(i + 1) % 3]
+        c.line(a[0], a[1], b[0], b[1], MARK_WHITE, t)
+    for k, line in enumerate(lines):
+        _centred(c, size / 2, top + 22 + k * 34, line, 4 if len(line) <= 5 else 3)
     _alpha_from_rgb(c)
     return c.to_image(name)
 
@@ -151,6 +190,37 @@ def decal_material(name, img):
 
 
 # ---------------------------------------------------------------- decals
+def surface_frame(target, s, side, z):
+    """Point and outward normal where a ray from the given side at station s, height z hits target."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    bvh = BVHTree.FromObject(target, dg)
+    mw = target.matrix_world
+    inv = mw.inverted()
+    o = P(s, side * 4.0, z)
+    d = (inv.to_3x3() @ Vector((-side, 0, 0))).normalized()
+    hit, nrm, _, _ = bvh.ray_cast(inv @ o, d, 8.0)
+    if hit is None:
+        return None, None
+    n = (mw.to_3x3().inverted().transposed() @ nrm).normalized()
+    if n.x * side < 0:
+        n = -n
+    return mw @ hit, n
+
+
+def decal_on(name, coll, target, s, side, z, size_u, size_v, mat, nu=18, nv=18):
+    """A decal laid square to the surface at (s, z): text reads left-to-right from outside."""
+    hit, n = surface_frame(target, s, side, z)
+    if hit is None:
+        print("decal_on: no surface for", name)
+        return None
+    up = Vector((0, 0, 1))
+    v = (up - n * up.dot(n)).normalized()             # "up" on the surface: text stays level
+    u = n.cross(v)                                     # horizontal (no z component)
+    if u.dot(Vector((0, side, 0))) < 0:                # left side reads aft-wards, right side forwards
+        u = -u
+    return decal(name, coll, target, hit, u, v, -n, size_u, size_v, mat, nu, nv)
+
+
 def decal(name, coll, target, origin, u_axis, v_axis, ray, size_u, size_v, mat, nu=18, nv=18, lift=0.0018):
     dg = bpy.context.evaluated_depsgraph_get()
     bvh = BVHTree.FromObject(target, dg)
@@ -206,8 +276,11 @@ def build(ctx):
     roundel = decal_material("F35_Decal_Roundel", roundel_image("IAF_Roundel", 512, STAR_BLUE, DISC))
     serial = decal_material("F35_Decal_Serial", serial_image(SERIAL, "IAF_Serial"))
     eagle = decal_material("F35_Decal_Eagle", eagle_image("Sqn_Eagle"))
-    rescue = decal_material("F35_Decal_Rescue", rescue_image("Rescue_Stencil"))
-    tri = decal_material("F35_Decal_Triangle", triangle_image("Eject_Warning"))
+    rescue = {1: decal_material("F35_Decal_Rescue_L", rescue_image("Rescue_Stencil_L", 1)),
+              -1: decal_material("F35_Decal_Rescue_R", rescue_image("Rescue_Stencil_R", -1))}
+    seat = decal_material("F35_Decal_EjectSeat", danger_triangle_image("Danger_EjectSeat", ("EJECTION", "SEAT")))
+    intake = decal_material("F35_Decal_JetIntake", danger_triangle_image("Danger_JetIntake", ("JET", "INTAKE")))
+    canopy_warn = decal_material("F35_Decal_CanopyWarning", canopy_warning_image("Canopy_Warning"))
     out = []
     for side, tag in ((1, "L"), (-1, "R")):
         ray = Vector((-side, 0, 0))
@@ -220,10 +293,18 @@ def build(ctx):
                          0.56, 0.56, roundel))
         out.append(decal(f"Serial_{tag}", coll, fus, P(2.10, side * 1.2, 0.38), u, (0, 0.10, 1), ray,
                          0.62, 0.232, serial))
-        out.append(decal(f"Rescue_{tag}", coll, fus, P(3.55, side * 1.2, 0.30), u, (0, 0, 1), ray,
-                         0.30, 0.15, rescue))
-        out.append(decal(f"EjectWarn_{tag}", coll, fus, P(4.15, side * 1.2, 0.24), u, (0, 0, 1), ray,
-                         0.17, 0.17, tri))
+        # stencils (photos: F-35A c34 for the left side, Adir 926 at Red Flag for the right side)
+        if side > 0:
+            out.append(decal_on("Rescue_L", coll, fus, 3.85, side, 0.34, 0.66, 0.3025, rescue[side], nu=24, nv=14))
+        else:
+            out.append(decal_on("Rescue_R", coll, fus, 3.92, side, 0.20, 0.60, 0.2625, rescue[side], nu=24,
+                                nv=14))
+        out.append(decal_on(f"EjectWarn_{tag}", coll, fus, 4.20, side, 0.68, 0.26, 0.2925, seat))
+        out.append(decal_on(f"EjectWarn_Intake_{tag}", coll, fus, 4.95, side, -0.42, 0.30, 0.3375, intake))
+        band = obj.get(f"Canopy_Band_{tag}") or bpy.data.objects.get(f"Canopy_Band_{tag}")
+        if band is not None:                          # on the frame band: opens with the canopy
+            out.append(decal_on(f"Stencil_CanopyWarn_{tag}", coll, band, 2.76, side, 0.672, 0.64, 0.07,
+                                canopy_warn, nu=28, nv=6))
         # wings: upper + lower roundels
         wing = obj.get(f"Wing_{tag}")
         if wing is not None:
@@ -243,5 +324,6 @@ def build(ctx):
         # inlet side eagle (smaller)
         out.append(decal(f"Eagle_Inlet_{tag}", coll, fus, P(6.85, side * 2.0, -0.18), u_bird, (0, 0, 1), ray,
                          0.55, 0.55, eagle))
+    out = [o for o in out if o is not None]
     ctx["objects"].update({o.name: o for o in out})
     return out
