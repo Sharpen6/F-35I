@@ -1,0 +1,314 @@
+// GLSL side of js/env/atmosphere.js. Every custom shader that wants the sky, the haze or
+// the sun includes ATMOSPHERE_PARS (uniform declarations + functions); the uniform objects
+// themselves live in Environment.uniforms and are shared by reference.
+//
+// Conventions: world space, Y up, metres; radiance is relative to a top-of-atmosphere sun
+// illuminance of 1 and gets multiplied by uSunIlluminance.
+
+export const SKY_LUT_W = 256;
+export const SKY_LUT_H = 128;
+
+export const ATMOSPHERE_CORE = /* glsl */ `
+uniform vec3 uSunDir;            // unit vector towards the sun
+uniform vec3 uSunColor;          // sun irradiance at the camera (scene units, linear RGB)
+uniform vec3 uAmbient;           // sky irradiance on a horizontal surface at ground level
+uniform vec3 uFogColor;          // mean horizon haze radiance (simple fog for other shaders)
+uniform float uFogDensity;       // extinction at the camera altitude (1/m): fog = 1 - exp(-d * uFogDensity)
+uniform vec3 uCameraPos;         // camera world position
+uniform float uEarthRadius;      // 6371000
+uniform float uTime;             // seconds, for animation
+uniform float uSunIlluminance;   // top-of-atmosphere sun irradiance (scene units)
+uniform float uCamAltitude;      // camera height above MSL, m
+uniform vec4 uAtmoGeom;          // Rg, Rt, rayleigh scale height, mie scale height
+uniform vec3 uRayleigh;          // rayleigh scattering (1/m)
+uniform vec3 uMie;               // mie scattering, mie extinction (1/m), mie g
+uniform vec3 uOzone;             // ozone absorption (1/m) at the peak
+uniform vec3 uGroundRadiance;    // radiance of the mean ground (for the sky below the horizon)
+uniform float uNight;            // 0 day .. 1 full night
+uniform sampler2D uTransmittanceLUT;
+uniform sampler2D uMultiScatLUT;
+
+#ifndef ATMO_PI
+#define ATMO_PI 3.141592653589793
+#endif
+
+float atmoUvFromUnit(float u, float size) { return 0.5 / size + u * (1.0 - 1.0 / size); }
+
+vec2 atmoTransmittanceUv(float r, float mu) {
+  float Rg = uAtmoGeom.x, Rt = uAtmoGeom.y;
+  float H = sqrt(Rt * Rt - Rg * Rg);
+  float rho = sqrt(max(0.0, r * r - Rg * Rg));
+  float disc = r * r * (mu * mu - 1.0) + Rt * Rt;
+  float d = max(0.0, -r * mu + sqrt(max(disc, 0.0)));
+  float dMin = Rt - r, dMax = rho + H;
+  float xMu = clamp((d - dMin) / max(dMax - dMin, 1e-3), 0.0, 1.0);
+  float xR = clamp(rho / H, 0.0, 1.0);
+  return vec2(atmoUvFromUnit(xMu, 256.0), atmoUvFromUnit(xR, 64.0));
+}
+
+// Transmittance from radius r towards cos-zenith mu up to space (0 if the ray hits the ground).
+vec3 atmoTransmittance(float r, float mu) {
+  float Rg = uAtmoGeom.x;
+  r = clamp(r, Rg, uAtmoGeom.y);
+  float muHorizon = -sqrt(max(0.0, 1.0 - (Rg / r) * (Rg / r)));
+  // smooth the terminator over the solar disc (~0.53 deg)
+  float vis = clamp((mu - muHorizon) / 0.0093 + 0.5, 0.0, 1.0);
+  vec3 t = texture(uTransmittanceLUT, atmoTransmittanceUv(r, max(mu, muHorizon + 0.0047))).rgb;
+  return t * vis;
+}
+
+// Sun irradiance (scene units) arriving at altitude h (m MSL) at horizontal offset rel.xz
+// from the camera: the local vertical tilts with the curvature of the earth.
+vec3 atmoSunIrradianceAt(vec3 relToCamera, float h) {
+  vec3 up = normalize(vec3(relToCamera.x, uEarthRadius + h, relToCamera.z));
+  return uSunIlluminance * atmoTransmittance(uAtmoGeom.x + max(h, 0.0), dot(up, uSunDir));
+}
+
+// Earth curvature: lower a vertex by d^2 / 2R, d = horizontal distance to the camera.
+float atmoCurvatureDrop(vec2 relXZ) {
+  return dot(relXZ, relXZ) / (2.0 * uEarthRadius);
+}
+
+// Optical depths (rayleigh, mie) of a straight path of length L from height h0 to h1 in an
+// exponential atmosphere (heights relative to MSL, flat earth: exact enough here).
+vec2 atmoPathDepth(float h0, float h1, float L) {
+  vec2 H = uAtmoGeom.zw;
+  vec2 a = h0 / H;
+  vec2 b = (h1 - h0) / H;
+  vec2 f = mix((1.0 - exp(-b)) / b, 1.0 - 0.5 * b, step(abs(b), vec2(1e-3)));
+  return L * exp(-a) * f;
+}
+
+vec3 atmoPathTransmittance(float h0, float h1, float L) {
+  vec2 od = atmoPathDepth(h0, h1, L);
+  return exp(-(uRayleigh * od.x + uMie.y * od.y));
+}
+`;
+
+// Sky-view LUT access: everything that looks at the sky or the haze from the camera.
+export const ATMOSPHERE_SKYVIEW = /* glsl */ `
+uniform sampler2D uSkyViewLUT;   // in-scattered radiance from the camera, per direction
+uniform sampler2D uSkyViewTLUT;  // transmittance from the camera to the ground / space, per direction
+
+// Sky-view LUT coordinates (Hillaire 2020) for a world direction seen from the camera.
+vec2 atmoSkyViewUv(vec3 dir) {
+  float Rg = uAtmoGeom.x;
+  float r = Rg + max(uCamAltitude, 1.0);
+  float vHorizon = sqrt(max(r * r - Rg * Rg, 0.0));
+  float beta = acos(clamp(vHorizon / r, -1.0, 1.0));
+  float zenithHorizon = ATMO_PI - beta;
+  float zen = acos(clamp(dir.y, -1.0, 1.0));
+  float v;
+  if (zen < zenithHorizon) {
+    float c = zen / zenithHorizon;
+    v = (1.0 - sqrt(max(1.0 - c, 0.0))) * 0.5;
+  } else {
+    float c = (zen - zenithHorizon) / max(beta, 1e-5);
+    v = sqrt(clamp(c, 0.0, 1.0)) * 0.5 + 0.5;
+  }
+  float ld = length(dir.xz), ls = length(uSunDir.xz);
+  float lightViewCos = (ld > 1e-5 && ls > 1e-5) ? dot(dir.xz / ld, uSunDir.xz / ls) : 1.0;
+  float u = sqrt(clamp(-lightViewCos * 0.5 + 0.5, 0.0, 1.0));
+  return vec2(atmoUvFromUnit(u, ${SKY_LUT_W.toFixed(1)}), atmoUvFromUnit(v, ${SKY_LUT_H.toFixed(1)}));
+}
+
+// In-scattered radiance (scene units) of the whole view ray in direction dir.
+vec3 atmoSkyRadiance(vec3 dir) {
+  return uSunIlluminance * texture(uSkyViewLUT, atmoSkyViewUv(dir)).rgb;
+}
+
+// Aerial perspective: what a surface of radiance 'radiance' at distance L in direction dir
+// (camera -> point, unit) and height hPoint looks like from the camera.
+// In-scattering is the sky-view LUT value of that direction scaled by the share of the
+// whole ray's extinction that lies in front of the point, so the haze matches the sky.
+vec3 atmoAerial(vec3 radiance, vec3 dir, float L, float hPoint) {
+  vec2 uv = atmoSkyViewUv(dir);
+  vec3 sFull = texture(uSkyViewLUT, uv).rgb;
+  vec3 tFull = texture(uSkyViewTLUT, uv).rgb;
+  vec3 t = atmoPathTransmittance(uCamAltitude, hPoint, L);
+  vec3 share = clamp((1.0 - t) / max(1.0 - tFull, vec3(1e-4)), 0.0, 1.0);
+  return radiance * t + uSunIlluminance * sFull * share;
+}
+
+// Same, returning transmittance and in-scatter separately (for blending).
+void atmoAerialParts(vec3 dir, float L, float hPoint, out vec3 t, out vec3 inscatter) {
+  vec2 uv = atmoSkyViewUv(dir);
+  vec3 sFull = texture(uSkyViewLUT, uv).rgb;
+  vec3 tFull = texture(uSkyViewTLUT, uv).rgb;
+  t = atmoPathTransmittance(uCamAltitude, hPoint, L);
+  vec3 share = clamp((1.0 - t) / max(1.0 - tFull, vec3(1e-4)), 0.0, 1.0);
+  inscatter = uSunIlluminance * sFull * share;
+}
+`;
+
+/** Everything: core uniforms and helpers plus sky-view access. */
+export const ATMOSPHERE_PARS = ATMOSPHERE_CORE + ATMOSPHERE_SKYVIEW;
+
+// ---------------------------------------------------------------------------------------
+// Sky-view LUT pass (rendered into a 2-target render target, GLSL3)
+
+export const SKYVIEW_LUT_VERT = /* glsl */ `
+out vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+export const SKYVIEW_LUT_FRAG = /* glsl */ `
+precision highp float;
+in vec2 vUv;
+layout(location = 0) out vec4 outScatter;
+layout(location = 1) out vec4 outTrans;
+${ATMOSPHERE_CORE}
+
+float rayleighPhase(float c) { return 3.0 / (16.0 * ATMO_PI) * (1.0 + c * c); }
+float miePhase(float c, float g) {
+  float g2 = g * g;
+  float k = 3.0 / (8.0 * ATMO_PI) * (1.0 - g2) / (2.0 + g2);
+  return k * (1.0 + c * c) / pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5);
+}
+
+vec3 multiScat(float h, float muS) {
+  vec2 uv = vec2(clamp(muS * 0.5 + 0.5, 0.0, 1.0), clamp(h / (uAtmoGeom.y - uAtmoGeom.x), 0.0, 1.0));
+  uv = vec2(atmoUvFromUnit(uv.x, 32.0), atmoUvFromUnit(uv.y, 32.0));
+  return texture(uMultiScatLUT, uv).rgb;
+}
+
+void main() {
+  float Rg = uAtmoGeom.x, Rt = uAtmoGeom.y;
+  float r = Rg + max(uCamAltitude, 1.0);
+  // un-map the texel (texel centres cover [0, 1] exactly)
+  float u = (vUv.x - 0.5 / ${SKY_LUT_W.toFixed(1)}) / (1.0 - 1.0 / ${SKY_LUT_W.toFixed(1)});
+  float v = (vUv.y - 0.5 / ${SKY_LUT_H.toFixed(1)}) / (1.0 - 1.0 / ${SKY_LUT_H.toFixed(1)});
+  float vHorizon = sqrt(max(r * r - Rg * Rg, 0.0));
+  float beta = acos(clamp(vHorizon / r, -1.0, 1.0));
+  float zenithHorizon = ATMO_PI - beta;
+  float zen;
+  if (v < 0.5) {
+    float c = 1.0 - 2.0 * v;
+    zen = zenithHorizon * (1.0 - c * c);
+  } else {
+    float c = 2.0 * v - 1.0;
+    zen = zenithHorizon + beta * c * c;
+  }
+  float lightViewCos = -(u * u * 2.0 - 1.0);
+  float sinZ = sin(zen), cosZ = cos(zen);
+  float sinL = sqrt(max(0.0, 1.0 - lightViewCos * lightViewCos));
+  vec3 dir = vec3(sinZ * lightViewCos, cosZ, sinZ * sinL);   // local frame: +Y up, sun in XY
+  float muS = clamp(uSunDir.y, -1.0, 1.0);
+  vec3 sun = vec3(sqrt(max(0.0, 1.0 - muS * muS)), muS, 0.0);
+
+  // ray length to the ground or to space
+  float mu = dir.y;
+  float discG = r * r * (mu * mu - 1.0) + Rg * Rg;
+  bool ground = mu < 0.0 && discG >= 0.0;
+  float discT = r * r * (mu * mu - 1.0) + Rt * Rt;
+  float dist = ground ? max(0.0, -r * mu - sqrt(max(discG, 0.0))) : max(0.0, -r * mu + sqrt(max(discT, 0.0)));
+
+  float cosT = dot(dir, sun);
+  float pr = rayleighPhase(cosT), pm = miePhase(cosT, uMie.z);
+  vec3 thr = vec3(1.0);       // throughput incl. ozone
+  vec3 odRM = vec3(0.0);      // optical depth without ozone (matches atmoPathTransmittance)
+  vec3 L = vec3(0.0);
+  const int N = 40;
+  float tPrev = 0.0;
+  for (int i = 0; i < N; i++) {
+    float f = float(i + 1) / float(N);
+    float t1 = dist * f * f;
+    float dt = t1 - tPrev;
+    float t = tPrev + 0.5 * dt;
+    tPrev = t1;
+    vec3 p = vec3(0.0, r, 0.0) + dir * t;
+    float pr2 = length(p);
+    float h = pr2 - Rg;
+    float dR = exp(-h / uAtmoGeom.z), dM = exp(-h / uAtmoGeom.w);
+    float dO = max(0.0, 1.0 - abs(h - 25000.0) / 15000.0);
+    vec3 extRM = uRayleigh * dR + uMie.y * dM;
+    vec3 ext = extRM + uOzone * dO;
+    float muSs = dot(p, sun) / pr2;
+    vec3 ts = atmoTransmittance(pr2, muSs);
+    vec3 ms = multiScat(h, muSs);
+    vec3 sR = uRayleigh * dR, sM = vec3(uMie.x * dM);
+    vec3 S = ts * (sR * pr + sM * pm) + ms * (sR + sM);
+    vec3 stepT = exp(-ext * dt);
+    L += thr * S * (1.0 - stepT) / max(ext, vec3(1e-12));
+    thr *= stepT;
+    odRM += extRM * dt;
+  }
+  outScatter = vec4(L, 1.0);
+  outTrans = vec4(exp(-odRM), 1.0);
+}
+`;
+
+// ---------------------------------------------------------------------------------------
+// Sky dome (a unit sphere around the camera; depth test off, drawn first)
+
+export const SKY_DOME_VERT = /* glsl */ `
+varying vec3 vDir;
+void main() {
+  vDir = position;
+  vec4 p = projectionMatrix * vec4(mat3(viewMatrix) * position, 1.0);
+  // z mid-range in both standard and reversed depth: never clipped by near / far
+  gl_Position = vec4(p.xy, 0.5 * p.w, p.w);
+}
+`;
+
+export const SKY_DOME_FRAG = /* glsl */ `
+varying vec3 vDir;
+uniform float uShowSun;     // 0 for the environment map
+${ATMOSPHERE_PARS}
+
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+
+vec3 stars(vec3 dir) {
+  vec3 q = dir * 220.0;
+  vec3 c = floor(q);
+  float h = hash13(c);
+  if (h < 0.9965) return vec3(0.0);
+  vec3 jitter = vec3(hash13(c + 7.1), hash13(c + 3.7), hash13(c + 1.3)) - 0.5;
+  vec3 local = fract(q) - 0.5 - jitter * 0.6;
+  float d = length(local);
+  float px = max(fwidth(q.x) + fwidth(q.y), 1e-3);
+  float mag = pow((h - 0.9965) / 0.0035, 6.0);
+  float s = smoothstep(px * 1.2, 0.0, d) * (0.15 + 3.0 * mag);
+  vec3 tint = mix(vec3(1.0, 0.85, 0.7), vec3(0.75, 0.85, 1.0), hash13(c + 9.9));
+  return tint * s;
+}
+
+void main() {
+  vec3 dir = normalize(vDir);
+  vec2 uv = atmoSkyViewUv(dir);
+  vec3 L = uSunIlluminance * texture(uSkyViewLUT, uv).rgb;
+  float Rg = uAtmoGeom.x;
+  float r = Rg + max(uCamAltitude, 1.0);
+  float muHorizon = -sqrt(max(0.0, 1.0 - (Rg / r) * (Rg / r)));
+  if (dir.y < muHorizon) {
+    // below the geometric horizon: hazy ground beyond the terrain
+    L += texture(uSkyViewTLUT, uv).rgb * uGroundRadiance;
+  } else {
+    // sun disc (angular radius 0.2666 deg), limb darkened, through the atmosphere
+    float cosSun = dot(dir, uSunDir);
+    const float SUN_R = 0.004654;
+    float ang = acos(clamp(cosSun, -1.0, 1.0));
+    float aa = max(fwidth(ang), 1e-5);
+    float disc = smoothstep(SUN_R + aa, SUN_R - aa, ang) * uShowSun;
+    if (disc > 0.0) {
+      float x = clamp(ang / SUN_R, 0.0, 1.0);
+      float limb = 1.0 - 0.6 * (1.0 - sqrt(max(0.0, 1.0 - x * x)));
+      vec3 tr = atmoTransmittance(r, dir.y);
+      L += disc * limb * uSunIlluminance * tr / (ATMO_PI * SUN_R * SUN_R);
+    }
+    // stars, visible once the sky is dark
+    float skyLum = dot(L, vec3(0.2126, 0.7152, 0.0722));
+    L += stars(dir) * uNight * 0.02 * clamp(1.0 - skyLum * 400.0, 0.0, 1.0) * uShowSun;
+  }
+  gl_FragColor = vec4(L, 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`;

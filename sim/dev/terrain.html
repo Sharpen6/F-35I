@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>F-35I sim: terrain and environment test page</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font: 12px/1.35 system-ui, sans-serif; color: #e8eef4; }
+  canvas { display: block; }
+  #panel { position: absolute; top: 8px; left: 8px; width: 290px; background: rgba(10, 16, 24, 0.72); border-radius: 6px; padding: 8px 10px; }
+  #panel h1 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
+  #panel label { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  #panel input[type=range] { flex: 1; }
+  #spawns button { margin: 2px 2px 0 0; font-size: 11px; padding: 2px 5px; background: #24384d; color: #e8eef4; border: 1px solid #44617d; border-radius: 3px; cursor: pointer; }
+  #spawns button:hover { background: #31506d; }
+  #stats { white-space: pre; font: 11px/1.3 ui-monospace, monospace; margin-top: 6px; }
+  #help { font-size: 11px; color: #a9b8c6; margin-top: 6px; }
+  #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 16px; color: #cfe; pointer-events: none; }
+  #attribution { position: absolute; right: 6px; bottom: 4px; font-size: 10px; color: rgba(255,255,255,0.7); text-shadow: 0 0 2px #000; max-width: 60%; text-align: right; }
+  body.hud-off #panel, body.hud-off #attribution { display: none; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "../vendor/three/build/three.module.js", "three/addons/": "../vendor/three/examples/jsm/" } }
+</script>
+</head>
+<body>
+<div id="panel">
+  <h1>Terrain / environment test</h1>
+  <label>Time <input id="time" type="range" min="4" max="21" step="0.05" value="10.5"><span id="timeVal"></span></label>
+  <label>Day <input id="day" type="range" min="1" max="365" step="1" value="172"><span id="dayVal"></span></label>
+  <label>Haze km <input id="vis" type="range" min="10" max="200" step="5" value="60"><span id="visVal"></span></label>
+  <label><input id="lod" type="checkbox"> LOD colours</label>
+  <label><input id="wire" type="checkbox"> wireframe</label>
+  <label><input id="jet" type="checkbox"> stand-in jet at the camera target (shadow test)</label>
+  <div id="spawns"></div>
+  <div id="stats"></div>
+  <div id="help">Drag or click for mouse look (Esc releases) · WASD move · R/F or Space/C up/down · wheel or +/- speed · Shift x5 · H hides the panel</div>
+</div>
+<div id="loading">loading terrain ...</div>
+<div id="attribution"></div>
+<script type="module" src="./terrain.js"></script>
+</body>
+</html>
