@@ -114,10 +114,16 @@ async function main() {
     async function hmdCheck(where) {
       const { h, st } = await S(() => ({ h: window.__sim.hmd(), st: window.__sim.fdm() }));
       const hdg = ((st.heading / DEG) % 360 + 360) % 360;
-      const dh = Math.abs(((h.hdg - hdg + 540) % 360) - 180);
+      // the HMD shows magnetic heading; hdgGrid is the flight model's (map grid) heading it starts from
+      const dh = Math.abs((((h.hdgGrid ?? h.hdg) - hdg + 540) % 360) - 180);
       check(`${where}: HMD airspeed = flight model IAS`, Math.abs(h.iasKt - st.ias / KT) < 0.5, `${f2(h.iasKt, 1)} kt vs ${f2(st.ias / KT, 1)} kt`);
       check(`${where}: HMD altitude = flight model altitude (ft)`, Math.abs(h.altFt - st.altitude / FT) < 1, `${f2(h.altFt, 0)} ft vs ${f2(st.altitude, 1)} m`);
-      check(`${where}: HMD heading = flight model heading`, dh < 0.1, `${f2(h.hdg, 1)} vs ${f2(hdg, 1)} deg`);
+      check(`${where}: HMD heading = flight model heading`, dh < 0.1, `${f2(h.hdgGrid ?? h.hdg, 1)} vs ${f2(hdg, 1)} deg`);
+      if (h.magVar != null) {
+        const dm = Math.abs((((h.hdg - (h.hdgGrid + h.conv - h.magVar)) + 540) % 360) - 180);
+        check(`${where}: HMD magnetic heading = grid + convergence - variation (about 5 deg E)`, dm < 0.01 && h.magVar > 4.5 && h.magVar < 5.5,
+          `${f2(h.hdg, 1)} M, ${f2(h.hdgTrue, 1)} T, variation ${f2(h.magVar, 2)} E, convergence ${f2(h.conv, 2)}`);
+      }
       check(`${where}: HMD g = flight model load factor`, Math.abs(h.g - st.gLoad) < 0.01, `${f2(h.g)} vs ${f2(st.gLoad)}`);
       check(`${where}: HMD vertical speed and Mach`, Math.abs(h.vsFpm - st.vs / FT * 60) < 1 && Math.abs(h.mach - st.mach) < 1e-3,
         `VS ${f2(h.vsFpm, 0)} fpm, M ${f2(h.mach, 3)}`);
