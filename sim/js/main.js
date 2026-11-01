@@ -24,6 +24,7 @@ import { UI, formatHours } from './ui/Menu.js';
 import { BindingsUI } from './ui/BindingsUI.js';
 import { Effects } from './ui/Effects.js';
 import { EngineSound } from './audio/EngineSound.js';
+import { Scatter } from './terrain/Scatter.js';           // vegetation (trees, orchards, palms, shrubs)
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -44,7 +45,7 @@ const QUALITY = {
 };
 
 const SETTINGS_KEY = 'f35i.settings.v1';
-const DEFAULTS = { spawn: null, time: 7.0, quality: 'high', volume: 0.7, wingmen: false, mouseStick: false, camera: 'cockpit', hmd: true };
+const DEFAULTS = { spawn: null, time: 7.0, quality: 'high', volume: 0.7, wingmen: false, mouseStick: false, camera: 'cockpit', hmd: true, vegetation: true };
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
@@ -57,6 +58,7 @@ function loadSettings() {
   if (params.has('quality') && QUALITY[params.get('quality')]) s.quality = params.get('quality');
   if (params.has('cam') && VIEWS.includes(params.get('cam'))) s.camera = params.get('cam');
   if (params.has('wingmen')) s.wingmen = params.get('wingmen') === '1';
+  if (params.has('vegetation')) s.vegetation = params.get('vegetation') !== '0';   // trees on / off
   if (!QUALITY[s.quality]) s.quality = 'high';
   return s;
 }
@@ -155,7 +157,8 @@ class App {
     this.ui.buildMenu({
       spawns: this.terrain.spawns,
       settings: this.settings,
-      attribution: this.terrain.attribution || this.terrain.manifest?.attribution || '',
+      // the terrain's sources, then those of the graphics modules (module.attribution)
+      attribution: [this.terrain.attribution || this.terrain.manifest?.attribution || '', ...this.modules.map((m) => m.attribution)].filter(Boolean).join(' | '),
       model: 'Aircraft: the procedural F-35I Adir Blender model of this project (scripts/f35, scripts/pilot).',
     });
     if (!this.terrain.spawns[this.settings.spawn]) this.settings.spawn = Object.keys(this.terrain.spawns)[0];
@@ -245,6 +248,7 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+    this.addModule(new Scatter(ctx));                      // vegetation: js/terrain/Scatter.js
   }
 
   /**
@@ -320,6 +324,7 @@ class App {
     if (key === 'volume') this.sound.setVolume(value);
     if (key === 'mouseStick') this.input.setMouseStick(value);
     if (key === 'wingmen') this._lazyWingmen();      // loads them once, then shows / hides
+    for (const m of this.modules) m.setOption?.(key, value);   // module options (e.g. 'vegetation')
     this._saveSettings();
   }
 
