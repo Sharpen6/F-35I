@@ -24,6 +24,7 @@ import { UI, formatHours } from './ui/Menu.js';
 import { BindingsUI } from './ui/BindingsUI.js';
 import { Effects } from './ui/Effects.js';
 import { EngineSound } from './audio/EngineSound.js';
+import { Cockpit } from './aircraft/Cockpit.js';      // cockpit track: live PCD, interior, canopy glass
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -245,6 +246,7 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+    if (!STUBS) this.cockpit = this.addModule(new Cockpit(ctx));   // cockpit track
   }
 
   /**
