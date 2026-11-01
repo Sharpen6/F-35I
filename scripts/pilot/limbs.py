@@ -187,17 +187,19 @@ UPPER = [  # (u, half width, x0, bottom, top, n)
     (0.86, 0.047, 0.000, 0.019, 0.055, 2.6),
     (0.97, 0.034, -0.004, 0.020, 0.047, 2.6),
 ]
-SOLE = [   # (u, half width, x0, bottom, top, n)
-    (0.00, 0.033, 0.000, 0.000, 0.030, 4.0),
-    (0.12, 0.040, 0.000, 0.000, 0.030, 4.0),
-    (0.27, 0.042, 0.002, 0.000, 0.029, 4.0),
-    (0.32, 0.041, 0.003, 0.007, 0.026, 4.0),
-    (0.45, 0.045, 0.004, 0.007, 0.023, 4.0),
-    (0.58, 0.051, 0.004, 0.001, 0.021, 4.0),
-    (0.74, 0.056, 0.003, 0.000, 0.021, 4.0),
-    (0.88, 0.052, 0.000, 0.001, 0.021, 4.0),
-    (0.99, 0.038, -0.004, 0.006, 0.022, 4.0),
+SOLE = [   # (u, half width, x0, bottom, top, n): a welt 2-4 mm proud of the upper all round
+    (0.015, 0.031, 0.000, 0.000, 0.030, 4.0),
+    (0.12, 0.039, 0.000, 0.000, 0.030, 4.0),
+    (0.27, 0.041, 0.002, 0.000, 0.029, 4.0),
+    (0.32, 0.040, 0.003, 0.007, 0.026, 4.0),
+    (0.45, 0.044, 0.004, 0.007, 0.023, 4.0),
+    (0.58, 0.050, 0.004, 0.001, 0.021, 4.0),
+    (0.74, 0.053, 0.003, 0.000, 0.021, 4.0),
+    (0.88, 0.050, 0.000, 0.001, 0.021, 4.0),
+    (0.975, 0.035, -0.004, 0.006, 0.022, 4.0),
 ]
+LACE_ROWS = (0.44, 0.50, 0.56, 0.62, 0.68)  # eyelet rows on the instep (u)
+LACE_ANGLE = 34.0                            # eyelets either side of the instep ridge (deg)
 BOOT_BACK, BOOT_TOE = 0.014, 0.018          # boot heel behind the heel joint, toe cap ahead of the toe
 BALL_HEIGHT = 0.041                          # ball joint above the floor (standing)
 
@@ -243,4 +245,64 @@ def boot_solids(j, F, side, sole_n=None):
 
 def sole_solids(fr):
     """Rubber sole and heel under the boot (heel block, raised arch, toe spring)."""
-    return [(_foot_loft(fr, SOLE, 0.012, 0.012), 0.0)]
+    return [(_foot_loft(fr, SOLE, 0.014, 0.016), 0.0)]
+
+
+def _upper_at(u):
+    """UPPER table interpolated at u: (half width, x0, bottom, top)."""
+    t = np.array(UPPER)
+    return tuple(float(np.interp(u, t[:, 0], t[:, k])) for k in (1, 2, 3, 4))
+
+
+def _cast(solid, o, d, rmax=0.15):
+    d = unit(d)
+    lo, hi = 0.0, rmax
+    for _ in range(36):
+        mid = 0.5 * (lo + hi)
+        if solid.dist((o + d * mid)[None])[0] < 0:
+            lo = mid
+        else:
+            hi = mid
+    return o + d * lo
+
+
+def _normal(solid, p, e=0.0005):
+    g = np.array([(solid.dist((p + o)[None])[0] - solid.dist((p - o)[None])[0]) / (2 * e)
+                  for o in np.eye(3) * e])
+    return unit(g)
+
+
+def boot_laces(j, F, side, sole_n=None):
+    """Laces criss-crossing the instep between two rows of eyelets: (lace solids, eyelet solids)."""
+    sol, fr = boot_solids(j, F, side, sole_n)
+    upper = sdf.Union([s for s, _k in sol], 0.03)
+    O, fwd, n, left, L, sg = fr["O"], fr["fwd"], fr["n"], fr["left"], fr["L"], fr["sg"]
+    a = math.radians(LACE_ANGLE)
+    rows, cores = [], []
+    for u in LACE_ROWS:
+        hw, x0, bot, top = _upper_at(u)
+        c = O + fwd * (u * L) + n * (0.5 * (bot + top)) + left * (x0 * sg)
+        cores.append(c)
+        row = []
+        for side_k in (-1.0, 1.0):
+            e = _cast(upper, c, n * math.cos(a) + left * side_k * math.sin(a))
+            row.append((e, _normal(upper, e)))
+        rows.append(row)
+    laces, eyelets = [], []
+    for (e, nr) in [x for row in rows for x in row]:
+        ring = sdf.Disc(e + nr * 0.0006, nr, 0.0042, 0.0011, 0.0005)
+        eyelets.append(ring)
+    for k in range(len(rows) - 1):
+        cm = 0.5 * (cores[k] + cores[k + 1])
+        for i0, i1 in ((0, 1), (1, 0)):
+            (pa, na), (pb, nb) = rows[k][i0], rows[k + 1][i1]
+            mid = _cast(upper, cm, 0.5 * (pa + pb) - cm)
+            mid = mid + _normal(upper, mid) * 0.0030
+            path = sdf.spline([pa + na * 0.0018, mid, pb + nb * 0.0018], 8)
+            laces.append(sdf.Tube(path, 0.0017, band=0.006))
+    # the bar across the lowest pair (where the lacing starts at the toe cap)
+    (pa, na), (pb, nb) = rows[-1]
+    mid = _cast(upper, cores[-1], 0.5 * (pa + pb) - cores[-1]) + n * 0.0
+    mid = mid + _normal(upper, mid) * 0.0030
+    laces.append(sdf.Tube(sdf.spline([pa + na * 0.0018, mid, pb + nb * 0.0018], 8), 0.0017, band=0.006))
+    return laces, eyelets

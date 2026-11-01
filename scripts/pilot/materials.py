@@ -57,8 +57,12 @@ def _bump(nt, height_socket, strength, distance, normal_in=None):
     return bm.outputs["Normal"]
 
 
-def fabric(name, color, rough=0.85, sheen=0.35, weave=900.0, bump=0.25, mottle=0.10, wrinkle=0.0):
-    """Woven cloth: a fine twill bump, slow colour mottling (wear, dye), sheen at grazing angles."""
+def fabric(name, color, rough=0.85, sheen=0.35, weave=900.0, bump=0.25, mottle=0.10, wrinkle=0.0,
+           folds=0.0, fold_scale=7.0):
+    """Woven cloth: a fine twill bump, slow colour mottling (wear, dye), sheen at grazing angles.
+    folds > 0 adds creases: ridges of a noise squashed along Z, so on limbs and torso they run
+    round the body like the concertina folds of sleeves and trouser legs (in object space, so
+    they stay on the cloth when the pilot moves)."""
     m = _new(name)
     nt = m.node_tree
     b = _bsdf(m)
@@ -90,13 +94,27 @@ def fabric(name, color, rough=0.85, sheen=0.35, weave=900.0, bump=0.25, mottle=0
     wave.inputs["Detail"].default_value = 1.0
     nt.links.new(vec, wave.inputs["Vector"])
     nrm = None
+    if folds > 0:
+        # soft creases: a smooth, low-detail noise squashed along Z drives the bump only, so the
+        # cloth shades like gentle folds round the limbs (no dark contour lines: those read as camo)
+        tc = nt.nodes.new("ShaderNodeTexCoord")
+        mp = nt.nodes.new("ShaderNodeMapping")
+        mp.inputs["Scale"].default_value = (fold_scale, fold_scale, fold_scale * 3.2)
+        nt.links.new(tc.outputs["Object"], mp.inputs["Vector"])
+        fn = nt.nodes.new("ShaderNodeTexNoise")
+        fn.inputs["Scale"].default_value = 1.0
+        fn.inputs["Detail"].default_value = 1.5
+        fn.inputs["Roughness"].default_value = 0.45
+        fn.inputs["Distortion"].default_value = 0.2
+        nt.links.new(mp.outputs["Vector"], fn.inputs["Vector"])
+        nrm = _bump(nt, fn.outputs["Fac"], folds * 0.5, 0.006)
     if wrinkle > 0:
         wn = nt.nodes.new("ShaderNodeTexNoise")
         wn.inputs["Scale"].default_value = 40.0
         wn.inputs["Detail"].default_value = 3.0
         wn.inputs["Distortion"].default_value = 0.6
         nt.links.new(vec, wn.inputs["Vector"])
-        nrm = _bump(nt, wn.outputs["Fac"], wrinkle, 0.002)
+        nrm = _bump(nt, wn.outputs["Fac"], wrinkle, 0.002, nrm)
     nt.links.new(_bump(nt, wave.outputs["Fac"], bump, 0.0004, nrm), b.inputs["Normal"])
     return m
 
@@ -183,12 +201,12 @@ def visor(name="P2_Visor"):
     (F0 ~ 0.2) with a faint bronze/gold interference tint, as in the photos."""
     m = _new(name)
     b = _bsdf(m)
-    b.inputs["Base Color"].default_value = srgb("#6E6E70")
+    b.inputs["Base Color"].default_value = srgb("#5A5A5C")
     b.inputs["Transmission Weight"].default_value = 1.0
     b.inputs["IOR"].default_value = 1.585
     b.inputs["Roughness"].default_value = 0.012
     b.inputs["Coat Weight"].default_value = 1.0
-    b.inputs["Coat IOR"].default_value = 2.5
+    b.inputs["Coat IOR"].default_value = 2.0
     b.inputs["Coat Roughness"].default_value = 0.01
     b.inputs["Thin Film Thickness"].default_value = 420.0
     b.inputs["Thin Film IOR"].default_value = 1.9
@@ -402,17 +420,20 @@ def all_materials():
     """The pilot palette (sRGB values from the reference photos)."""
     return {
         # IAF olive suit: darker and more yellow than the USAF sage (Blue Flag 2019 side by side)
-        "suit": fabric("P2_FlightSuit", srgb("#646246"), rough=0.88, sheen=0.4, wrinkle=0.15),
+        "suit": fabric("P2_FlightSuit", srgb("#646246"), rough=0.88, sheen=0.25, mottle=0.04, wrinkle=0.12,
+                       folds=0.55),
         "tshirt": fabric("P2_TShirt", srgb("#E6E6E4"), rough=0.95, sheen=0.3, weave=2400.0, bump=0.15),
-        "gsuit": fabric("P2_GSuit", srgb("#66684F"), rough=0.8, sheen=0.3, weave=700.0, wrinkle=0.1),
+        "gsuit": fabric("P2_GSuit", srgb("#585C43"), rough=0.8, sheen=0.2, weave=700.0, mottle=0.04,
+                        wrinkle=0.1, folds=0.45, fold_scale=6.0),
         "webbing": fabric("P2_Webbing", srgb("#3a3c33"), rough=0.75, sheen=0.25, weave=1400.0, bump=0.5),
         "webbing_black": fabric("P2_WebbingBlack", srgb("#161616"), rough=0.8, sheen=0.2, weave=1600.0, bump=0.4),
-        "vest": fabric("P2_Vest", srgb("#575c49"), rough=0.85, sheen=0.3, weave=800.0),
+        "vest": fabric("P2_Vest", srgb("#4E5340"), rough=0.85, sheen=0.2, weave=800.0, mottle=0.05, folds=0.3,
+                       fold_scale=5.0),
         "skin": skin(),
         "glove": fabric("P2_GloveKnit", srgb("#6E6D57"), rough=0.9, sheen=0.4, weave=2200.0, bump=0.3),
         "glove_leather": leather("P2_GloveLeather", srgb("#74726A"), rough=0.55, grain=0.2),
         "leather": leather("P2_Leather", srgb("#2a231e"), rough=0.55),
-        "boot": leather("P2_Boot", srgb("#1A1A1A"), rough=0.32, coat=0.3, grain=0.12),
+        "boot": leather("P2_Boot", srgb("#1C1B1A"), rough=0.52, coat=0.0, grain=0.25),
         "sole": plain("P2_Sole", srgb("#1b1a19"), rough=0.85),
         "helmet": carbon("P2_HelmetCarbon"),
         "helmet_trim": plain("P2_HelmetTrim", srgb("#151617"), rough=0.6),

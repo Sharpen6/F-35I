@@ -26,6 +26,12 @@ EYE = (0.0, 3.90, 1.13)               # design eye (s 3.35 after COCKPIT_DS)
 # clear glass over the helmet (the canopy crest is ~3 cm under the 3-view's), and the seat's
 # headbox a few cm under the glass.  pilot.jp lowers the body by the same amount.
 SEAT_DZ = -0.045
+# The seat bucket (pan, back, cushions, side boxes, ejection handle) runs up and down the main beam
+# so that each pilot's eyes sit at the design eye; the headbox, rails and rods on the beam stay put.
+# For the 1.78 m pilot of f35/pilot.py it is set 10.5 cm down, and the back 4.5 cm aft, so the hips
+# rest on the cushion and the back on the back cushion with the skull at pilot.HEAD_C.
+BUCKET_DZ = -0.105
+BUCKET_BACK_DS = 0.045
 
 
 # --------------------------------------------------------------------------
@@ -383,17 +389,21 @@ def build_seat(coll):
     """Martin-Baker US16E style ejection seat (simplified)."""
     def WS(x, s, z):
         return W(x, s, z + SEAT_DZ)
+
+    def WB(x, s, z, back=False):
+        """A point of the seat bucket (moved down by BUCKET_DZ, the back also aft)."""
+        return W(x, s + (BUCKET_BACK_DS if back else 0.0), z + SEAT_DZ + BUCKET_DZ)
     objs = {}
     parts = []
-    s_pan_f, s_pan_b, z_pan = 3.55, 3.97, 0.40
+    s_pan_f, s_pan_b, z_pan = 3.55, 3.97 + BUCKET_BACK_DS, 0.40
     # seat pan (bucket bottom)
     parts.append(_box_mesh(0.44, s_pan_b - s_pan_f, 0.10, 0, 0, 0))
-    pan_loc = WS(0, (s_pan_f + s_pan_b) / 2, z_pan - 0.05)
+    pan_loc = WB(0, (s_pan_f + s_pan_b) / 2, z_pan - 0.05)
     pan = _obj("Seat_Pan", parts[0], coll, M.get("seat"), loc=pan_loc, bevel=0.012)
     # back (reclined ~18 deg)
     rec = math.radians(18)
     back = _obj("Seat_Back", _box_mesh(0.46, 0.10, 0.82), coll, M.get("seat"),
-                loc=WS(0, 4.12, 0.80), rot=(-rec, 0, 0), bevel=0.012)
+                loc=WB(0, 4.12, 0.80, back=True), rot=(-rec, 0, 0), bevel=0.012)
     # headbox with drogue container
     head = _obj("Seat_Headbox", _box_mesh(0.30, 0.18, 0.24), coll, M.get("seat"),
                 loc=WS(0, 4.33, 1.16), rot=(-rec, 0, 0), bevel=0.02)
@@ -411,12 +421,12 @@ def build_seat(coll):
         _obj(f"Seat_Rail_{'L' if side > 0 else 'R'}", _box_mesh(0.035, 0.07, rl), coll,
              M.get("seat"), loc=rc, rot=(-rec, 0, 0), bevel=0.006)
         _obj(f"Seat_Side_{'L' if side > 0 else 'R'}", _box_mesh(0.03, 0.40, 0.17), coll,
-             M.get("seat"), loc=WS(side * 0.235, 3.78, 0.46), bevel=0.006)
+             M.get("seat"), loc=WB(side * 0.235, 3.78, 0.46), bevel=0.006)
     # cushions
-    _obj("Seat_Cushion", _box_mesh(0.40, 0.38, 0.05), coll, M.get("seat_cushion"),
-         loc=WS(0, 3.76, z_pan + 0.025), bevel=0.015)
+    _obj("Seat_Cushion", _box_mesh(0.40, 0.38 + BUCKET_BACK_DS, 0.05), coll, M.get("seat_cushion"),
+         loc=WB(0, 3.76 + BUCKET_BACK_DS / 2, z_pan + 0.025), bevel=0.015)
     _obj("Seat_BackCushion", _box_mesh(0.38, 0.05, 0.62), coll, M.get("seat_cushion"),
-         loc=WS(0, 4.035, 0.80), rot=(-rec, 0, 0), bevel=0.015)
+         loc=WB(0, 4.035, 0.80, back=True), rot=(-rec, 0, 0), bevel=0.015)
     # tall flat panel standing just aft of the headbox, leaning back (photos c09, c34, c53:
     # dark face with light edges, its top a few cm under the headbox top)
     _obj("Cockpit_AftPanel", _box_mesh(0.30, 0.03, 0.39), coll, M.get("cockpit_panel"),
@@ -429,6 +439,6 @@ def build_seat(coll):
     l2v = [v + Vector((-0.08, 0, -0.06)) for v in l2[0]]
     l3v = [v + Vector((0.08, 0, -0.06)) for v in l2[0]]
     ej = _obj("Seat_EjectHandle", _merge([(lv, loop[1]), (l2v, l2[1]), (l3v, l2[1])]), coll,
-              M.get("yellow_black"), loc=WS(0, 3.54, 0.43))
+              M.get("yellow_black"), loc=WB(0, 3.54, 0.43))
     objs["Seat_EjectHandle"] = ej
     return objs

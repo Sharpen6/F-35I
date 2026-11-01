@@ -16,3 +16,6 @@ references/hdri/*.sun.json
 renders/video/_cache/
 renders/video/check/
 renders/video/F-35I_Adir_making_of.mp4
+
+# pilot mesh cache (rebuilt from scripts/pilot when the sources change)
+blend/cache/

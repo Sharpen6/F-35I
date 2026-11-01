@@ -25,10 +25,16 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
   (two long nose-gear doors with sawtooth fronts that stay open beside the leg, as on the real jet),
   wheels that spin with the distance rolled, nose-wheel steering.
 * **Weapon bays:** both internal bays with doors, a GBU-31 JDAM and an AIM-120 AMRAAM in each.
-* **Pilot:** one smooth skinned body (flight suit and G-suit) on an armature, survival vest with LPU
-  collar and pouches, harness with Koch fittings, kneeboard, boots, gloved hands, and a helmet-mounted
-  display helmet with visor, oxygen mask and hose. Seated in the ejection seat, hands follow the
-  side-stick and throttle through IK, head looks left / right / up / down and tilts.
+* **Pilot:** modelled separately in detail ([`scripts/pilot/`](scripts/pilot), studio file
+  [`blend/F-35I_Pilot.blend`](blend), renders in [`renders/pilot/`](renders/pilot)): a 1.78 m body
+  in the IAF olive flight suit with a white T-shirt at the collar, Israeli flag and unit patches on the
+  sleeves, pen pocket, survival vest with pouches, harness with leg straps, G-suit with its hose and
+  abdominal bladder, sage Nomex gloves with grey leather palms, laced black leather boots, a steel dive
+  watch and a tablet kneeboard. The F-35 Gen III helmet (HMDS) has a carbon shell, the brow display
+  module with the night-vision camera, the wrap-around visor on its pivots, ear cups, the oxygen mask with
+  its corrugated hose and the helmet cable to the seat. In the jet the pilot sits in the ejection seat (the
+  seat bucket set for a 1.78 m pilot, eyes at the design eye), hands on the side-stick and throttle through IK,
+  boots on the rudder pedals; the head looks left / right / up / down and tilts.
 * **Cockpit switches:** 24 switches, each moves its lever (and guard), lights its LED when the battery
   is on, and drives the system it commands (lights, display, gear, bays, canopy, hook ...).
 * **Paint and light:** dark grey under a satin clear coat, tuned against two photos rendered from their
@@ -44,6 +50,7 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
 | --- | --- |
 | `scripts/build_f35i.py` | Entry point: builds the whole aircraft into a fresh scene |
 | `scripts/f35/` | Modules: fuselage, wings, fillets, tails, nozzle, canopy, cockpit, gear, bays, pilot, markings, panels, normals (clean shading over boolean seams), rig, destruct, anim ... |
+| `scripts/pilot/` | The detailed pilot: numpy signed-distance solids meshed by surface nets (`sdf.py`), skeleton and seated pose (`skeleton.py`), body, gloves, boots, helmet and gear, materials, rig with look controls and IK hands (`build_pilot.py`), studio scene and renders (`studio.py`, `run_studio.py`) |
 | `scripts/damage/f35_damage.py` | Damage and flight-effects simulator (pure Python, no Blender needed) |
 | `scripts/damage/make_report.py` | Generates `docs/damage_model.md` |
 | `scripts/review_compare.py` | Orthographic silhouettes registered to the public 3-view drawing, with overlap (IoU) |
@@ -53,6 +60,7 @@ start-up, flight controls, weapon bays, afterburner run-up, walk-around and a de
 | `data/camera_matches/` | Cameras solved from reference photos (position, rotation, lens) |
 | `references/hdri/` | The sky the scene is lit by (CC0, Poly Haven, 2k). `scripts/tools/get_hdri.py` fetches the 4k / 8k copies that renders use for sharper backgrounds |
 | `blend/F-35I_Adir.blend` | The built model, ready to open in Blender 5.1 |
+| `blend/F-35I_Pilot.blend` | The pilot standing in a small photo studio (rigged: `head_yaw`, `head_pitch`, `head_tilt` on `Pilot_Rig`) |
 | `blend/history/` | One blend per milestone with an index of what changed and the mesh counts ([`INDEX.md`](blend/history/INDEX.md)); `scripts/tools/blend_history.py add <name>` appends the current one |
 | `data/damage_model.json` | Components, hitboxes, intact attributes and ground attitudes, exported by the build |
 | `scripts/render/` | Background renders: `clips.py` (all animation clips), `launch.py` (start one from a running Blender), `chain.py` (run several in a row), `history_stills.py` (stills of every saved version) |
@@ -65,6 +73,20 @@ pip install bpy==5.1.2            # or run inside Blender 5.1
 python3 scripts/build_f35i.py --out blend/F-35I_Adir.blend
 python3 scripts/damage/make_report.py     # regenerate the damage report
 ```
+
+## The pilot, modelled separately
+```bash
+# studio file + renders (renders/pilot/<prefix><view>.png); the meshes take ~4 minutes of numpy
+blender -b --factory-startup --python scripts/pilot/run_studio.py -- \
+    --views front34,side,back34,head34 --samples 96 --ratio 0.5 --prefix v4_
+# a 120-frame turntable from the saved studio file (frames in renders/frames/pilot_turntable_<prefix>)
+blender -b --factory-startup --python scripts/pilot/run_studio.py -- \
+    --open blend/F-35I_Pilot.blend --views "" --turntable 120 --samples 48 --prefix v4_
+```
+The aircraft build (`f35/pilot.py`) poses the same pilot in the seat and caches its meshes in
+`blend/cache/pilot_seated.npz` (rebuilt when the pilot's code or the cockpit targets change).
+`scripts/render/pilot_check.py` checks the pilot in the jet: the gap between the helmet and the canopy for
+every head pose, the hands on the stick and throttle, and a few stills.
 
 ## Checking it against photos
 Inside Blender 5.1 (for example through the Blender MCP add-on), with `scripts/render` and

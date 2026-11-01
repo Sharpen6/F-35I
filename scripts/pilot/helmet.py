@@ -265,10 +265,10 @@ def visor_rib_solids():
         c = HUB * np.array([sg, 1.0, 1.0])
         ax = np.array([sg, 0.0, 0.0])
         out.append((sdf.Disc(c - ax * 0.001, ax, 0.016, 0.003, 0.0015), 0.0))
-        for k in range(10):
-            a = math.radians(-20.0 + 22.0 * k)
+        for k in range(8):
+            a = math.radians(-10.0 + 25.0 * k)
             d = np.array([0.0, math.sin(a), math.cos(a)])
-            out.append((sdf.RoundCone(c + d * 0.012 - ax * 0.0005, c + d * 0.024 - ax * 0.002, 0.0016, 0.0010), 0.001))
+            out.append((sdf.RoundCone(c + d * 0.011 - ax * 0.0015, c + d * 0.019 - ax * 0.0025, 0.0013, 0.0009), 0.0015))
     return out
 
 
@@ -411,7 +411,7 @@ def parts(j, F, h=0.002):
     add("Helmet_Camera", camera_solids(), "black", hh=0.0010, smooth=2, lo=(-0.04, 0.02, 0.11), hi=(0.04, 0.09, 0.19))
     add("Helmet_CameraGlass", camera_glass_solids(), "lens", hh=0.0008, smooth=1, lo=(-0.03, 0.03, 0.15), hi=(0.03, 0.08, 0.19))
     add("Helmet_Visor", visor_solids(), "visor", hh=0.0014, smooth=2, lo=(-0.15, -0.10, -0.03), hi=(0.15, 0.12, 0.17))
-    add("Helmet_VisorRibs", visor_rib_solids(), "visor", hh=0.0008, smooth=1, lo=(-0.15, 0.03, 0.0), hi=(0.15, 0.10, 0.07))
+    add("Helmet_VisorRibs", visor_rib_solids(), "clear_cover", hh=0.0008, smooth=1, lo=(-0.15, 0.03, 0.0), hi=(0.15, 0.10, 0.07))
     add("Mask", mask_solids(), "mask", hh=0.0015, lo=(-0.07, -0.16, 0.05), hi=(0.07, 0.03, 0.18))
     add("Mask_Seal", mask_seal_solids(), "mask_seal", hh=0.0013, smooth=2, lo=(-0.07, -0.16, 0.06), hi=(0.07, 0.02, 0.13))
     add("Mask_Elbow", mask_dark_solids(), "black_gloss", hh=0.0010, smooth=2, lo=(-0.07, -0.15, 0.08), hi=(0.07, -0.05, 0.17))

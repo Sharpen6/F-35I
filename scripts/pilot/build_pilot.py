@@ -128,8 +128,30 @@ def rig(coll, j, F, name, ik=False):
 
 
 # --------------------------------------------------------------------------- parts -> objects
-def objects_from_parts(coll, parts, arm, j, mats, prefix="Pilot"):
-    """One object per part: materials (per-face slots), UVs, skinned or parented to its bone."""
+def decimate(ob, ratio):
+    """Collapse-decimate a mesh in place (keeps material slots and UVs); no operator context."""
+    if ratio >= 0.999 or len(ob.data.polygons) < 2000:
+        return ob
+    m = ob.modifiers.new("Decimate", 'DECIMATE')
+    m.decimate_type = 'COLLAPSE'
+    m.ratio = ratio
+    m.use_collapse_triangulate = False
+    dg = bpy.context.evaluated_depsgraph_get()
+    ev = ob.evaluated_get(dg)
+    me = bpy.data.meshes.new_from_object(ev, preserve_all_data_layers=True, depsgraph=dg)
+    old = ob.data
+    ob.modifiers.remove(m)
+    ob.data = me
+    me.name = old.name
+    if old.users == 0:
+        bpy.data.meshes.remove(old)
+    return ob
+
+
+def objects_from_parts(coll, parts, arm, j, mats, prefix="Pilot", ratio=1.0):
+    """One object per part: materials (per-face slots), UVs, skinned or parented to its bone.
+    ratio < 1 decimates the dense surface-net meshes first (the aircraft needs far fewer
+    vertices than the studio close-ups)."""
     obs = []
     for p in parts:
         keys = p.get("mats") or [p["mat"]]
@@ -139,6 +161,7 @@ def objects_from_parts(coll, parts, arm, j, mats, prefix="Pilot"):
             io.set_face_materials(ob, p["mi"])
         if "uv" in p:
             io.set_uv(ob, p["uv"])
+        decimate(ob, ratio)
         if p["bone"] is None:
             io.skin(ob, arm, j, names=skin_set(p["name"]))
         else:
@@ -148,7 +171,7 @@ def objects_from_parts(coll, parts, arm, j, mats, prefix="Pilot"):
 
 
 def build_into(coll, j, F, mats, prefix="Pilot", h=0.004, timings=None, hand_pose=None, sole_n=None,
-               cable_end=None, ik=False, only=None):
+               cable_end=None, ik=False, only=None, ratio=1.0):
     """Meshes (numpy) and objects for joints j into coll; returns (armature, objects)."""
     tm = timings if timings is not None else {}
     t = time.time()
@@ -156,9 +179,9 @@ def build_into(coll, j, F, mats, prefix="Pilot", h=0.004, timings=None, hand_pos
     tm["meshes"] = round(time.time() - t, 1)
     t = time.time()
     arm = rig(coll, j, F, f"{prefix}_Rig", ik=ik)
-    obs = objects_from_parts(coll, parts, arm, j, mats, prefix)
+    obs = objects_from_parts(coll, parts, arm, j, mats, prefix, ratio=ratio)
     tm["objects"] = round(time.time() - t, 1)
-    tm["verts"] = int(sum(len(p["v"]) for p in parts))
+    tm["verts"] = int(sum(len(ob.data.vertices) for ob in obs))
     return arm, obs
 
 
@@ -179,7 +202,7 @@ class in_scene:
             self.win.scene = self.prev
 
 
-def standing(h=0.004, only=None):
+def standing(h=0.004, only=None, ratio=1.0):
     """The standing pilot in the studio scene."""
     sc, coll = studio.scene()
     with in_scene(sc):
@@ -188,12 +211,18 @@ def standing(h=0.004, only=None):
         j = S.standing()
         F = S.frames(j)
         tm = {}
-        arm, obs = build_into(coll, j, F, mats, prefix="Pilot", h=h, timings=tm, only=only)
+        arm, obs = build_into(coll, j, F, mats, prefix="Pilot", h=h, timings=tm, only=only, ratio=ratio)
     return {"objects": len(obs), "timings": tm, "rig": arm.name}
 
 
 def save_blend(path=BLEND):
+    """Save the studio.  In a background job the session holds only the studio, so it is saved
+    as a normal file (opens on the studio scene); from an interactive session only the studio
+    scene and what it uses are written (the open file is left alone)."""
     sc, _coll = studio.scene()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    bpy.data.libraries.write(path, {sc}, path_remap='RELATIVE_ALL', fake_user=True, compress=True)
+    if bpy.app.background:
+        bpy.ops.wm.save_as_mainfile(filepath=path, compress=True)
+    else:
+        bpy.data.libraries.write(path, {sc}, path_remap='RELATIVE_ALL', fake_user=True, compress=True)
     return path

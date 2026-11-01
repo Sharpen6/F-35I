@@ -79,6 +79,14 @@ def build(j, F, h=0.004, hand_pose=None, sole_n=None, timings=None, only=None, c
             parts.append(dict(name=f"Boot_{side}", v=v, q=q, mat="boot", bone=f"foot.{side}"))
             v, q = field_of(limbs.sole_solids(fr), 0.002).mesh(smooth=2)
             parts.append(dict(name=f"Sole_{side}", v=v, q=q, mat="sole", bone=f"foot.{side}"))
+            # laces criss-crossing the instep, through metal eyelets (second material slot)
+            laces, eyelets = limbs.boot_laces(j, F, side, sole_n.get(side))
+            v, q = field_of([(s_, 0.0) for s_ in laces + eyelets], 0.0011, pad=0.006).mesh(smooth=1)
+            c = v[q].mean(1)
+            dl = np.min([s_.dist(c) for s_ in laces], axis=0)
+            de = np.min([s_.dist(c) for s_ in eyelets], axis=0)
+            parts.append(dict(name=f"Boot_Laces_{side}", v=v, q=q, mat="webbing_black", bone=f"foot.{side}",
+                              mats=["webbing_black", "dark_metal"], mi=(de < dl).astype(np.int32)))
     tm["hands_boots"] = round(time.time() - t, 2)
     t = time.time()
     if want("Helmet") or want("Mask"):
@@ -89,3 +97,70 @@ def build(j, F, h=0.004, hand_pose=None, sole_n=None, timings=None, only=None, c
         parts += gear.parts(j, F, cable_end=cable_end)
         tm["gear"] = round(time.time() - t, 2)
     return parts
+
+
+# ------------------------------------------------------------------------------- cache
+def save(path, parts, meta=None):
+    """Write parts to a compressed .npz (arrays per part plus a JSON index)."""
+    import json
+    import os
+    arrays, index = {}, []
+    for i, p in enumerate(parts):
+        rec = {k: p[k] for k in ("name", "mat", "bone")}
+        if "mats" in p:
+            rec["mats"] = list(p["mats"])
+        for k in ("v", "q", "mi", "uv"):
+            if k in p:
+                arrays[f"{i}_{k}"] = np.asarray(p[k], np.float32 if k in ("v", "uv") else np.int32)
+        index.append(rec)
+    arrays["index"] = np.array(json.dumps({"parts": index, "meta": meta or {}}))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp.npz"
+    np.savez_compressed(tmp, **arrays)
+    os.replace(tmp, path)
+    return path
+
+
+def load(path):
+    """Parts and meta written by save()."""
+    import json
+    z = np.load(path)
+    info = json.loads(str(z["index"]))
+    parts = []
+    for i, rec in enumerate(info["parts"]):
+        p = dict(rec)
+        for k in ("v", "q", "mi", "uv"):
+            key = f"{i}_{k}"
+            if key in z.files:
+                p[k] = z[key].astype(np.float64) if k in ("v", "uv") else z[key]
+        parts.append(p)
+    return parts, info["meta"]
+
+
+def source_hash(extra=""):
+    """Hash of the pilot package's sources (+ extra): a cache key that changes with the code."""
+    import hashlib
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    h = hashlib.sha1(extra.encode())
+    for f in sorted(os.listdir(here)):
+        if f.endswith(".py") and f not in ("preview.py", "preview_build.py", "run_studio.py", "studio.py",
+                                           "build_pilot.py", "materials.py", "blender_io.py"):
+            with open(os.path.join(here, f), "rb") as fh:
+                h.update(fh.read())
+    return h.hexdigest()[:16]
+
+
+def cached_build(path, key, **kw):
+    """build(**kw) through an .npz cache at path, rebuilt when `key` differs."""
+    import os
+    if os.path.exists(path):
+        try:
+            parts, meta = load(path)
+            if meta.get("key") == key:
+                return parts, True
+        except Exception:
+            pass
+    parts = build(**kw)
+    save(path, parts, {"key": key})
+    return parts, False

@@ -70,6 +70,7 @@ def _setup(sc):
     sc.cycles.use_denoising = True
     sc.view_settings.view_transform = 'AgX'
     sc.view_settings.look = 'AgX - Medium High Contrast'
+    sc.view_settings.exposure = -0.35
     sc.render.film_transparent = False
     # world: the project's airfield HDRI (references/hdri) lights the pilot softly and fills the
     # visor and the steel with real sky reflections; the camera itself sees a plain grey studio
@@ -79,7 +80,7 @@ def _setup(sc):
     nt = w.node_tree
     out = next(n for n in nt.nodes if n.type == 'OUTPUT_WORLD')
     bg = next((n for n in nt.nodes if n.type == 'BACKGROUND'), None) or nt.nodes.new("ShaderNodeBackground")
-    bg.inputs["Strength"].default_value = 0.45
+    bg.inputs["Strength"].default_value = 0.35
     hdri = _hdri_file()
     if hdri:
         env = nt.nodes.new("ShaderNodeTexEnvironment")
@@ -130,12 +131,16 @@ def _setup(sc):
             ("Pilot_Fill", (2.6, -2.0, 1.6), 180.0, 2.2, (0.92, 0.96, 1.0)),
             ("Pilot_Rim", (1.2, 2.4, 2.6), 450.0, 1.0, (1.0, 1.0, 1.0))):
         ld = bpy.data.lights.new(name, 'AREA')
-        ld.energy = energy
+        ld.energy = energy * 0.75
+        ld.shape = 'DISK'            # round softboxes: no hard rectangles in the visor
         ld.size = size
         ld.color = color
         lo = bpy.data.objects.new(name, ld)
         lo.location = loc
         _look(lo, Vector((0, 0, 1.0)))
+        if name == "Pilot_Fill":
+            # the fill only lifts the shadows: no white disc of it in the visor and the steel
+            lo.visible_glossy = False
         stage.objects.link(lo)
     cam = bpy.data.cameras.new("Pilot_Cam")
     co = bpy.data.objects.new("Pilot_Cam", cam)
@@ -156,6 +161,38 @@ def _hdri_file():
 def _look(ob, target):
     d = Vector(target) - ob.location
     ob.rotation_euler = d.to_track_quat('-Z', 'Y').to_euler()
+
+
+def turntable(frames=120, samples=48, res=(1280, 720), out_dir=None, cam=((0.0, -5.0, 1.30), (0.0, 0.0, 0.90), 50),
+              start_deg=-35.0, rig="Pilot_Rig", first=1):
+    """The pilot turns once on the spot in front of a fixed camera (the lights stay put, as on a
+    real turntable): frames <out_dir>/0001.png ...  Returns the folder."""
+    sc, _coll = scene()
+    arm = bpy.data.objects[rig]
+    out_dir = out_dir or os.path.join(ROOT, "renders", "frames", "pilot_turntable")
+    os.makedirs(out_dir, exist_ok=True)
+    win = bpy.context.window
+    prev = win.scene if win else None
+    if win:
+        win.scene = sc
+    c = sc.camera
+    c.location = cam[0]
+    _look(c, cam[1])
+    c.data.lens = cam[2]
+    sc.render.resolution_x, sc.render.resolution_y = res
+    sc.render.resolution_percentage = 100
+    sc.cycles.samples = samples
+    rz = arm.rotation_euler.z
+    try:
+        for f in range(first - 1, frames):
+            arm.rotation_euler.z = math.radians(start_deg + 360.0 * f / frames)
+            sc.render.filepath = os.path.join(out_dir, f"{f + 1:04d}.png")
+            bpy.ops.render.render(write_still=True, scene=sc.name)
+    finally:
+        arm.rotation_euler.z = rz
+        if win and prev:
+            win.scene = prev
+    return out_dir
 
 
 def render(views, samples=48, prefix="", scale=1.0):

@@ -17,7 +17,7 @@ from .skeleton import BONE, unit
 BIG = ((-3.0, -3.0, -3.0), (3.0, 3.0, 3.0))
 VEST_T = 0.016          # vest thickness over the suit
 GSUIT_T = 0.011         # G-suit over the suit
-STRAP_T = 0.0035        # webbing thickness
+STRAP_T = 0.0050        # webbing thickness (>= 2.5 grid cells of the 2 mm strap meshes)
 
 
 def side(c, n, lo=None, hi=None):
@@ -212,7 +212,7 @@ def gsuit_parts(j, F, torso, legs):
     o = place(j, F, "spine", 0.0, 0.0, 0.0)
     p = surface(base, o, F["spine"][2])
     # abdominal bladder: a broad raised panel over the belly, not a dome
-    ops.append((sdf.Ellipsoid(p - F["spine"][2] * 0.014, (0.130, 0.090, 0.022), F["spine"]), 0.05, "union"))
+    ops.append((sdf.Ellipsoid(p - F["spine"][2] * 0.012, (0.135, 0.085, 0.018), F["spine"]), 0.04, "union"))
     for sg, s in ((1.0, "L"), (-1.0, "R")):
         R = F[f"thigh.{s}"]
         # thigh pocket, front-outer
@@ -295,14 +295,22 @@ def hose_parts(j, F, vbase, gbase, cable_end=None):
     v, q = mesh([(sdf.Tube(path, 0.0052, band=0.01), 0.0, "union")], 0.0012, smooth=1)
     out.append(dict(name="Helmet_Cable", v=v, q=q, mat="cable", bone=None))
     dd = unit(path[-1] - path[-4])
-    ops = [(sdf.Disc(cable_end + dd * 0.018, dd, 0.019, 0.018, 0.004), 0.0, "union"),
-           (sdf.RoundCone(cable_end - dd * 0.02, cable_end + dd * 0.002, 0.008, 0.013), 0.004, "union")]
+    ops = [(sdf.Disc(cable_end + dd * 0.012, dd, 0.017, 0.011, 0.004), 0.0, "union"),
+           (sdf.RoundCone(cable_end - dd * 0.012, cable_end + dd * 0.002, 0.007, 0.012), 0.004, "union")]
     v, q = mesh(ops, 0.0012, smooth=2)
     out.append(dict(name="Helmet_CableConnector", v=v, q=q, mat="olive_metal", bone=None))
     return out
 
 
 # ----------------------------------------------------------------------------------- suit details
+def dressed_near(j, F, c, half=0.075, h=0.002):
+    """The dressed body (the suit surface, as parts.build meshes it) sampled in a box round c."""
+    f = sdf.Field(np.asarray(c, float) - half, np.asarray(c, float) + half, h)
+    for s, k in body.solids(j, F):
+        f.add(s, k)
+    return sdf.Sampled(f)
+
+
 def suit_detail_parts(j, F, torso, arms, gbase):
     out = []
     # flight-suit collar standing round the neck above the vest
@@ -314,25 +322,28 @@ def suit_detail_parts(j, F, torso, arms, gbase):
            (side(c - F["neck"][2] * 0.075, -F["neck"][2] + F["neck"][1] * 0.6), 0.004, "sub")]
     v, q = mesh(ops, 0.0025, smooth=2, lo=c - 0.12, hi=c + 0.12)
     out.append(dict(name="Suit_Collar", v=v, q=q, mat="suit", bone=None))
-    # Israeli flag on the left upper arm, round unit patch on the right; pen pocket on the left
+    # Israeli flag on the left upper arm, round unit patch on the right; pen pocket on the left.
+    # The patches are sewn-on cloth: a 2.6 mm shell over the real suit surface (the sleeve blends
+    # into the shoulder there, so a flat badge would sink into the cloth and show only its rim)
     ops_p = []
     for sg, s in ((1.0, "L"), (-1.0, "R")):
         R = F[f"upperarm.{s}"]
         o = place(j, F, f"upperarm.{s}", 0.0, 0.20, 0.0)
         d = unit(R[0] * sg * 1.0 + R[2] * 0.15)
-        p = surface(arms[s], o, d)
+        suit = dressed_near(j, F, surface(arms[s], o, d))
+        p = surface(suit, o, d)
         across = unit(np.cross(R[1], d))
         Rp = np.stack([across, R[1], d])
+        shell = [(sdf.Offset(suit, 0.0030), 0.0, "union"), (sdf.Offset(suit, 0.0004), 0.0, "sub")]
         if s == "L":
-            ops = [(sdf.RoundBox(p + d * 0.0008, (0.0425, 0.0275, 0.0016), 0.0008, Rp), 0.0, "union")]
-            v, q = mesh(ops, 0.0010, smooth=1)
+            cut = sdf.RoundBox(p, (0.0425, 0.0275, 0.03), 0.004, Rp)
             size = (0.085, 0.055)
             name, mat = "Suit_Flag", "flag"
         else:
-            ops = [(sdf.Disc(p + d * 0.0008, d, 0.0425, 0.0016, 0.0008), 0.0, "union")]
-            v, q = mesh(ops, 0.0010, smooth=1)
+            cut = sdf.Disc(p, d, 0.0425, 0.03, 0.0)
             size = (0.085, 0.085)
             name, mat = "Suit_UnitPatch", "unit_patch"
+        v, q = mesh(shell + [(cut, 0.0, "inter")], 0.0010, smooth=1, lo=p - 0.055, hi=p + 0.055)
         # planar UVs in the patch frame: u across the arm (viewer's right when facing the patch),
         # v up towards the shoulder
         rel = v - p
