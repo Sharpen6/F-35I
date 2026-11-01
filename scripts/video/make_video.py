@@ -97,6 +97,7 @@ PROGRESS = {
     "042": "White crescent index marks round the rescue door and inlet panels",
     "043": "Stance, nose leg, main wheels and brake lines measured from photos",
     "044": "Review round 13: radome, EOTS glass, serial digits, canopy band, nose well, eagles",
+    "045": "Flight sim first look: the jet in the browser over 100 km of central Israel",
 }
 CLIPS = [  # (file stem, title, caption)
     ("turntable_v6", "Turntable", "Final paint, sky and the new pilot"),
