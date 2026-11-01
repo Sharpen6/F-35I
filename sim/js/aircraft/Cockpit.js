@@ -21,12 +21,21 @@
 // player's AircraftVisual only (the wingmen keep the glb as it is).
 
 import * as THREE from 'three';
+import { interp, locate } from './rig.js';
 import { PCD } from './pcd/PCD.js';
 import { makeDetailTexture } from './pcd/detail.js';
 import { Interior } from './pcd/interior.js';
 import { CanopyGlass } from './pcd/canopy.js';
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const clamp1 = (x) => (x > 1 ? 1 : x < -1 ? -1 : x || 0);
+
+/**
+ * Rig nodes that show the pilot's inputs: the rig moves the side-stick (and the hand on it) and
+ * the pedals with the flight controls' surface commands, which in a fly-by-wire jet are not where
+ * the pilot holds them (trim, the control laws). The throttle already follows the lever.
+ */
+const INCEPTORS = { Stick: 1, Pilot_Hand_R: 1, Pedal_L: 1, Pedal_R: 1 };
 
 /** Materials of the glb this module takes over, by name (interior.js lists the repainted ones). */
 export const COCKPIT_MATERIALS = {
@@ -70,6 +79,9 @@ export class Cockpit {
     this.interior = new Interior({ visual, detail: this.detail });
     this.interior.start().then((s) => { this.interiorStats = s; }).catch((e) => console.warn('Cockpit: interior:', e.message));
     this.canopy = new CanopyGlass({ root: visual.root, detail: this.detail });
+    // the side-stick and the pedals from the pilot's inputs (rig nodes, re-posed after the rig)
+    this._inceptors = visual.player ? visual.player.nodes.filter((n) => n.name in INCEPTORS && !n.hinge) : [];
+    this._inp = { stick_pitch: 0, stick_roll: 0, pedals: 0 };
   }
 
   /** Meshes of the player's model by material name. */
@@ -145,6 +157,7 @@ export class Cockpit {
     this.inside = smooth(1.2, 0.4, d);
     const atEye = d < (this.visual.headHideDistance || 0.3);
     for (const m of this.faceMeshes) m.visible = !atEye;
+    this._poseInceptors(f.dt || 0);
     // the display: redraw only while it can be seen (a drawn frame, the camera within ~40 m)
     if (st && this.pcd) {
       const visible = f.draw !== false && d < 40 && this.visual.object3d.visible;
@@ -185,6 +198,46 @@ export class Cockpit {
     }
   }
 
+  /**
+   * The side-stick, the hand on it and the pedals where the pilot holds them (input frame of this
+   * tick, test inputs included; a stick has some mass: 50 ms), posed as RigPlayer.apply does.
+   */
+  _poseInceptors(dt) {
+    const f = this.app && this.app.input ? this.app.input.frame : null;
+    if (!f || !this._inceptors.length) return;
+    // (the test API's inputs override the frame's, as main.js applies them)
+    const t = this.app.testInput || {};
+    const pick = (k) => clamp1(t[k] != null ? t[k] : f[k]);
+    const I = this._inp, k = 1 - Math.exp(-Math.max(0, dt) / 0.05);
+    I.stick_pitch += (pick('pitch') - I.stick_pitch) * k;
+    I.stick_roll += (pick('roll') - I.stick_roll) * k;
+    I.pedals += (pick('yaw') - I.pedals) * k;
+    for (const n of this._inceptors) {
+      _rq.identity();
+      _rt.copy(n.rest);
+      for (const p of n.parts) {
+        const v = I[p.control];
+        if (v === undefined) continue;
+        if (p.kind === 'hinge') {
+          const a = interp(p.xs, p.a, v);
+          if (a === 0) continue;
+          _hq.setFromAxisAngle(p.axis, a);
+          _ht.copy(p.pivot).applyQuaternion(_hq).negate().add(p.pivot);   // about the line: t = p - R p
+        } else if (p.kind === 'trs') {
+          if (p.q.length === 1) { _hq.copy(p.q[0]); _ht.copy(p.t[0]); } else {
+            const [i, w] = locate(p.xs, v);
+            _hq.slerpQuaternions(p.q[i], p.q[i + 1], w);
+            _ht.lerpVectors(p.t[i], p.t[i + 1], w);
+          }
+        } else continue;
+        _rt.add(_ht.applyQuaternion(_rq));
+        _rq.multiply(_hq);
+      }
+      n.object.position.copy(_rt);
+      n.object.quaternion.copy(_rq);
+    }
+  }
+
   /** The display's canvas rectangle in world space (origin, u and v edges, normal to the pilot). */
   _updatePcdRect() {
     const R = this._pcdRect, P = this._pcdW;
@@ -211,6 +264,8 @@ export class Cockpit {
 }
 
 const _t = new THREE.Vector3();
+const _rq = new THREE.Quaternion(), _hq = new THREE.Quaternion();
+const _rt = new THREE.Vector3(), _ht = new THREE.Vector3();
 
 /**
  * The display's canvas as an affine map of the glass mesh's uv (glTF: v = 0 at the top): the
