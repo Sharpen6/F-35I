@@ -931,8 +931,9 @@ vec3 l0Bicubic(vec2 uv) {
 // built-up land within ~3 km (urbanShare, from the land cover; no town is named here). Where
 // another module draws the real street lamps (Roads: uCityNear) these start beyond them as the
 // glow alone (grid 0): a made-up street grid would not continue the real streets; the glow
-// follows the built-up land and urbanShare. The brightness is artistic: the night exposure (at most 40x the noon one, Environment.js) is far
-// from a dark-adapted eye, so a lamp here is ~1.5 scene units * m^2 (about 45,000 cd, ~30x real).
+// follows the built-up land and urbanShare. The brightness is artistic: the night exposure (at
+// most 40x the noon one, Environment.js) is far from a dark-adapted eye, so a lamp here is
+// ~1.5 scene units * m^2 (about 45,000 cd, ~30x real).
 float vnoise(vec2 p) {
   vec2 i = floor(p), f = fract(p);
   f = f * f * (3.0 - 2.0 * f);

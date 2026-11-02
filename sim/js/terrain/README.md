@@ -277,8 +277,9 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   about 40 texture fetches per pixel, ~0.4 M vertices).
 * VRAM: ~0.7 GB (heights 42 MB, normal maps ~110 MB, overview and far colour ~110 MB, 64 L0
   tiles ~360 MB plus their field data ~50 MB, land cover ~50 MB, detail array 18 MB, horizon
-  maps 8 MB on high). CPU memory ~90 MB (heights and land cover for physics), plus a copy of the
-  heights in the horizon worker (~45 MB).
+  maps double-buffered: 2 x 8 MB on high, 2 x 2 MB on medium, 2 x 0.5 MB on low). CPU memory
+  ~90 MB (heights and land cover for physics), plus a copy of the heights in the horizon
+  worker (~45 MB).
 * Ground materials cost only where a pixel is under 8 m (the near L0 patches); the horizon
   map is one fetch per pixel; city lights only at night in built-up land.
 
@@ -286,7 +287,7 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
 
 | | |
 |---|---|
-| quality (menu) | `low`: `GROUND_DETAIL 0` (no near ground materials, the land cover macro detail only), 512^2 horizon maps; `medium`: `GROUND_DETAIL 1` (the materials without their second, larger soil / straw / grass layers, orchards as hedgerow bands without single crowns, no bales, field edges from the 10 m vote without the imagery's guidance, plain bilinear imagery; detail while the footprint's short axis is >= half its long one), 1024^2; `high`: `GROUND_DETAIL 2` (all of it), 2048^2 (`TERRAIN_QUALITY` in `Terrain.js`; the define is compiled in, so the cheaper tiers really cost less) |
+| quality (menu) | `low`: `GROUND_DETAIL 0` (no near ground materials, the land cover macro detail only), 512^2 horizon maps; `medium`: `GROUND_DETAIL 1` (the materials without their second, larger soil / straw / grass layers, orchards as hedgerow bands without single crowns, no bales, field edges from the 10 m vote without the imagery's guidance, plain bilinear imagery; the materials resolve the pixel footprint's short axis up to 2:1 anisotropy instead of 4:1), 1024^2; `high`: `GROUND_DETAIL 2` (all of it), 2048^2 (`TERRAIN_QUALITY` in `Terrain.js`; the define is compiled in, so the cheaper tiers really cost less) |
 | `?terrainDetail=0` | near ground materials off (`terrain.groundDetail`) |
 | `?terrainShadows=0` | terrain shadows off (`terrain.shadows`) |
 | `?cityLights=0` | city lights off (`terrain.cityLights`) |
@@ -326,6 +327,11 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   positions 2 cm apart across a 256 m and a 1280 m wrap line of the periodic texture
   coordinates, against a control pair away from any line; fails if a wrap pair differs more
   than the control pair (the wave layers would jump as the camera crosses the line).
+* `node sim/dev/terrain.bench.mjs [--port 8146] [--root DIR] [--frames 7] [--out FILE]`:
+  terrain-only frame times (`dev/terrain.html`, the terrain and the sky) at three views per
+  quality and with each terrain feature switched off in turn, the median of several frames
+  once the tiles and horizon maps have settled; `--root` runs another copy of `sim/` (older
+  code) for a before / after comparison. On SwiftShader compare the numbers with each other.
 * `node sim/tests/terrain_screens.mjs [--out DIR] [--only a,b]` (Playwright, SwiftShader,
   960 x 540; serves `sim/` itself or takes `--base`): the GPU height / surface checks, then
   screenshots: Tel Nof runway from 30 m, the Tel Aviv coast from 3 km and at sunset, the
