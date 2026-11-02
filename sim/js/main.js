@@ -587,6 +587,7 @@ class App {
     if (L.apc && st.apc) { L.throttle = st.engine.throttle; this._apcFlying = true; }
     if (L.apc && (st.onGround || st.crashed || st.gear < 0.999 || L.highAoA || !L.gearHandle)) {
       if (this._apcFlying && st.onGround) L.throttle = 0;               // touchdown: idle, as the flight model does
+      if (st.onGround || st.crashed) this._apcShown = false;            // flight track: it lets go by itself at touchdown: no toast
       L.apc = false;
       if (f.apcToggle) { ui.toast('Auto-throttle: with the gear down, in the air'); this._apcShown = false; }
     }
@@ -698,12 +699,17 @@ class App {
     if (this.state === 'flying' || this.state === 'paused') {
       this.hmd.draw(st, cam, mode, {
         quaternion: this.drawQuat, position: this.drawPos, throttleLever: this.input.levers.throttle,
+        leverMismatch: this.input.leverMismatch,           // flight track: a HOTAS lever not on the throttle yet
         parkingBrake: this.input.levers.parkingBrake, brakes: f.brake > 0.1, speedbrake: this.input.levers.speedbrake,
         maxG: this.maxG, mouseStick: this.input.mouseStick && this.input.pointerLocked ? this.input.mouseStickPos : null,
       });
     } else {
       this.hmd.clear();
     }
+    // flight track: with the HMD in the cockpit, toasts go below its warning lines (at the top they
+    // covered the heading tape)
+    const toastTop = this.hmd.toastTop != null ? `${Math.round(this.hmd.toastTop)}px` : '';
+    if (toastTop !== this._toastTop) { this._toastTop = toastTop; document.getElementById('toast').style.top = toastTop; }
     // g-induced grey-out (cockpit only, gentle)
     this._gAvg += ((st.gLoad || 1) - this._gAvg) * (1 - Math.exp(-dt / 1.2));
     const grey = mode === 'cockpit' && this.state === 'flying' ? clamp((this._gAvg - 6.8) / 3.5, 0, 0.6) : 0;

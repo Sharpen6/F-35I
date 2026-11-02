@@ -6,14 +6,16 @@
 //
 // state is FlightModel.state (sim/DESIGN.md). extra (all optional): {quaternion, position} the pose
 // drawn this frame (so the conformal symbols do not jitter against the scene), throttleLever,
+// leverMismatch (a HOTAS lever that has not picked the throttle up: LVR and an arrow under THR),
 // parkingBrake, speedbrake, maxG, mouseStick {x, y} (shown when given), paused, fps.
 //
 // Cockpit view: green, helmet-fixed boxes (KIAS left, altitude right, heading tape on top) and
 // conformal symbols drawn where they are in the world: flight path marker, 5-degree pitch ladder
 // (dashed and with negative numbers below the horizon), waterline (the jet's nose). Below the boxes
 // Mach, g, max g, AoA (HI AOA in the 50 deg mode), radar altitude below 5,000 ft AGL, vertical
-// speed, throttle / afterburner (APC: the auto-throttle flies it), fuel, gear, brakes; warnings (PULL UP with the break-X, AOA LIMIT,
-// OVER G, GEAR, HARD LANDING, ...) flash under the heading tape. Other views get a compact info
+// speed, throttle / afterburner (APC: the auto-throttle flies it; APC RETARD: it closes the throttle
+// in the flare), fuel, gear, brakes; warnings (PULL UP with the break-X, AOA LIMIT, OVER G, GEAR,
+// HARD LANDING, TYRE BURST, ...) flash under the heading tape. Other views get a compact info
 // strip along the bottom instead. The canvas is sized in device pixels, so the lines stay crisp at
 // any resolution and zoom.
 //
@@ -27,8 +29,12 @@
 // projection (js/world/coords.js) and the magnetic variation (WMM2025, about 5 deg E) are applied.
 // hmd.last holds the numbers on display, with hdgGrid, hdgTrue, conv and magVar for the tests.
 //
-// The pitch ladder stops at the glare shield (a body-fixed line), so it does not run over the
-// cockpit displays below it; the flight path marker is never hidden.
+// Nothing conformal is drawn over the cockpit: the pitch ladder and the AoA bracket stop at the
+// coaming (the glare shield over the panoramic display), and the flight path marker stops just
+// above it with an X through it (it is then no longer where the jet is going: above about 15 deg
+// AoA), the radar altitude beside it.  The coaming is a line of points of the cockpit model
+// projected through the camera, so it follows the eye as the head moves (COAMING).  hmd.last also
+// holds fpmX, fpmY, fpmLimited and coamingY (screen px) for the tests.
 
 import * as THREE from 'three';
 import { xzToLonLat, ORIGIN } from '../world/coords.js';
@@ -42,19 +48,32 @@ const GREEN = 'rgba(96, 255, 128, 0.96)';
 const GREEN_GLOW = 'rgba(70, 255, 110, 0.22)';
 const WARN_NAMES = {
   'PULL UP': 'PULL UP', AOA: 'AOA LIMIT', 'OVER-G': 'OVER G', GEAR: 'GEAR', OVERSPEED: 'OVERSPEED',
-  ENGINE: 'ENGINE', 'HARD LANDING': 'HARD LANDING', 'BINGO FUEL': 'BINGO FUEL', 'PARKING BRAKE': 'PARKING BRAKE',
+  ENGINE: 'ENGINE', 'TYRE BURST': 'TYRE BURST', 'HARD LANDING': 'HARD LANDING', 'BINGO FUEL': 'BINGO FUEL',
+  'PARKING BRAKE': 'PARKING BRAKE',
 };
-const WARN_ORDER = ['PULL UP', 'OVER-G', 'AOA', 'GEAR', 'OVERSPEED', 'ENGINE', 'HARD LANDING', 'BINGO FUEL', 'PARKING BRAKE'];
+const WARN_ORDER = ['PULL UP', 'OVER-G', 'AOA', 'GEAR', 'OVERSPEED', 'ENGINE', 'TYRE BURST', 'HARD LANDING', 'BINGO FUEL', 'PARKING BRAKE'];
 
 // Approach symbols (gear down, in the air)
 const ON_SPEED_AOA = 13;             // deg: the approach AoA the flight model is tuned for (f35i_config)
 const BRACKET_AOA = 1;               // deg each side of on-speed: the ends of the AoA bracket
 const GLIDE_REF = -3;                // deg: the dashed glide-path reference line
 const FLARE_FT = 100;                // radar altitude next to the flight path marker below this
-// The glare shield's top edge, in body angles from the pilot's eye (the cockpit model: ~16 deg
-// below the nose line ahead, the PCD under it). The ladder is clipped below this line.
-const GLARE_EL = -15.5 * DEG;
-const GLARE_AZ = 30 * DEG;
+// The cockpit's coaming (the glare shield over the panoramic display) with the canopy sills beside
+// it, left to right, in the aircraft's body frame (x right, y up, -z forward, m; the frame of the
+// rig's eye).  Measured from data/aircraft/f35i.glb (the Airframe mesh): from the rig eye
+// (0, 1.080, -4.471), the highest point that blocks the view at each azimuth, in 1 deg steps
+// (az -45, -30, -26 sill; -25 .. -20 coaming side; -19 .. -12 display hood; -11 .. 0 centre, about
+// 16 deg below the eye; the nose top that shows just over it within 5 deg of the centre is left
+// out: it is outside).  A fixed body angle used to stand in for it, but the points are only 0.8 m
+// from the eye, and the cockpit camera leans with head look and g: 5 cm of eye travel moves the
+// edge 3.6 deg.  So the points are projected through the camera's own position every frame.
+const COAMING = [
+  [-0.528, 0.563, -5.000], [-0.464, 0.570, -5.276], [-0.435, 0.572, -5.364],
+  [-0.279, 0.877, -5.070], [-0.270, 0.885, -5.078], [-0.270, 0.861, -5.213], [-0.257, 0.878, -5.219],
+  [-0.255, 0.873, -5.256], [-0.244, 0.871, -5.268], [-0.169, 0.871, -5.268], [-0.155, 0.851, -5.270],
+  [0, 0.851, -5.270],
+];
+for (let i = COAMING.length - 2; i >= 0; i--) COAMING.push([-COAMING[i][0], COAMING[i][1], COAMING[i][2]]);
 
 /** Magnetic variation (declination, deg, + = east) at lat / lon (deg): WMM2025 at 2026.8, fitted
  *  over the sim's far area (within 0.04 deg; 4.7 deg E in the south to 5.2 deg E in the north,
@@ -75,9 +94,11 @@ const _qb = new THREE.Quaternion();
 const _v = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _dir = new THREE.Vector3();
-const _p1 = {}, _p2 = {};
+const _p2 = {};
 
 const fmtInt = (x) => Math.round(x).toLocaleString('en-US');
+/** Throttle as on the display: % of MIL, then MIL, then % of the afterburner range. */
+const thrText = (t) => `${Math.round(Math.min(t, 0.75) / 0.75 * 100)}%${t > 0.751 ? ` AB ${Math.round((t - 0.75) / 0.25 * 100)}%` : (Math.abs(t - 0.75) < 0.002 ? ' MIL' : '')}`;
 /** Heading as three digits; north is 360, as in aviation (never 000). */
 const pad3 = (x) => { const v = Math.round(wrap360(x)) % 360; return String(v === 0 ? 360 : v).padStart(3, '0'); };
 
@@ -92,10 +113,12 @@ export class HMD {
     }
     this.ctx = this.canvas.getContext('2d');
     this.visible = true;
+    this.toastTop = null;                  // where toasts go in the cockpit view (CSS px), see _drawCockpit
     this.time = 0;
     this._last = performance.now();
     this._w = 0; this._h = 0; this._dpr = 1;
     this._clear = false;
+    this._coam = COAMING.map(() => ({ x: 0, y: 0, z: 0 }));   // the coaming on the screen this frame
     this._geo = { x: NaN, z: NaN, lat: ORIGIN.lat, lon: ORIGIN.lon, conv: 0, magVar: magneticVariation(ORIGIN.lat, ORIGIN.lon) };
   }
 
@@ -112,6 +135,7 @@ export class HMD {
   }
 
   clear() {
+    this.toastTop = null;
     this._resize();
     this.ctx.clearRect(0, 0, this._w, this._h);
   }
@@ -124,6 +148,7 @@ export class HMD {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this._w, this._h);
     if (!state || !camera) return;
+    this.toastTop = null;
     const d = this._data(state, extra);
     this.last = d;                         // the numbers on display (read by the test API)
     if (this.visible) {
@@ -187,6 +212,8 @@ export class HMD {
       onGround: !!s.onGround,
       highAoA: !!s.highAoA,
       apc: !!s.apc,                        // the auto-throttle is flying the throttle
+      apcRetard: !!s.apcRetard,            // ... and closing it in the flare
+      lever: extra.leverMismatch != null ? extra.leverMismatch : null,   // HOTAS lever not on the throttle
       warnings,
       parkingBrake: !!extra.parkingBrake,
       brakes: !!extra.brakes,
@@ -194,6 +221,9 @@ export class HMD {
       crashed: !!s.crashed,
       gs: s.groundSpeed != null ? s.groundSpeed : V,
       approach: false,                     // set when the approach symbols are drawn
+      // flight path marker on the screen (px), whether it is held above the coaming, and the
+      // coaming's height under it (cockpit view; null elsewhere)
+      fpmX: null, fpmY: null, fpmLimited: false, coamingY: null,
     };
   }
 
@@ -266,12 +296,26 @@ export class HMD {
       const trackAz = Math.atan2(_dir.x, -_dir.z);
       const fpaDeg = Math.asin(Math.max(-1, Math.min(1, _dir.y))) / DEG;
       const approach = d.gear > 0.99 && !d.onGround && hasFpm;
-      this._drawLadder(camera, trackAz, fpaDeg, u, lw, fs * 0.8, quat, approach);
+      const coam = this._coamingLine(quat, extra.position || s.position, camera);
+      this._drawLadder(camera, trackAz, fpaDeg, u, lw, fs * 0.8, approach, coam);
       if (fpm && hasFpm) {
-        this._drawFpm(fpm.x, fpm.y, u, lw);
+        // below the coaming the marker would sit on the cockpit displays (above ~15 deg AoA): it
+        // stops just above it, crossed out, and the radar altitude goes with it
+        const r = 11 * u;
+        let limited = false;
+        if (coam) {
+          const top = Math.min(this._coamingY(coam, fpm.x - 2.6 * r), this._coamingY(coam, fpm.x), this._coamingY(coam, fpm.x + 2.6 * r));
+          d.coamingY = this._coamingY(coam, fpm.x);
+          if (fpm.y > top - r - 6 * u) { fpm.y = top - r - 6 * u; limited = true; }
+        }
+        d.fpmX = fpm.x; d.fpmY = fpm.y; d.fpmLimited = limited;
+        this._drawFpm(fpm.x, fpm.y, u, lw, limited);
         if (approach) {
           d.approach = true;
+          c.save();
+          if (coam) this._clipAboveCoaming(coam);
           this._drawAoaBracket(quat, s.velocity, camera, u, lw);
+          c.restore();
           if (d.aglFt < FLARE_FT) this._text(String(Math.max(0, Math.round(d.aglFt))), fpm.x + 44 * u, fpm.y, fsS, 'left', 600);
         }
       }
@@ -298,10 +342,13 @@ export class HMD {
     this._text(`α ${d.alphaDeg.toFixed(1)}`, lx, ly, fsS);
     if (d.highAoA) this._text('HI AOA', lx + 96 * u, ly, fsS * 0.9, 'left', 700);
     ly += step * 1.5;
-    const thrPct = Math.round(Math.min(d.thr, 0.75) / 0.75 * 100);
-    const abTxt = d.thr > 0.751 ? ` AB ${Math.round((d.thr - 0.75) / 0.25 * 100)}%` : (Math.abs(d.thr - 0.75) < 0.002 ? ' MIL' : '');
-    this._text(`THR ${thrPct}%${abTxt}${d.apc ? '  APC' : ''}`, lx, ly, fsS);
+    this._text(`THR ${thrText(d.thr)}${d.apc ? (d.apcRetard ? '  APC RETARD' : '  APC') : ''}`, lx, ly, fsS);
     ly += step;
+    if (d.lever != null) {
+      // a HOTAS lever that has not picked the throttle up: where it is, and which way to move it
+      this._text(`LVR ${thrText(d.lever)} ${d.lever < d.thr ? '▲' : '▼'}`, lx, ly, fsS, 'left', 500);
+      ly += step;
+    }
     if (d.fuelLb != null) { this._text(`FUEL ${fmtInt(Math.round(d.fuelLb / 10) * 10)}`, lx, ly, fsS); ly += step; }
 
     // right column: radar altitude, vertical speed, gear, brakes
@@ -324,6 +371,10 @@ export class HMD {
     // ---- warnings: under the heading tape, clear of the flight path marker on the approach and
     // of the cockpit displays below the glare shield (they used to flash over the PCD)
     this._drawWarnings(d, cx, cy - 290 * u, u, lw, fs, flash);
+    // where the app's toasts go (CSS px; null outside the cockpit view): just below the main warning
+    // line, about a quarter down (at the top they covered the heading tape; lower down they would
+    // cover the waterline); a second or third warning line may hide behind a toast for its moment
+    this.toastTop = cy - 290 * u + fs * 1.16 + 8 * u;
   }
 
   _box(x, y, w, h, lw) {
@@ -342,7 +393,8 @@ export class HMD {
     }, lw);
   }
 
-  _drawFpm(x, y, u, lw) {
+  /** Flight path marker; limited (held above the coaming, not where the jet goes): crossed out. */
+  _drawFpm(x, y, u, lw, limited = false) {
     const c = this.ctx;
     const r = 11 * u;
     this._stroke(() => {
@@ -351,6 +403,11 @@ export class HMD {
       c.moveTo(x - r, y); c.lineTo(x - r * 2.6, y);
       c.moveTo(x + r, y); c.lineTo(x + r * 2.6, y);
       c.moveTo(x, y - r); c.lineTo(x, y - r * 2.0);
+      if (limited) {
+        const k = r * 1.25;
+        c.moveTo(x - k, y - k); c.lineTo(x + k, y + k);
+        c.moveTo(x + k, y - k); c.lineTo(x - k, y + k);
+      }
     }, lw);
   }
 
@@ -402,47 +459,70 @@ export class HMD {
     return { dx: dx / L, dy: dy / L };
   }
 
-  /** Clip to the part of the view above the glare shield (a body-fixed line); false if it is not in view. */
-  _clipGlareShield(quat, camera) {
-    // two points of the (straight, level) edge, GLARE_EL below the nose line straight ahead
-    const ty0 = Math.tan(GLARE_EL), tx0 = Math.tan(GLARE_AZ);
-    const a = this._projectBody(-tx0, ty0, -1, quat, camera, _p1);
-    if (!a) return false;
-    const ax = a.x, ay = a.y;
-    const b = this._projectBody(tx0, ty0, -1, quat, camera, _p1);
-    if (!b) return false;
-    let tx = b.x - ax, ty = b.y - ay;
-    const L = Math.hypot(tx, ty);
-    if (L < 1) return false;
-    tx /= L; ty /= L;
-    // the kept side holds the nose (the waterline)
-    const nose = this._projectBody(0, 0, -1, quat, camera, _p1);
-    let nx = -ty, ny = tx;
-    if (nose && (nose.x - ax) * nx + (nose.y - ay) * ny < 0) { nx = -nx; ny = -ny; }
-    const B = 4 * (this._w + this._h);
-    const c = this.ctx;
-    c.beginPath();
-    c.moveTo(ax - tx * B, ay - ty * B);
-    c.lineTo(ax + tx * B, ay + ty * B);
-    c.lineTo(ax + tx * B + nx * B, ay + ty * B + ny * B);
-    c.lineTo(ax - tx * B + nx * B, ay - ty * B + ny * B);
-    c.closePath();
-    c.clip();
-    return true;
+  /**
+   * The coaming (COAMING) on the screen this frame, left to right, projected from the camera's own
+   * position (pose = the jet's drawn position and attitude); the visible run of it, or null when
+   * less than two points are in front of the camera (looking far aside, up or back).
+   */
+  _coamingLine(quat, pos, camera) {
+    if (!quat || !pos) return null;
+    const pts = this._coam;
+    let first = -1, last = -1;
+    for (let i = 0; i < COAMING.length; i++) {
+      const [x, y, z] = COAMING[i];
+      _dir.set(x, y, z).applyQuaternion(quat).add(pos).sub(camera.position);
+      if (this._project(_dir, camera, pts[i])) {
+        if (first < 0) first = i;
+        else if (last !== i - 1) return null;      // not one run: give up rather than guess
+        last = i;
+      }
+    }
+    if (first < 0 || last - first < 1) return null;
+    return first === 0 && last === pts.length - 1 ? pts : pts.slice(first, last + 1);
   }
 
-  _drawLadder(camera, az, fpaDeg, u, lw, fs, quat, approach) {
+  /** Height of the coaming line at screen x (px; the highest where it folds back; flat beyond its ends). */
+  _coamingY(pts, x) {
+    if (x <= pts[0].x) return pts[0].y;
+    const n = pts.length;
+    if (x >= pts[n - 1].x) return pts[n - 1].y;
+    let y = Infinity;
+    for (let i = 0; i < n - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const lo = Math.min(a.x, b.x), hi = Math.max(a.x, b.x);
+      if (x < lo || x > hi) continue;
+      y = Math.min(y, hi - lo < 1e-6 ? Math.min(a.y, b.y) : a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x));
+    }
+    return Number.isFinite(y) ? y : pts[n - 1].y;
+  }
+
+  /** Clip to the part of the view above the coaming line (flat beyond its ends). */
+  _clipAboveCoaming(pts) {
+    const c = this.ctx;
+    const B = 4 * (this._w + this._h);
+    const n = pts.length;
+    c.beginPath();
+    c.moveTo(-B, pts[0].y);
+    for (let i = 0; i < n; i++) c.lineTo(pts[i].x, pts[i].y);
+    c.lineTo(B, pts[n - 1].y);
+    c.lineTo(B, -B);
+    c.lineTo(-B, -B);
+    c.closePath();
+    c.clip();
+  }
+
+  _drawLadder(camera, az, fpaDeg, u, lw, fs, approach, coam) {
     const c = this.ctx;
     const W = this._w, H = this._h;
     const cx = W / 2, cy = H / 2;
     const clipR = 330 * u;
     c.save();
     // keep the ladder in the middle (clear of the boxes and the heading tape) and above the
-    // glare shield (the rungs used to run over the cockpit displays)
+    // coaming (the rungs used to run over the cockpit displays)
     c.beginPath();
     c.rect(cx - 330 * u, cy - 330 * u, 660 * u, 600 * u);
     c.clip();
-    if (quat) this._clipGlareShield(quat, camera);
+    if (coam) this._clipAboveCoaming(coam);
     const a = {};
     const lo = Math.ceil((fpaDeg - 40) / 5) * 5, hi = Math.floor((fpaDeg + 40) / 5) * 5;
     for (let p = Math.max(-90, lo); p <= Math.min(90, hi); p += 5) {
@@ -566,6 +646,7 @@ export class HMD {
     const fs = Math.round(15 * u);
     const thrPct = Math.round(Math.min(d.thr, 0.75) / 0.75 * 100);
     const ab = d.thr > 0.751 ? ' AB' : (Math.abs(d.thr - 0.75) < 0.002 ? ' MIL' : '');
+    const lvPct = d.lever != null ? Math.round(Math.min(d.lever, 0.75) / 0.75 * 100) : 0;
     const items = [
       `${fmtInt(d.iasKt)} KIAS`,
       `M ${d.mach.toFixed(2)}`,
@@ -575,7 +656,8 @@ export class HMD {
       `VS ${d.vsFpm > 0 ? '+' : ''}${fmtInt(Math.round(d.vsFpm / 10) * 10)}`,
       `G ${d.g.toFixed(1)}`,
       `α ${d.alphaDeg.toFixed(1)}${d.highAoA ? ' HI' : ''}`,
-      `THR ${thrPct}%${ab}${d.apc ? ' APC' : ''}`,
+      `THR ${thrPct}%${ab}${d.apc ? (d.apcRetard ? ' APC RETARD' : ' APC') : ''}`,
+      d.lever != null ? `LVR ${lvPct}%${d.lever > 0.751 ? ' AB' : ''} ${d.lever < d.thr ? '▲' : '▼'}` : null,
       d.gear > 0.99 ? 'GEAR DN' : d.gear > 0.01 ? 'GEAR ↕' : 'GEAR UP',
       d.parkingBrake ? 'PARK BRK' : null,
       d.speedbrake ? 'SPD BRK' : null,
