@@ -1135,7 +1135,7 @@ void main() {
     // L0 patches lie in the core; at its edge the overview's 200 m mip stands in for the far image
     vec3 col = coreW < 1.0 ? textureLod(uOverview, uvCore, 3.0).rgb : colCore;
   #else
-    vec3 col = farColor(xz);                // far.jpg, the rift strip's 50 m where it is
+    vec3 col = farColor(xz, coreW);         // far.jpg, the rift strip's 50 m where it is (outside the core)
   #endif
   vec4 wA, wB;
   lcSample(uvFar, 2048.0, ivec2(0, 4096), vH, wA, wB);
@@ -1230,7 +1230,7 @@ void main() {
   #ifdef USE_L0
     vec2 nF = coreW < 1.0 ? DECODE_N(textureLod(uNormalCore, ((xz + 51200.0) / 25.0 + 0.5) / 4097.0, 3.0).rg) : nC;
   #else
-    vec2 nF = farNormalXZ(xz);
+    vec2 nF = farNormalXZ(xz, coreW);
   #endif
   vec2 nxz = mix(nF, nC, coreW);
   vec3 N = normalize(vec3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.01)), nxz.y));

@@ -303,9 +303,10 @@ void main() {
   vec2 xz = vWorldXZ;
   float edge = max(abs(xz.x), abs(xz.y));
   float coreW = 1.0 - smoothstep(51200.0 - 4000.0, 51200.0, edge);
-  // the core's colour and normals read everywhere (a texture() in a branch has no derivatives)
-  vec3 col = mix(farColor(xz), texture(uOverview, (xz + 51200.0) / 102400.0).rgb, coreW);
-  vec2 nxz = mix(farNormalXZ(xz), DECODE_N(texture(uNormalCore, ((xz + 51200.0) / 25.0 + 0.5) / 4097.0).rg), coreW);
+  // the core's colour and normals read everywhere (a texture() in a branch has no derivatives);
+  // the far grid's and the rift strip's only outside the core (riftGLSL.js)
+  vec3 col = mix(farColor(xz, coreW), texture(uOverview, (xz + 51200.0) / 102400.0).rgb, coreW);
+  vec2 nxz = mix(farNormalXZ(xz, coreW), DECODE_N(texture(uNormalCore, ((xz + 51200.0) / 25.0 + 0.5) / 4097.0).rg), coreW);
   vec3 upP = normalize(vec3(vRel.x / uEarthRadius, 1.0, vRel.z / uEarthRadius));
   vec3 N = normalize(vec3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.01)), nxz.y));
   N = normalize(N + upP - vec3(0.0, 1.0, 0.0));
