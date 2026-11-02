@@ -4,7 +4,7 @@
 //
 //   node sim/tests/vegetation_shots.mjs [--port 8144] [--out DIR] [--size 960x540]
 //        [--quality medium] [--only telnof_chase,orchards_150] [--params "vegetation=0"]
-//        [--settle 6000] [--tag before] [--ab] [--shadow-radius 190] [--long] [--checks]
+//        [--settle 6000] [--tag before] [--ab] [--shadow-radius 190] [--long] [--checks] [--decal-ab]
 //
 // Every scene is a start point (spawns.json or one defined here, placed at a height above the
 // ground) with a time of day and a camera; the scene is flown for a moment, the streaming is given
@@ -22,16 +22,18 @@
 // --long flies 10 km at 250 m above the hills and fails when an upload failed or the module did
 // not drain its queue (the buffer must never stall). --checks (after the scenes): a quality change
 // bakes the atlas again over frames (the longest module update is logged), and the trees switched
-// off for 11 s free their memory and come back when switched on.
+// off for 11 s free their memory and come back when switched on. --decal-ab saves each scene
+// without the ground shadows too (<scene>_nodecal.png) and logs how much of the frame they darken.
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
+const { PNG } = createRequire(require.resolve('playwright'))('playwright-core/lib/utilsBundle');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -52,6 +54,7 @@ const AB = argv.includes('--ab');
 const SHADOW_R = +arg('shadow-radius', 0);
 const LONG = argv.includes('--long');
 const CHECKS = argv.includes('--checks');
+const DECAL_AB = argv.includes('--decal-ab');
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -254,7 +257,25 @@ async function main() {
       await page.evaluate(() => window.__sim.settle(200));
       ab = { on, off };
     }
-    results.push({ name, scene: sc, summary: st, renderInfo: info, lastRenderMs: timing.lastRenderMs, vegetation: mod, ab });
+    let decals = null;
+    if (DECAL_AB && mod) {
+      // the same frame without the ground shadows (their strength 0): how much of the frame they darken
+      await page.evaluate(() => { const T = window.__sim.app.modules.find((x) => x && x.isScatter).tuning; window.__vegSS = T.shadowStrength; T.shadowStrength = 0; window.__sim.render(); });
+      const fileOff = join(OUT, `${TAG}${name}_nodecal.png`);
+      await page.screenshot({ path: fileOff });
+      await page.evaluate(() => { window.__sim.app.modules.find((x) => x && x.isScatter).tuning.shadowStrength = window.__vegSS; window.__sim.render(); });
+      const a = PNG.sync.read(readFileSync(file)), b = PNG.sync.read(readFileSync(fileOff));
+      let n = 0, sum = 0;
+      const lum = (d, i) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+      for (let i = 0; i < a.data.length; i += 4) {
+        const la = lum(a.data, i), lb = lum(b.data, i);
+        if (lb > 8 && la < lb * 0.97) { n++; sum += 1 - la / lb; }
+      }
+      const px = a.data.length / 4;
+      decals = { share: +(n / px).toFixed(4), meanDarkening: n ? +(sum / n).toFixed(3) : 0 };
+      log(`${name}: the ground shadows darken ${(100 * decals.share).toFixed(1)} % of the frame by ${(100 * decals.meanDarkening).toFixed(0)} % on average`);
+    }
+    results.push({ name, scene: sc, summary: st, renderInfo: info, lastRenderMs: timing.lastRenderMs, vegetation: mod, ab, decals });
     log(`${name}: ${info.calls} calls, ${(info.triangles / 1e6).toFixed(2)} M tris, ${timing.lastRenderMs} ms, agl ${st.agl_m} m, ${((Date.now() - t1) / 1000).toFixed(0)} s${mod ? `, veg ${JSON.stringify(mod)}` : ''}`);
     if (ab) log(`${name}: with trees ${ab.on.calls} calls, ${(ab.on.triangles / 1e6).toFixed(2)} M tris, ${ab.on.ms} ms; without ${ab.off.calls} calls, ${(ab.off.triangles / 1e6).toFixed(2)} M tris, ${ab.off.ms} ms`);
   }
