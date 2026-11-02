@@ -10,6 +10,9 @@
 //
 // ImpostorBaker works in small steps (one model per renderModel(), a few layers per
 // finishSome()) so that the start-up spreads over a few frames; bakeImpostors() does it all.
+// The frames come back asynchronously where the renderer can (a pixel buffer and a fence: no
+// stall of the GPU's pipeline per model, which a synchronous read would cost mid-flight);
+// waiting is true while some are still on their way.
 // Result: two DataArrayTextures (layer = model * ELEV_FRAMES + frame), albedo sRGB.
 
 import * as THREE from 'three';
@@ -23,7 +26,7 @@ export class ImpostorBaker {
    * models: [{geometry, info: {sphere}}] (species * variants + variant); spB: Vector4 array
    * (per species: fluff, ...); refHeights: metres per species (for the leaf noise scale).
    */
-  constructor(renderer, models, { size = 128, spB, refHeights, variants = 2 }) {
+  constructor(renderer, models, { size = 128, spB, refHeights, variants = 2, async = true }) {
     this.renderer = renderer;
     this.models = models;
     this.size = size;
@@ -38,6 +41,8 @@ export class ImpostorBaker {
     this.next = 0;          // next model to render
     this.nextLayer = 0;     // next layer to finish (dilate + mips)
     this.ms = 0;
+    this.async = async && typeof renderer.readRenderTargetPixelsAsync === 'function';
+    this.pending = 0;       // models whose frames are still being read back
     this.rt = new THREE.WebGLRenderTarget(this.W, this.H, {
       count: 2, type: THREE.UnsignedByteType, format: THREE.RGBAFormat, depthBuffer: true,
       minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false,
@@ -68,12 +73,13 @@ export class ImpostorBaker {
 
   get rendered() { return this.next >= this.models.length; }
   get finished() { return this.nextLayer >= this.layers; }
+  get waiting() { return this.pending > 0; }
 
   /** Renders the next model's frames and reads them back. Returns false when all are done. */
   renderModel() {
     if (this.rendered) return false;
     const t0 = performance.now();
-    const { renderer, rt, cam, E, cell, W, H, size } = this;
+    const { renderer, rt, cam, E, cell, W, H } = this;
     const m = this.next++;
     const { geometry, info } = this.models[m];
     const sp = Math.floor(m / this.variants);
@@ -114,8 +120,19 @@ export class ImpostorBaker {
         renderer.setRenderTarget(rt);
         renderer.render(this.scene, cam);
       }
-      renderer.readRenderTargetPixels(rt, 0, 0, W, H, this.bufA, undefined, 0);
-      renderer.readRenderTargetPixels(rt, 0, 0, W, H, this.bufN, undefined, 1);
+      if (this.async) {
+        // into this model's own buffers (the next model renders into the same target meanwhile:
+        // the reads are queued before it)
+        const a = new Uint8Array(W * H * 4), n = new Uint8Array(W * H * 4);
+        this.pending++;
+        Promise.all([renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H, a, undefined, 0), renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H, n, undefined, 1)])
+          .then(() => { const t1 = performance.now(); this._reduce(m, a, n); this.ms += performance.now() - t1; },
+            (e) => { console.warn('vegetation: impostor read back failed', e); })
+          .finally(() => { this.pending--; });
+      } else {
+        renderer.readRenderTargetPixels(rt, 0, 0, W, H, this.bufA, undefined, 0);
+        renderer.readRenderTargetPixels(rt, 0, 0, W, H, this.bufN, undefined, 1);
+      }
     } finally {
       rt.scissorTest = false;
       renderer.setRenderTarget(prevTarget);
@@ -124,10 +141,10 @@ export class ImpostorBaker {
       renderer.autoClear = prevAutoClear;
       renderer.shadowMap.autoUpdate = prevShadow;
     }
-    const texels = size * size;
-    for (let k = 0; k < E; k++) reduceFrame(this.bufA, this.bufN, W, k * cell, size, this.outA[0], this.outN[0], (m * E + k) * texels * 4);
+    if (!this.async) this._reduce(m, this.bufA, this.bufN);
     this.ms += performance.now() - t0;
     if (this.rendered) {
+      // (reads still queued keep their own pixel buffers)
       this.rt.dispose();
       this.material.dispose();
       this.bufA = this.bufN = null;
@@ -135,8 +152,16 @@ export class ImpostorBaker {
     return true;
   }
 
+  /** The 2x frames of model m reduced into the atlas's layers. */
+  _reduce(m, bufA, bufN) {
+    const { E, W, cell, size } = this;
+    const texels = size * size;
+    for (let k = 0; k < E; k++) reduceFrame(bufA, bufN, W, k * cell, size, this.outA[0], this.outN[0], (m * E + k) * texels * 4);
+  }
+
   /** Dilates and builds the mips of up to n layers (after all models are rendered). */
   finishSome(n = Infinity) {
+    if (this.pending) return false;        // frames still on their way back
     const t0 = performance.now();
     const texels = this.size * this.size;
     for (let i = 0; i < n && this.nextLayer < this.layers; i++, this.nextLayer++) {
@@ -168,7 +193,7 @@ export class ImpostorBaker {
 
 /** The whole bake at once. */
 export function bakeImpostors(renderer, models, opts) {
-  const b = new ImpostorBaker(renderer, models, opts);
+  const b = new ImpostorBaker(renderer, models, { ...opts, async: false });
   while (b.renderModel());
   b.finishSome();
   const r = b.result();

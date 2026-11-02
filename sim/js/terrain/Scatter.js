@@ -58,6 +58,7 @@ const MOVE_MARGIN = 250;          // m the camera may close in on a cell before 
 const OFF_FREE_MS = 10000;        // switched off this long: the buffers, atlas and worker go
 const FAR_MAX = 2;                // the far range grows with the height up to FAR_MAX x the table's
 const RANK_K = 0.62;              // the far fade's thinning (shaders.js, vegFarFade)
+const WAIT = 'wait';              // a start-up step that waits for the GPU: no more this frame
 const WORLD_CELLS = TILES * CELLS;
 
 const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
@@ -210,9 +211,24 @@ export class Scatter {
       uploads: this._uploads.length, uploadFailures: s.uploadFailures, evicted: s.evicted, compactions: s.compactions, upgrades: s.upgrades,
       far: Math.round(this._farF), farScale: +this._farScale.toFixed(2), casting: this._casting, inView: this._inView,
       decals: !!(this._decalMesh && this._decalMesh.visible), horizon: !!this._horizon, rebakes: s.rebakes, freed: s.freed,
-      world: s.world || null, ...this._tileSummary(),
+      world: s.world || null, ...this._tileSummary(), memMB: this._memMB(),
       idle: this.idle(),
     };
+  }
+
+  /** The module's GPU memory (MB): atlas, impostor buffer, near mesh buffers and geometry. */
+  _memMB() {
+    const mb = (b) => +(b / 1048576).toFixed(1);
+    const atlas = this._atlas ? this._atlas.bytes : 0;
+    const inst = this._impGeom ? this.Q.capacity * 20 : 0;
+    let near = 0;
+    for (const m of this._nearMeshes || []) near += m.userData.cap * 20;
+    let geo = 0;
+    for (const t of [...(this._trees || []), ...(this._treesLow || [])]) {
+      for (const a of Object.values(t.geometry.attributes)) geo += a.array.byteLength;
+      if (t.geometry.index) geo += t.geometry.index.array.byteLength;
+    }
+    return { atlas: mb(atlas), instances: mb(inst), near: mb(near), meshes: mb(geo), total: mb(atlas + inst + near + geo) };
   }
 
   /** Trees kept off roads / aprons / buildings over the tiles seen, and the worst tile costs. */
@@ -271,7 +287,8 @@ export class Scatter {
     try {
       if (!this._initIter) this._initIter = this._initSteps();
       while (!this.ready && performance.now() - t0 < budget) {
-        if (this._initIter.next().done) break;
+        const r = this._initIter.next();
+        if (r.done || r.value === WAIT) break;      // (WAIT: for the GPU, until the next frame)
       }
     } catch (e) {
       console.error('vegetation: initialisation failed', e);
@@ -310,9 +327,10 @@ export class Scatter {
     const baker = new ImpostorBaker(this.renderer, this._trees, this._bakeOptions());
     let compiled = false;
     this._compile(baker).then(() => { compiled = true; }, (e) => { console.warn('vegetation: compile', e); compiled = true; });
-    while (!compiled) yield;
-    while (baker.renderModel()) yield;
-    while (!baker.finishSome(6)) yield;
+    while (!compiled) yield WAIT;
+    // a few models a frame (their pixels come back over the next frames)
+    for (let k = 1; baker.renderModel(); k++) yield k % 3 ? undefined : WAIT;
+    while (!baker.finishSome(6)) yield baker.waiting ? WAIT : undefined;
     this._setAtlas(baker.result(), baker.ms);
     this._built = built;
     this.ready = true;
@@ -357,8 +375,9 @@ export class Scatter {
 
   _rebakeStep() {
     const b = this._rebaker, t0 = performance.now();
+    for (let k = 0; k < 3 && performance.now() - t0 < INIT_BUDGET_MS; k++) if (!b.renderModel()) break;
+    if (!b.rendered || b.waiting) return;        // more models next frame, or pixels on their way
     while (performance.now() - t0 < INIT_BUDGET_MS) {
-      if (b.renderModel()) continue;
       if (!b.finishSome(4)) continue;
       this._setAtlas(b.result(), b.ms);
       this._rebaker = null;
