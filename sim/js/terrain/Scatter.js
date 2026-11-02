@@ -111,6 +111,7 @@ export class Scatter {
       for (const m of [this._meshMat, this._impMat]) if (m) m.uniformsNeedUpdate = true;
     };
     this._reset();
+    this._cover = 0;                                    // the range the terrain paints no crowns in (_coverTerrain)
     // the terrain's horizon maps (when it has them): the hills toward a low sun shade the trees
     this._horizon = null;
     const H = terrain && terrain.horizon;
@@ -191,6 +192,7 @@ export class Scatter {
   update(f) {
     if (!this.enabled || this.failed) {
       this.group.visible = false;
+      this._coverTerrain(false);                      // the terrain's painted crowns again
       if (!this.failed) this._idleOff();
       return;
     }
@@ -212,6 +214,7 @@ export class Scatter {
 
   dispose() {
     this._teardown();
+    this._coverTerrain(false);
     this.scene.remove(this.group);
   }
 
@@ -225,7 +228,7 @@ export class Scatter {
       workerMs: Math.round(s.workerMs), tileMs: Math.round(s.tileMs), replies: s.replies, inflight: this._inflight, queued: this._queue.length,
       uploads: this._uploads.length, uploadFailures: s.uploadFailures, evicted: s.evicted, compactions: s.compactions, upgrades: s.upgrades,
       far: Math.round(this._farF), farScale: +this._farScale.toFixed(2), casting: this._casting, inView: this._inView,
-      decals: !!(this._decalMesh && this._decalMesh.visible), horizon: !!this._horizon, rebakes: s.rebakes, freed: s.freed,
+      decals: !!(this._decalMesh && this._decalMesh.visible), horizon: !!this._horizon, cover: this._cover, rebakes: s.rebakes, freed: s.freed,
       fade: this._uniforms ? (this._uniforms.uVeg.value.w ? 'coverage' : 'dither') : null,
       world: s.world || null, ...this._tileSummary(), memMB: this._memMB(),
       idle: this.idle(),
@@ -999,6 +1002,22 @@ export class Scatter {
       this._casting = cast;
       for (const m of this._nearMeshes) m.castShadow = cast;
     }
+    this._coverTerrain(true);
+  }
+
+  /**
+   * A terrain that paints tree crowns into its ground (terrain.setVegetationCover, when it has
+   * one) paints plain ground where these trees stand instead, so a forest is not drawn twice:
+   * every forest tree is drawn out to (1 - RANK_K) of the far range, beyond it they thin out
+   * by rank (vegFarFade) and the painted crowns come back over the same distance.
+   */
+  _coverTerrain(on) {
+    const T = this.terrain;
+    if (!T || typeof T.setVegetationCover !== 'function') return;
+    const range = on ? Math.round(this._farF * (1 - RANK_K) / 10) * 10 : 0;   // (10 m steps)
+    if (range === this._cover) return;
+    this._cover = range;
+    T.setVegetationCover({ range, fade: Math.round(this._farF * RANK_K) });
   }
 
   /**
