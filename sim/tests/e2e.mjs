@@ -280,6 +280,44 @@ async function main() {
     const vC = await rigCheck('canopy open');
     check('canopy opens on the ground', vC.rig.canopy > 0.95, `canopy ${f2(vC.rig.canopy, 3)}`);
 
+    // ---- the cockpit (js/aircraft/Cockpit.js): the interior analysis, the live display redrawn only
+    //      where it can be seen, the cockpit's own sun shadow, the stick and throttle moving the way
+    //      the pilot's inputs go
+    const hasCockpit = await S(() => !!(window.__sim.app.cockpit && window.__sim.app.cockpit.enabled));
+    if (hasCockpit) {
+      const ckState = () => S(() => {
+        const c = window.__sim.app.cockpit;
+        return { stats: c.interiorStats || null, redraws: c.pcd.redraws, shadow: c.shadow ? c.shadow.uniforms.uCkShadowOn.value : 0, tips: c.leverTips() };
+      });
+      await S(() => window.__sim.camera('chase'));
+      await step(24);
+      await S(() => window.__sim.render());
+      const cOut = await ckState();
+      await step(24);
+      await S(() => window.__sim.render());
+      const cOut2 = await ckState();
+      check('cockpit display not redrawn from outside (too small to read)', cOut2.redraws === cOut.redraws, `${cOut.redraws} -> ${cOut2.redraws}`);
+      await S(() => window.__sim.camera('cockpit'));
+      await step(24);
+      await S(() => window.__sim.render());
+      const cIn = await ckState();
+      const st = cIn.stats;
+      check('cockpit interior analysed: inner skin faces repainted, no gap', !!st && !st.leak && st.interiorTris > 3000, st ? `${st.interiorTris} faces, ${st.edgeTris} along the paint's edge, leak ${st.leak}` : 'no analysis');
+      check('cockpit display redrawn in the cockpit view', cIn.redraws > cOut2.redraws, `${cOut2.redraws} -> ${cIn.redraws}`);
+      check('cockpit sun shadow on in the cockpit view', cIn.shadow === 1);
+      const tip = async (input) => { await S((o) => window.__sim.setInput(o), input); await step(30); return (await ckState()).tips; };
+      const t0 = await tip({ pitch: 0, roll: 0, throttle: 0 });
+      const tP = await tip({ pitch: 1 });
+      const tR = await tip({ pitch: 0, roll: 1 });
+      const tT = await tip({ roll: 0, throttle: 0.75 });
+      await tip({ throttle: 0 });
+      const dd = (a, b) => b.map((v, i) => +((v - a[i]) * 100).toFixed(1));   // cm, glTF frame: +X left, +Z forward
+      const dP = dd(t0.stick, tP.stick), dR = dd(t0.stick, tR.stick), dT = dd(t0.throttle, tT.throttle);
+      check('side-stick: a pull moves it aft', dP[2] < -2 && Math.abs(dP[0]) < 1, `${dP} cm`);
+      check('side-stick: roll right moves it to the right', dR[0] < -2 && Math.abs(dR[2]) < 1, `${dR} cm`);
+      check('throttle: MIL moves it forward', dT[2] > 4 && Math.abs(dT[0]) < 1, `${dT} cm`);
+    }
+
     // =============================================================== 4. Jerusalem at sunset
     log('--- jerusalem_sunset');
     const sj = await S(() => window.__sim.start('jerusalem_sunset', { camera: 'chase' }));
