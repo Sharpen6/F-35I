@@ -717,6 +717,8 @@ class App {
       qbar: st.qbar, onGround: st.onGround, groundSpeed: st.groundSpeed, eye: info.eye, eyeForward: info.eyeForward,
       airports: this.terrain.airports, look,
     });
+    // the view tells the glare whether it is the pilot's eye (no lens ghosts) or a camera (js/env/Post.js)
+    if (this.post) this.post.view = this.cams.mode;
     this.visual.update(dt, cam);
     if (this.wingmen) this.wingmen.update(dt, cam, this.state === 'flying', alpha, this._vc.lights, this.drawPos);
     // the sun's shadow follows the jet, or the whole line-up while the wingmen stand beside it
