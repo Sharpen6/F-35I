@@ -14,7 +14,7 @@
 // the ribbon keeps its points in a preallocated ring and writes the vertex arrays in place.
 
 import * as THREE from 'three';
-import { LUX_PER_UNIT, artificialLightGain, lightNight, pointLightThreshold } from '../env/Environment.js';
+import { LUX_PER_UNIT, artificialLightGain, lightNight, pointLightThreshold, skyIlluminance } from '../env/Environment.js';
 
 export { LUX_PER_UNIT };
 
@@ -30,28 +30,13 @@ const smooth = THREE.MathUtils.smoothstep;
 export const fxExposure = { get: (renderer) => (renderer && renderer.toneMappingExposure) || 1 };
 
 /**
- * log10 of the illuminance (lux) on level ground under a clear, moonless sky by the sun's elevation
- * (deg), after the standard twilight tables (e.g. the Explanatory Supplement to the Astronomical
- * Almanac): ~120 klx with the sun high, ~400 lx at sunset, ~3 lx at the end of civil twilight
- * (-6 deg), ~0.01 lx at the end of nautical twilight (-12 deg), ~0.001 lx (starlight and airglow)
- * below -18 deg.
+ * log10(lux) of a clear, moonless sky's light on the ground for the sun's elevation (deg): the
+ * environment's table (Environment.js skyIlluminance, the one the rule for lights at night and the
+ * lights' switch-on schedule read): ~120 klx with the sun high, ~700 lx at sunset, ~3 lx at the end
+ * of civil twilight (-6 deg), ~0.001 lx (starlight and airglow) below -18 deg.
  */
-const SKY_LUX = [[-18, -3.0], [-15, -2.6], [-12, -2.0], [-10, -1.4], [-8, -0.6], [-6, 0.5], [-4, 1.3],
-  [-2, 2.0], [-1, 2.3], [0, 2.6], [1, 2.95], [2, 3.25], [5, 3.75], [10, 4.15], [20, 4.55], [30, 4.8],
-  [60, 5.03], [90, 5.1]];
-
-/** log10(lux) of a clear, moonless sky's light on the ground for the sun's elevation (deg). */
 export function skyLogLux(elevationDeg) {
-  const e = Number.isFinite(elevationDeg) ? elevationDeg : 45;
-  if (e <= SKY_LUX[0][0]) return SKY_LUX[0][1];
-  for (let i = 1; i < SKY_LUX.length; i++) {
-    const [e1, l1] = SKY_LUX[i];
-    if (e <= e1) {
-      const [e0, l0] = SKY_LUX[i - 1];
-      return l0 + (l1 - l0) * (e - e0) / (e1 - e0);
-    }
-  }
-  return SKY_LUX[SKY_LUX.length - 1][1];
+  return Math.log10(skyIlluminance(Number.isFinite(elevationDeg) ? elevationDeg : 45));
 }
 
 /** Darkness 0..1 for a light level: 0 above ~1000 lx (sun above ~+1 deg), 1 below ~3 lx (~-6 deg). */

@@ -11,11 +11,14 @@
 //   landing    the lamp on the nose-gear leg, on while lights.landing and the gear is down and
 //              locked (gear > 0.9): lens, glare, and `landing` (world position, beams, intensities)
 //              for the pool of light on the runway (AircraftFX.js; terrain shaders ignore three.js
-//              lights). Two beams: the landing beam, aimed 12 deg below the body axis (on a 3 deg
-//              approach at ~12 deg alpha it points along the glide path, so at the flare it lights
-//              the touchdown zone 100-300 m ahead), and the wider taxi beam, 5 deg below the axis
-//              (with the jet on its wheels it lights the runway from ~5 m out). The taxi beam takes
-//              over with weight on wheels, the landing beam once airborne (blended over ~0.8 s).
+//              lights). Two beams: the landing beam, aimed 20 deg below the body axis (on a 3 deg
+//              approach at ~13 deg alpha the nose is ~10 deg up, so the beam meets the runway 10 deg
+//              below the horizon: 170 m ahead from 30 m up, 370 m from 65 m, and still ~6 deg down at
+//              the 14 deg pitch of the touchdown: aimed along the glide path it lit the ground only
+//              a kilometre ahead, under the night's light, and above the horizon in the flare), and
+//              the wider taxi beam, 5 deg below the axis (with the jet on its wheels it lights the
+//              runway from ~5 m out). The taxi beam takes over with weight on wheels, the landing
+//              beam once airborne (blended over ~0.8 s).
 //
 // Photometry. Scene radiance units: the sun's 4.0 is ~128 klx (sim/js/env), so 1 unit of radiance
 // is LUX_PER_UNIT = 32,000 cd/m^2 and 1 unit of illuminance 32,000 lux. Lens emission (LENS) is in
@@ -28,9 +31,12 @@
 //          Gaussian): a core brighter than the display can show looks bigger, as glare does, and
 //          fades out at its edge instead of ending as a flat disc. The shader's hue-preserving
 //          shoulder keeps a red or green light red or green at any distance (no white core with a
-//          coloured rim); on the canvas it is the glow's whole tone curve (three's ACES on top bleached
-//          a bright green towards white). The sprite sits a little nearer the camera than the lamp
-//          (uDepthBias), so the lamp's own housing and the wing's edge beside it do not bite into it.
+//          coloured rim); on the canvas it is the glow's whole tone curve (a tone mapper on top
+//          bleaches a bright green towards white). On the HDR chain's float target the glows (and
+//          the lenses) write their mark as lights (js/env/emitters.js): from sunset Post.js tone-maps
+//          them by their hue and night vision leaves them alone. The sprite sits a little nearer
+//          the camera than the lamp (uDepthBias), so the lamp's own housing and the wing's edge
+//          beside it do not bite into it.
 //   halo   eye / lens glare, in proportion to the light reaching the camera, only once it is dark
 //          (fxEnv.darkness: from the sun's elevation, the same whatever the exposure meter): by day
 //          a lit lens is a small bright dot, never an LED glow. When the frame goes through the HDR
@@ -44,7 +50,9 @@
 // on the night's ground is at least as bright on the display as that excess says (visibleFloor;
 // at night only: by day the jet's lights keep their look), so it stays a dot for miles; and its
 // centre is no brighter on the display than any point light's (NIGHT_PEAK 64, where the bloom
-// clamps), so a light a few metres from the camera is a small hard point, not a ball.
+// clamps), so a light a few metres from the camera is a small hard point, not a ball. At night a
+// lens is a coloured surface at LENS_NIGHT on the display (an LED lens is ~100,000 cd/m^2: thousands
+// there, white whatever its colour) and its glow carries the brightness.
 // The exposure is read from the renderer (toneMappingExposure) when the glows are drawn.
 //
 // Light positions and directions come from rig.info.lights (node-relative, model frame), so the
@@ -52,6 +60,7 @@
 
 import * as THREE from 'three';
 import { fxExposure, fxEnv, fogUniforms, FOG_PARS_GLSL, LUX_PER_UNIT } from './fxshared.js';
+import { EMITTER_GLSL, emitterBlending } from '../env/emitters.js';
 
 const ROLE = { nav: 'nav', beacon: 'anticoll', anticoll: 'anticoll', formation: 'formation', landing: 'landing' };
 const CD = 1 / LUX_PER_UNIT;            // cd/m^2 -> scene radiance units; lux -> illuminance units
@@ -83,7 +92,7 @@ const TAIL = { name: 'TailLight', role: 'tail', pos: [0, 0.80, 5.50], dir: [0, 0
 // down = model frame (+Z forward).
 const DEG = THREE.MathUtils.degToRad;
 const beamAxis = (deg) => new THREE.Vector3(0, Math.sin(DEG(deg)), Math.cos(DEG(deg)));
-const LANDING = { axis: beamAxis(-12), cd: GLOW.landing.cd, spread: DEG(7) };   // 1/e half widths
+const LANDING = { axis: beamAxis(-20), cd: GLOW.landing.cd, spread: DEG(7) };   // 1/e half widths
 const TAXI = { axis: beamAxis(-5), cd: 250000, spread: DEG(13) };
 const LANDING_SPILL = 0.002;                               // fraction seen from outside the beam
 const BEAM_TAU = 0.8;                                      // s, landing <-> taxi beam blend
@@ -106,6 +115,7 @@ const GLOW_VERT = /* glsl */`
   uniform float uExposure;
   uniform vec4 uShoulder;
   uniform float uDepthBias;  // m nearer the camera than the lamp
+  uniform float uNightSize;  // 0 by day .. 1 at night: the sprite reaches where the skirt is invisible
   varying vec4 vCore;
   varying vec4 vHalo;
   varying float vRadius;
@@ -116,6 +126,10 @@ const GLOW_VERT = /* glsl */`
     // brightness (over the shoulder's knee) is down to 1/50 of the knee there
     float over = max(aCore.r, max(aCore.g, aCore.b)) * uExposure / uShoulder.x;
     float rc = aCore.a * sqrt(max(0.0, sqrt(50.0 * over) - 1.0) * 0.5);
+    // at night against a black sky: out to where the skirt is under 0.002 on the display, past
+    // the fade at the sprite's edge (a skirt cut off there showed as the edge of a disc)
+    float dc = max(aCore.r, max(aCore.g, aCore.b)) * uExposure;
+    rc = max(rc, uNightSize * aCore.a * sqrt(max(0.0, sqrt(dc / 0.002) - 1.0) * 0.5) / 0.8);
     float r = min(max(max(aCore.a * 2.0, rc), aHalo.a), 96.0);
     vRadius = r;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
@@ -139,6 +153,7 @@ const GLOW_FRAG = /* glsl */`
   varying vec4 vHalo;
   varying float vRadius;
   ${FOG_PARS_GLSL}
+  ${EMITTER_GLSL}
   void main() {
     #include <logdepthbuf_fragment>
     float r = length(gl_PointCoord - 0.5) * 2.0 * vRadius;          // px from the centre
@@ -159,11 +174,12 @@ const GLOW_FRAG = /* glsl */`
     if (d > knee) col *= (knee + (cap - knee) * (1.0 - exp(-(d - knee) / (cap - knee)))) / d;
     #ifdef TONE_MAPPING
       // the canvas: the shoulder is the glow's tone curve (display = radiance x exposure, at most the
-      // cap); three's ACES on top of it would bleach a saturated green or red towards white
+      // cap); three's AgX on top of it would bleach a saturated green or red towards white
       gl_FragColor = vec4(col * uExposure, 1.0);
     #else
-      // a float target: the HDR chain's tone curve and bloom follow
-      gl_FragColor = vec4(col, 1.0);
+      // a float target: the HDR chain's tone curve and bloom follow, the light's mark in the alpha
+      // (js/env/emitters.js: from sunset Post.js keeps its hue, night vision leaves it alone)
+      gl_FragColor = vec4(col, emitterAlpha(emitterShare(max(col.r, max(col.g, col.b)) * uExposure)));
     #endif
     #include <colorspace_fragment>
     gl_FragColor.rgb = fxFog(gl_FragColor.rgb, 0.0);
@@ -180,10 +196,11 @@ const _q = new THREE.Quaternion();
 const smooth = THREE.MathUtils.smoothstep;
 
 // display brightness (x exposure) of the glows' hue-preserving shoulder: knee and cap for a saturated
-// light, then for a white one; with the HDR chain's bloom both scale up (the bloom takes the excess)
-// On the canvas the shoulder is the whole tone curve (display 0..1): a saturated green tops out at
-// ~(85, 243, 152), a red at ~(243, 66, 46). On a float target the HDR chain's tone curve follows
-// (scene-linear values, the old ACES-matched shoulder), and with its bloom both scale up.
+// light, then for a white one. On the canvas the shoulder is the whole tone curve (display 0..1): a
+// saturated green tops out at ~(85, 243, 152), a red at ~(243, 66, 46). On a float target the HDR
+// chain's tone curve follows and with its bloom both scale up (the bloom takes the excess): by day
+// that is AgX, which keeps a saturated colour up to ~2 on the display (a red at 2.25 shows as
+// (249, 157, 132)); from sunset the glows go through Post.js's hue-preserving curve for lights.
 const SHOULDER = [0.6, 0.9, 0.75, 1.0];
 const SHOULDER_HDR = [0.6, 0.9, 2.0, 4.0];
 const SHOULDER_BLOOM = 2.5;
@@ -195,6 +212,9 @@ const HALO_BLOOM = 0.35;
 // light 18 m away ~1,000): uncapped, the core's skirt stays over white for ~6 px around it and the
 // bloom makes a ball of it; capped, it is a small hard point with a modest bloom, as the airfield's.
 const NIGHT_PEAK = 64;
+// A lens at night on the display (radiance x exposure, its brightest channel): a saturated colour
+// that every tone curve keeps (the glow on top of it is the light's brightness).
+const LENS_NIGHT = 0.8;
 
 export class AircraftLights {
   /**
@@ -221,9 +241,11 @@ export class AircraftLights {
     this.beaconUniforms = { uBeacon: { value: new THREE.Vector2(0, 0) } };
     for (const [name, spec] of Object.entries(LENS)) {
       for (const m of materials.get(name) || []) {
-        this.lenses.push({ mat: m, role: spec.role, on: spec.on });
+        const ec = m.emissive || { r: 1, g: 1, b: 1 };
+        this.lenses.push({ mat: m, role: spec.role, on: spec.on, peak: Math.max(ec.r, ec.g, ec.b, 1e-3) });
         m.emissiveIntensity = 0;
         if (spec.role === 'anticoll') this._splitBeacons(m);
+        this._markLens(m);
       }
     }
     // glow sources: info.lights (minus the formation strips) + the tail light
@@ -272,18 +294,18 @@ export class AircraftLights {
     geo.setAttribute('aCore', new THREE.BufferAttribute(this._core, 4).setUsage(THREE.DynamicDrawUsage));
     geo.setAttribute('aHalo', new THREE.BufferAttribute(this._halo, 4).setUsage(THREE.DynamicDrawUsage));
     this.glowUniforms = { ...fogUniforms(), uPixelRatio: { value: 1 }, uExposure: { value: 1 },
-      uShoulder: { value: new THREE.Vector4().fromArray(SHOULDER) }, uDepthBias: { value: DEPTH_BIAS } };
+      uShoulder: { value: new THREE.Vector4().fromArray(SHOULDER) }, uDepthBias: { value: DEPTH_BIAS },
+      uNightSize: { value: 0 } };
     // On the canvas the glows are display values already under their shoulder: two of them added up
     // (the wing-tip and the fuselage light of one side, seen from abeam) or one added to the lit skin
     // by day would clip towards white, so there the brighter of glow and frame wins, channel by
     // channel (MaxEquation: the hue survives, over a dark sky it is the same as adding). On the HDR
-    // chain's float target the glows are radiance and add up (its tone curve follows).
-    this.glowMaterial = new THREE.ShaderMaterial({
+    // chain's float target the glows are radiance and add up (its tone curve follows), their mark
+    // as lights MIN-blended into the alpha (js/env/emitters.js).
+    this.glowMaterial = emitterBlending(new THREE.ShaderMaterial({
       name: 'F35_LightGlow', uniforms: this.glowUniforms, vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG,
       transparent: true, depthWrite: false, depthTest: true, toneMapped: true, fog: true,
-      blending: THREE.CustomBlending, blendEquation: THREE.MaxEquation,
-      blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
-    });
+    }), THREE.MaxEquation);
     this.points = new THREE.Points(geo, this.glowMaterial);
     this.points.name = 'F35_LightGlows';
     this.points.frustumCulled = false;
@@ -298,6 +320,7 @@ export class AircraftLights {
       const u = this.glowUniforms;
       u.uPixelRatio.value = renderer.getPixelRatio();
       u.uExposure.value = Math.max(0.05, this.exposure);
+      u.uNightSize.value = smooth(fxEnv.lightNight, 0, 0.1);
       const sh = this._shoulder();
       u.uShoulder.value.set(sh[0], sh[1], sh[2], sh[3]);
     };
@@ -313,6 +336,30 @@ export class AircraftLights {
       ],
     };
     this._landingSource = this.sources.find((s) => s.role === 'landing') || null;
+  }
+
+  /**
+   * A lens writes its mark as a light (js/env/emitters.js) where its own light makes most of what
+   * the pixel shows: from sunset Post.js shows it by its hue and night vision leaves it alone. By
+   * day (the HDR chain's lights' path off) nothing changes.
+   */
+  _markLens(mat) {
+    const prev = mat.onBeforeCompile;
+    mat.onBeforeCompile = (sh, r) => {
+      if (prev) prev.call(mat, sh, r);
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>\n${EMITTER_GLSL}`)
+        .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+        {
+          float lensE = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
+          float lensT = max(outgoingLight.r, max(outgoingLight.g, outgoingLight.b));
+          float lensW = smoothstep(0.35, 0.8, lensE / max(lensT, 1e-12));
+          if (lensW > 0.0) gl_FragColor.a = emitterAlpha(lensW);
+        }`);
+    };
+    const key = mat.customProgramCacheKey.bind(mat);
+    mat.customProgramCacheKey = () => key() + '+f35lens';
+    mat.needsUpdate = true;
   }
 
   /** The beacon lens material lights the top or the bottom lens from uBeacon (x top, y bottom). */
@@ -352,11 +399,11 @@ export class AircraftLights {
   /**
    * The rule for point lights (js/world/AirportLights.js POINT_LIGHT_VERT_GLSL): the least display
    * brightness of the centre of a light V times over the threshold of a point source (as star
-   * magnitudes: 0 at V 1, 0.35 at V 8, up to 0.85).
+   * magnitudes: 0 at V 1, 0.35 at V 8, up to 0.8: a saturated colour every tone curve keeps).
    */
   static visibleFloor(V) {
     const lv = Math.log2(Math.max(V, 1e-6));
-    return Math.min(1, Math.max(0, lv / 3)) * Math.min(0.35 + 0.06 * Math.max(lv - 3, 0), 0.85);
+    return Math.min(1, Math.max(0, lv / 3)) * Math.min(0.35 + 0.06 * Math.max(lv - 3, 0), 0.8);
   }
 
   /**
@@ -365,7 +412,20 @@ export class AircraftLights {
    * (NIGHT_PEAK / lightNight), no cap by day (the jet's lights keep their day look).
    */
   static coreCap(exposure, peak, night) {
-    return night > 0 ? NIGHT_PEAK / (Math.max(exposure, 1e-4) * Math.max(peak, 1e-4) * night) : Infinity;
+    // eased in over the first tenth of lightNight (the sun from ~-4.5 to ~-5 deg) so it does not
+    // pop; then the cap itself, whatever the exposure (dividing by lightNight let a blue-hour tail
+    // light hold 5 times the cap and grow into a ball)
+    const k = smooth(night, 0, 0.1);
+    return k > 0 ? NIGHT_PEAK / (Math.max(exposure, 1e-4) * Math.max(peak, 1e-4) * k) : Infinity;
+  }
+
+  /**
+   * A lens's emissive intensity e at night (peak: its emissive colour's brightest channel): at most
+   * LENS_NIGHT on the display, eased in as coreCap is; by day the lens keeps its own value.
+   */
+  static lensCap(e, exposure, peak, night) {
+    const k = smooth(night, 0, 0.1);
+    return k > 0 ? Math.min(e, LENS_NIGHT / (Math.max(exposure, 1e-4) * Math.max(peak, 1e-4) * k)) : e;
   }
 
   /** The glows' shoulder for the target last drawn into: [knee, cap] saturated, [knee, cap] white. */
@@ -413,10 +473,13 @@ export class AircraftLights {
       camera.getWorldPosition(_c).sub(L.position).normalize();
       landingLens = this._beams(_c);
     }
+    // at night a lens shows its colour (LENS_NIGHT) and its glow the brightness: an LED lens at its
+    // ~100,000 cd/m^2 was thousands on the display, a white dot whatever its colour
+    const lensExposure = Math.max(0.05, this.exposure);
     for (const l of this.lenses) {
       let e = l.on * level[l.role];
       if (l.role === 'landing') e *= 1 + 120 * landingLens;
-      l.mat.emissiveIntensity = e;
+      l.mat.emissiveIntensity = AircraftLights.lensCap(e, lensExposure, l.peak, fxEnv.lightNight);
     }
     const any = level.nav || level.anticoll || level.landing;
     this.points.visible = !!(any && camera);

@@ -51,7 +51,9 @@ export const POOL_ALBEDO = [0.115, 0.62];
 
 const CD = 1 / LUX_PER_UNIT;
 const NX = 17, NZ = 33;
-const NEAR = 2.5, FAR = 320;           // m along the ground ahead of the lamp
+// m along the ground ahead of the lamp: on short final the landing beam meets the runway ~370 m
+// ahead from 65 m up (lights.js), and the grid reaches past it
+const NEAR = 2.5, FAR = 600;
 
 const POOL_VERT = /* glsl */`
   #include <common>
