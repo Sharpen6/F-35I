@@ -172,13 +172,16 @@ export class FlightModel {
   // ------------------------------------------------------------------------------ reset / spawn
   /**
    * Spawn from spawns.json: {x, y, z, heading_deg, on_ground, speed_ms} plus optional throttle (0..1),
-   * gear (bool or 0..1), fuel (fraction) or fuelKg, flight_path_deg.  On the ground the wheels are put
-   * on the terrain at (x, z) (y is the ground height); in the air y is the altitude MSL and speed_ms
-   * the true airspeed, and the jet is trimmed for 1 g flight on that path (throttle too unless given).
-   * Returns {throttle, gearDown} so the input layer can match its levers.
+   * gear (bool or 0..1), fuel (fraction) or fuelKg, flight_path_deg, apc (bool).  On the ground the
+   * wheels are put on the terrain at (x, z) (y is the ground height); in the air y is the altitude MSL
+   * and speed_ms the true airspeed, and the jet is trimmed for 1 g flight on that path (throttle too
+   * unless given).  An approach spawn (air, gear down, descending) defaults to cfg.mass.fuelApproach
+   * and the auto-throttle on (cfg.mass.apcApproach).
+   * Returns {throttle, gearDown, apc} so the input layer can match its levers.
    */
   reset(spawn = {}) {
     const cfg = this.cfg;
+    const approach = spawn.on_ground === false && (spawn.gear === true || +spawn.gear >= 0.5) && (+spawn.flight_path_deg || 0) < 0;
     this.crashed = false;
     this.crashReason = '';
     this.lastTouchdown = null;
@@ -199,8 +202,9 @@ export class FlightModel {
     this.speedbrake = 0;
     this.canopy = 0;
     this.gear.reset();
+    const fuelDefault = approach && cfg.mass.fuelApproach != null ? cfg.mass.fuelApproach : cfg.mass.fuelDefault;
     if (spawn.fuelKg != null) this.fuelKg = clamp(+spawn.fuelKg, 0, cfg.mass.fuelCapacity);
-    else this.fuelKg = cfg.mass.fuelCapacity * clamp(spawn.fuel != null ? +spawn.fuel : cfg.mass.fuelDefault, 0, 1);
+    else this.fuelKg = cfg.mass.fuelCapacity * clamp(spawn.fuel != null ? +spawn.fuel : fuelDefault, 0, 1);
 
     const x = +spawn.x || 0, z = +spawn.z || 0;
     const heading = (+spawn.heading_deg || 0) * D2R;
@@ -269,8 +273,9 @@ export class FlightModel {
     this._prevOrigin.copy(this._origin);
     this._prevQuat.copy(this._quat);
     this._publish(0, null);
-    // spawn.apc: start with the auto-throttle on (an approach spawn; it needs the gear down)
-    return { throttle, gearDown, apc: !onGround && gearDown && !!spawn.apc };
+    // spawn.apc: start with the auto-throttle on (it needs the gear down); approach spawns default to it
+    const apc = spawn.apc != null ? !!spawn.apc : approach && !!cfg.mass.apcApproach;
+    return { throttle, gearDown, apc: !onGround && gearDown && apc };
   }
 
   /**

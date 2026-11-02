@@ -787,6 +787,18 @@ tests.final = () => {
     check('bounce: nose-down rate stopped in the air', qUp ?? 99, 0, 0.5, 's', 'the slap-down from the main wheels is caught before the next contact');
   }
   {
+    // the gameplay values of an approach spawn live in the config (versioned with this code), so the
+    // shared spawns.json need not carry them: no fuel / apc fields -> 45 % fuel and the APC on
+    const fdm = newFdm();
+    const y = RWY.elev + 15 + 10000 * Math.tan(3 * D2R);
+    const r = fdm.reset({ x: 0, y, z: RWY.zSouth + 10000, heading_deg: 0, on_ground: false, speed_ms: tasFromCas(140 * KT, y), gear: 1, flight_path_deg: -3 });
+    const fuel = fdm.state.engine.fuelKg / CONFIG.mass.fuelCapacity;
+    const lvl = fdm.reset({ x: 0, y: 3000, z: 0, heading_deg: 0, on_ground: false, speed_ms: 200, gear: 0 });
+    checkTrue('approach spawn defaults: 45 % fuel, auto-throttle on (level spawn: neither)', Math.abs(fuel - 0.45) < 1e-6 && r.apc === true && lvl.apc === false
+      && Math.abs(fdm.state.engine.fuelKg / CONFIG.mass.fuelCapacity - CONFIG.mass.fuelDefault) < 1e-6,
+      `fuel ${(fuel * 100).toFixed(0)} %, apc ${r.apc}; level apc ${lvl.apc}`, 'cfg.mass.fuelApproach / apcApproach');
+  }
+  {
     // it needs the gear down, and gives way in the 50 deg mode
     const fdm = newFdm();
     const r = airSpawn(fdm, 250, 1500);

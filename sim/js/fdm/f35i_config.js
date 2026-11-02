@@ -59,6 +59,11 @@ export const F35I_CONFIG = {
     pilotMisc: MASS_PILOT_MISC,
     fuelCapacity: FUEL_CAPACITY,
     fuelDefault: 0.6,                              // fraction at spawn
+    // An approach spawn (in the air, gear down, on a descending path) starts with approach fuel and
+    // the auto-throttle on unless the spawn says otherwise.  At 60 % fuel the 140 kt final is 14 deg
+    // AoA and a fixed throttle decays on the back of the drag curve; keeping these gameplay values
+    // here, versioned with the code that reads them, means the shared spawns.json need not carry them.
+    fuelApproach: 0.45, apcApproach: true,
     massRef: MASS_REF,
     // inertia at the reference mass (kg m^2, aero body axes x fwd / y right / z down), scaled with mass;
     // estimated from the F-16's (Stevens & Lewis) scaled by mass and size, fuel in the wings and body
