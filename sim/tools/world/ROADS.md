@@ -326,8 +326,9 @@ runways.bin: uint8 RGBA, layers x 32 rows x 1024 samples: rgb the imagery's pave
   runway, `PAVE` in Runways.js; concrete ~0.25) times the imagery's own light and dark sections
   relative to the runway's median (compressed), tinted a little by it. The imagery as it is
   makes a runway as light as the sand beside it (its 10 m pixels mix in paint and soil, and the
-  terrain's albedo gain is tuned for soil); far away (4.4-8.8 km on high) the tone turns into the
-  imagery's own, which the terrain shows once the surface has faded out.
+  terrain's albedo gain is tuned for soil), so the pavement's own tone is kept out to the
+  fade-out: turning into the imagery's (2-3 x lighter) made a runway on a long final as light as
+  the fields, then dark closer in. Beyond the fade-out the terrain's imagery shows, as before.
 * Rubber and oil: streaks along the runway (long streaks of the keel, short tyre marks in the
   touchdown zones) whose mean cover is the strip's `m`, so the heaviest deposits are where the
   imagery has them (the main landing ends) and fade toward mid-runway; far away, where the
@@ -343,13 +344,17 @@ runways.bin: uint8 RGBA, layers x 32 rows x 1024 samples: rgb the imagery's pave
 * Markings (ICAO Annex 14): threshold stripes (4-16 by width) 6-36 m past the threshold,
   designation digits 9 m tall (and the L / R / C letter), centreline 30 m stripes / 20 m gaps,
   aiming point (400 m on runways of 2400 m and more, else 300 m), touchdown zone pattern A
-  (3-3-2-2-1 bars per side, every 150 m), 0.9 m edge stripes, displaced threshold bar and arrows.
+  (3-3-2-2-1 bars per side, every 150 m), 0.9 m edge stripes, displaced threshold bar and arrows
+  (on the displaced section, in place of the centreline: one every 60 m pointing at the
+  threshold, an 8 m head 4 x the centreline's width, a 30 m shaft; whole arrows only).
   Worn by the field's `wear`, chipped (noise), blackened by the rubber in the touchdown zone,
   crossed by the sealant.
 * By day: the arresting cable (32 mm, on rubber supports every 2.4 m) under yellow discs 3 m across
   9 m apart; inset light fixtures (steel rings with a lens slot: centreline every 30 m,
   touchdown zone barrettes, threshold and end bars) on runways that have those lights; tyre marks
-  of the turns between the centreline and each taxiway (both ways, radius by the turn's angle).
+  of the turns between the centreline and each taxiway (both ways, radius by the turn's angle:
+  the swept band and the gear's tracks, varied smoothly along each arc in its own frame, darkest
+  where it leaves the centreline, thinning out towards the taxiway).
 * Every pattern is box-filtered by the pixel's footprint along and across the runway (bands,
   dashes, discs), the noise is a mipmapped texture sampled with true gradients, and detail too
   fine for a pixel fades into its mean: no crawling or moire at grazing angles.
@@ -367,7 +372,8 @@ runways.bin: uint8 RGBA, layers x 32 rows x 1024 samples: rgb the imagery's pave
 elevated edge lights on lit runways (every <= 60 m, 1 m outside the edge: frangible stem, yellow
 body, clear dome; AirportLights.js lights them at night), distance-remaining signs 12 m beyond
 the shoulders (a white number on black, the other end's on the back), arresting gear signs
-(a yellow disc on black) and the arresting engines' housings 28 m beyond the shoulders.
+(a yellow disc on black) and the arresting engines' housings 28 m beyond the shoulders. They
+cast the sun's shadow (one draw per airfield in the shadow pass).
 
 **Taxiways and aprons** (`roadShaders.js`, the airfield track's part): concrete slabs on the
 taxiways from 60 m before each holding position to the runway (where jets wait and run up, oil

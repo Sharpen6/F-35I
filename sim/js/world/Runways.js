@@ -25,6 +25,7 @@ import { drapeRunway } from './runwayMesh.js';
 import { RUNWAY_VERT, runwayFrag, STRIP_PAD, DATA_W, MAX_TURNS, MAX_CROSS } from './runwayShaders.js';
 import { makeNoiseData, NOISE_SIZE } from './roadMesh.js';
 import { RunwayFixtures } from './runwayFixtures.js';
+import { HORIZON_GLSL } from '../terrain/horizonMap.js';
 
 const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
 
@@ -130,14 +131,24 @@ export class Runways {
       uNoise: { value: this._stripTex },
       uGlyphs: { value: this._glyphTex },
       uFade: { value: new THREE.Vector4(8800, 11000, 1, 1) },
-      uAlbedoGain: { value: terrain.albedoGain ?? 0.7 },
     };
-    this.material = this._makeMaterial();
-    // the terrain's own shadows (hills at a low sun) when it has horizon maps (as Roads.js)
-    if (terrain.horizon && terrain.horizon.uniforms) this._hookHorizon(terrain.horizon.uniforms);
+    // with the terrain's own shadows (hills at a low sun) when it has horizon maps. Made once and
+    // kept: a first material swapped for this one when a dynamic import of horizonMap.js came in,
+    // and disposed, deleted its programs while the driver was still linking them in parallel
+    // (KHR_parallel_shader_compile on the PC: "glGetProgramiv: Program object expected" in the
+    // console), and the warm-up's replay of its precompile scene built two more for it
+    const hz = terrain.horizon && terrain.horizon.uniforms ? { uniforms: terrain.horizon.uniforms, glsl: HORIZON_GLSL } : null;
+    this.material = this._makeMaterial(hz);
     this.fixtures = this.enabled ? new RunwayFixtures({ renderer, scene, env, terrain, glyphs: this._glyphTex }) : null;
     if (this.enabled) {
-      this._precompile();
+      // the programs are built by the warm-up's pass (warmup() below); made after it (the module's
+      // import came late), now, and finished in the background
+      const w = app && app.warmup;
+      if (w && w.done) {
+        const mark = w.nextId ? w.nextId() : -1;
+        this.warmup(w, camera);
+        if (mark >= 0) w.finish?.(mark).catch(() => {});
+      }
       this._load();
     }
   }
@@ -163,57 +174,31 @@ export class Runways {
     });
   }
 
-  _hookHorizon(uniforms) {
-    import('../terrain/horizonMap.js').then((mod) => {
-      if (!mod.HORIZON_GLSL || this._disposed) return;
-      const old = this.material;
-      this.material = this._makeMaterial({ uniforms, glsl: mod.HORIZON_GLSL });
-      for (const m of this._meshes) m.material = this.material;
-      old.dispose();
-      if (this.enabled) this._precompile();
-    }).catch(() => {});
-  }
-
   /**
-   * Compiles the surface program in the background (no hitch when the first runway shows), with
-   * the sun casting shadows (by day) and without (night, and at start-up), and for a post
-   * chain's render target as well as the canvas (program parameters depend on the target).
+   * The programs of the surfaces and the fixtures, built ahead (js/env/warmup.js calls this at
+   * start-up behind the loading screen, as Roads.js warmup): stand-ins (to three only the
+   * material, the kind of object and whether the geometry has normals select the program), lit
+   * with the sun casting shadows (by day) and without (night), into the target the frame is drawn
+   * into, and the depth program the fixtures cast the sun's shadow with. A Group, which the
+   * warm-up compiles once (a Scene compiled before its pass is compiled again in it). A quality
+   * change moves only ranges and uniforms.
    */
-  _precompile() {
-    const r = this.renderer;
-    if (!r.compileAsync) return;
-    const tmp = new THREE.Scene();
-    const cam = new THREE.PerspectiveCamera(60, 1, 1, 1000);
+  warmup(w, camera) {
+    if (!this.enabled) return;
+    const tmp = new THREE.Group();
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
-    g.setAttribute('aST', new THREE.BufferAttribute(new Float32Array(6), 2));
-    g.setAttribute('aNrm', new THREE.BufferAttribute(new Float32Array(6), 2));
-    g.setAttribute('aRw', new THREE.BufferAttribute(new Float32Array(3), 1));
     const mesh = new THREE.Mesh(g, this.material);
-    mesh.frustumCulled = false;
     mesh.receiveShadow = true;
     tmp.add(mesh);
     const fg = this.fixtures?.addPrecompile(tmp);
-    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
-    const prev = r.getRenderTarget();
-    const sun = this.env?.sunLight, cast = sun ? sun.castShadow : false;
-    const states = sun && r.shadowMap.enabled ? [false, true] : [cast];
-    const p = [];
     try {
-      for (const s of states) {
-        if (sun) sun.castShadow = s;   // only for these calls: put back below, before any frame
-        p.push(r.compileAsync(tmp, cam, this.scene));
-        r.setRenderTarget(rt);
-        p.push(r.compileAsync(tmp, cam, this.scene));
-        r.setRenderTarget(prev);
-      }
-    } catch (e) {
-      r.setRenderTarget(prev);
-      console.warn('Runways: precompile', e);
+      w.compile(tmp, camera, { scene: this.scene });
+      w.compileDepth?.(tmp, camera);
     } finally {
-      if (sun) sun.castShadow = cast;
+      g.dispose();
+      fg?.dispose();
     }
-    Promise.all(p).catch(() => {}).then(() => { g.dispose(); fg?.dispose(); rt.dispose(); });
   }
 
   async _load() {

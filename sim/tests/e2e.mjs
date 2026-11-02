@@ -271,6 +271,17 @@ async function main() {
     check('runway surfaces built (airfields.py runways data)', rws && rws.enabled && rws.runways >= 10 && rws.triangles > 5000 && rws.building === 0,
       rws ? `${rws.runways} runways at ${rws.airfields} airfields, ${rws.triangles} triangles, ${rws.fixtures} fixtures` : 'no runways module');
     check('the runway under the jet is drawn by them', rws && rws.under === 'LLEK 18/36', `${rws?.under}`);
+    // airfield fix (v1): the surfaces' material is made once, no program built for a disposed one
+    // (a first material disposed while its programs linked in parallel: GL errors on the PC)
+    const rwp = await S(() => {
+      const app = window.__sim.app, m = app.modules?.find((x) => x.name === 'runways');
+      if (!m) return null;
+      const own = new Set(app.renderer.properties.get(m.material).programs?.values() || []);
+      const all = app.renderer.info.programs.filter((p) => p.name === 'Runways');
+      return { all: all.length, stray: all.filter((p) => !own.has(p)).length };
+    });
+    check('runway surfaces: every Runways program is its material\'s (none for a disposed one)', rwp && rwp.all > 0 && rwp.stray === 0,
+      rwp ? `${rwp.all} programs, ${rwp.stray} of another material` : 'no runways module');
 
     // =============================================================== 2. takeoff, climb, turn
     log('--- takeoff: MIL, afterburner, rotate, gear up, climb to 3,000 m toward Tel Aviv');

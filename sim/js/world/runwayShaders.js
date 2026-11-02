@@ -9,8 +9,8 @@
 //   tone      the pavement's albedo (Runways.js PAVE: aged asphalt 0.10-0.20 by how light the
 //             imagery shows the runway, concrete ends ~0.25) times the light and dark sections of
 //             the imagery's own pavement (data strip: paint taken out) relative to the runway's
-//             median, tinted a little by it; far away it turns into the imagery's own tone, which
-//             the terrain shows once the surface has faded out, so there is no step. The strip's
+//             median, tinted a little by it, out to the fade-out (not the imagery's own tone: 2-3 x
+//             lighter, the soil's albedo scale, a light runway on a long final). The strip's
 //             alpha is the share m of the surface the imagery shows darkened by rubber and oil;
 //             the clean pavement is then tone / (1 - (1 - RUBBER_DARK) m) and the deposits are
 //             drawn as streaks along the runway whose mean cover is m (far away, where the streaks
@@ -100,7 +100,6 @@ uniform highp sampler2D uRwData; // per runway: ${DATA_W} RGBA32F texels (Runway
 uniform sampler2D uNoise;        // tiling noise: r grain, g blotches, b streaks / stains, a large patches
 uniform sampler2D uGlyphs;       // runway digits and letters "0123456789LRC", 4 x 4 cells
 uniform vec4 uFade;              // fade-out start, end (m), detail (0..1), layers in the atlas
-uniform float uAlbedoGain;       // the terrain's imagery -> albedo factor
 
 varying vec3 vRel;
 varying float vH;
@@ -245,18 +244,18 @@ void main() {
   // ---- the pavement's tone; rubber and oil as streaks of mean cover m ----
   // the albedo of the runway's asphalt (P6.y) and of concrete, times the imagery's clean pavement
   // relative to the runway's median (compressed: the 10 m pixels exaggerate it with paint and
-  // soil), tinted a little by the imagery (it carries the soil's tint too); far away into the
-  // imagery's own pavement, which the terrain shows once the surface has faded out
+  // soil), tinted a little by the imagery (it carries the soil's tint too). The same out to the
+  // fade-out: the imagery's own tone (the soil's albedo scale) is 2-3 x the pavement's, and
+  // turning into it on the way out made a runway at 4-9 km (2.6-5 km on low) as light as the
+  // fields or lighter, and then dark on the approach
   vec3 img = srgbToLinear(strip.rgb);
   float m = strip.a;
   float yI = max(dot(img, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
   float clean = 1.0 / (1.0 - (1.0 - RUBBER_DARK) * m);
   float rel = pow(clamp(yI * clean / P6.x, 0.5, 2.0), 0.7);
   vec3 tint = mix(vec3(1.0), img / yI, 0.45);
-  float farK = smoothstep(0.5 * uFade.x, uFade.x, dist);
-  vec3 Pimg = img * clean * uAlbedoGain;
-  vec3 P = mix(P6.y * rel * tint, Pimg, farK);
-  vec3 Pc = mix(max(1.3 * P6.y, 0.24) * rel * tint, Pimg, farK);
+  vec3 P = P6.y * rel * tint;
+  vec3 Pc = max(1.3 * P6.y, 0.24) * rel * tint;
   // touchdown zones: the deposits are tyre marks (long and short streaks) along the lanes the
   // wheels take; elsewhere the keel's darkening is finer and more even
   float tdzZone = band(ed, 120.0, 1100.0, 80.0 + pu) * smoothstep(hw * 0.75, hw * 0.25, at);
@@ -392,15 +391,22 @@ void main() {
         }
         white = max(white, tz);
       }
-      // displaced threshold: the transverse bar and arrows along the centre before it
-      if (disp > 0.0) {
-        white = max(white, band(ed, -1.8, 0.0, pu) * step(at, hw - 0.9));
-        if (ed < 0.0 && e > 0.0) {
-          float a = mod(-ed, 60.0);
-          float shaft = band(at, 0.0, 0.45, pv) * band(a, 10.0, 40.0, pu);
-          float head = band(at, 0.0, 0.45 + 0.6 * (10.0 - a), pv) * band(a, 2.0, 10.0, pu) * step(a, 10.0);
-          white = max(white, max(shaft, head) * step(10.0, -ed));
-        }
+    }
+    // displaced threshold (ICAO Annex 14 fig. 5-4): the transverse bar at the threshold and, on
+    // the displaced section before it (no centreline there), arrows along the centre pointing at
+    // the threshold, one every 60 m: an 8 m head widening from its tip (the first one's 2 m short
+    // of the bar) to 4 x the centreline's width, then a 30 m shaft of that width; only whole
+    // arrows, ending 2 m or more inside the runway's end (outside the threshold markings'
+    // branch above: that one stops 2 m before the threshold)
+    if (disp > 0.0) {
+      white = max(white, band(ed, -1.8, 0.0, pu) * step(at, hw - 0.9));
+      if (e > 0.0 && ed < 0.0) {
+        float aw = hw >= 22.0 ? 0.45 : 0.3;
+        float k = floor(-ed / 60.0);
+        float a = -ed - 60.0 * k;                      // from the threshold side of this arrow's cell
+        float shaft = band(at, 0.0, aw, pv) * band(a, 10.0, 40.0, pu);
+        float head = band(at, 0.0, aw * 4.0 * (a - 2.0) / 8.0, pv) * band(a, 2.0, 10.0, pu);
+        white = max(white, max(shaft, head) * step(60.0 * k + 42.0, disp));
       }
     }
   }
@@ -460,7 +466,11 @@ void main() {
     fix = max(fix, bar);
     albedo = mix(albedo, vec3(0.16, 0.16, 0.165), fix * small);
   }
-  // tyre marks where the aircraft turn between the centreline and a taxiway (both ways)
+  // tyre marks where the aircraft turn between the centreline and a taxiway (both ways): the
+  // band the wheels sweep and, in it, the tracks of the nose and main gear, rubber varying
+  // smoothly along the arc (overlapping turns), darkest where it leaves the centreline and
+  // thinning out towards the taxiway. Varied in the arc's own frame (u along it, r across it;
+  // a pattern in the runway's frame crosses a curved track every metre: hard bars)
   int nTurn = int(P5.z + 0.5);
   float turnM = 0.0;
   if (detail > 0.3 && at < W) {
@@ -477,10 +487,23 @@ void main() {
         float sc0 = tr.x - hh * sqrt(max(R * R - (R - hw) * (R - hw), 0.0));
         vec2 d = vec2(s - sc0, t - tr.y * R);
         if (d.x * hh < 0.0 || t * tr.y < 0.0) continue;
-        float r = length(d) - R;
-        float wd = band(r, -2.4, 2.4, pmax) * (0.55 + 0.45 * smoothstep(-0.2, 0.3, nS.g + nT.b));
-        float gear = max(band(abs(r), 1.05, 1.45, pmax), band(abs(r), 2.0, 2.3, pmax)) * step(0.0, nT.g + 0.15);
-        turnM = max(turnM, 0.35 * wd + 0.45 * gear * small);
+        float dl = max(length(d), 1e-3);
+        float r = dl - R;
+        if (abs(r) > 2.4 + pmax) continue;
+        // u: the arc's length from the centreline (angle from the tangent point, times R), its
+        // gradient by the chain rule (textureGrad: no derivatives in this loop's divergent flow)
+        vec2 ang = vec2(-tr.y * d.y, hh * d.x);
+        float u = R * atan(ang.y, ang.x);
+        vec2 gu = R * vec2(hh * ang.x, tr.y * ang.y) / (dl * dl), gr = d / dl;
+        // the noise stretched along the arc: blotches (g) ~20 x 0.5 m, patches (a) 20-80 m
+        vec2 sq = vec2(1.0 / 160.0, 1.0 / 4.0);
+        vec2 q = vec2(u, r) * sq + vec2(0.29 * float(k) + 0.5 * hh, 0.37);
+        vec4 nA = textureGrad(uNoise, q, vec2(dot(gu, dX), dot(gr, dX)) * sq, vec2(dot(gu, dY), dot(gr, dY)) * sq) - 0.5;
+        float uEdge = R * acos(clamp((R - hw) / R, -1.0, 1.0));
+        float along = smoothstep(0.0, 8.0, u) * mix(1.0, 0.35, smoothstep(0.0, uEdge, u));
+        float wd = band(r, -2.4, 2.4, pmax) * (0.6 + 0.4 * smoothstep(-0.25, 0.25, nA.g));
+        float gear = max(band(abs(r), 1.05, 1.45, pmax), band(abs(r), 2.0, 2.3, pmax)) * smoothstep(-0.3, 0.25, nA.a + 0.1);
+        turnM = max(turnM, (0.2 * wd + 0.3 * gear * small) * along);
       }
     }
   }

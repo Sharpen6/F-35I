@@ -194,13 +194,14 @@ export class RunwayFixtures {
     this._meshes = [];
   }
 
-  /** A stand-in mesh for the owner's precompile scene; returns its geometry (to dispose). */
+  /** A stand-in mesh for the owner's warm-up (its program and its shadow depth program); returns its geometry (to dispose). */
   addPrecompile(scene) {
     const b = new Builder();
     b.box(0, 0, 0, 0.1, 0.1, 0.1, 1, 0, BLACK, { plus: [1, 1] });
     const m = new THREE.Mesh(b.geometry(), this.material);
     m.frustumCulled = false;
     m.receiveShadow = true;
+    m.castShadow = true;
     scene.add(m);
     return m.geometry;
   }
@@ -272,6 +273,9 @@ export class RunwayFixtures {
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
       mesh.receiveShadow = true;
+      // the signs' and fixtures' shadows (long at a low sun; the sun's map covers ~160 m around
+      // the camera near the ground: one more draw in its pass at the airfield)
+      mesh.castShadow = true;
       mesh.renderOrder = 1;
       this.group.add(mesh);
       this._meshes.push(mesh);
