@@ -132,7 +132,7 @@ export class Buildings {
     this.index = null;
     this.tiles = new Map();
     this._tileList = [];                 // the same tiles, for the per-frame loops (no iterators)
-    this.stats = { tiles: 0, boxes: 0, chunks: 0, chunkVertices: 0, chunkMB: 0, boxMB: 0, shadows: 0, shadowMB: 0, lights: 0, fading: 0 };
+    this.stats = { tiles: 0, boxes: 0, chunks: 0, chunkVertices: 0, chunkMB: 0, boxMB: 0, shadows: 0, shadowMB: 0, lights: 0, fading: 0, off: false };
 
     this.group = new THREE.Group();
     this.group.name = 'Buildings';
@@ -305,6 +305,9 @@ export class Buildings {
    * depth program. Program parameters depend on the render target (colour space, tone mapping):
    * the depth program is compiled with a target bound, as the shadow pass draws it, and with
    * parallel compilation the colour programs both for the canvas and for a post chain's target.
+   * They depend on the lights too: with the sun casting shadows (by day) and without (at night,
+   * and at start-up, before js/env switches them on), so both are compiled, the depth program
+   * only with (the shadow pass runs only then).
    */
   _precompile() {
     const tmp = new THREE.Scene(), tmpD = new THREE.Scene();
@@ -344,32 +347,40 @@ export class Buildings {
     const done = () => { g.dispose(); cg.dispose(); sg.dispose(); pg.dispose(); rt.dispose(); };
     const r = this.renderer;
     const prev = r.getRenderTarget();
+    const sun = this.env?.sunLight, cast = sun ? sun.castShadow : false;
+    const states = sun && r.shadowMap.enabled ? [false, true] : [cast];
+    // in parallel where the browser can (KHR_parallel_shader_compile), else now (the menu shows)
+    const parallel = r.extensions.has('KHR_parallel_shader_compile');
+    const p = [];
     try {
-      // in parallel where the browser can (KHR_parallel_shader_compile), else now (the menu shows)
-      if (r.extensions.has('KHR_parallel_shader_compile')) {
-        const p = [r.compileAsync(tmp, cam, this.scene)];
-        r.setRenderTarget(rt);
-        p.push(r.compileAsync(tmpD, cam, this.scene), r.compileAsync(tmp, cam, this.scene));
+      for (const s of states) {
+        if (sun) sun.castShadow = s;     // only for these calls: put back below, before any frame
+        if (parallel) {
+          p.push(r.compileAsync(tmp, cam, this.scene));
+          r.setRenderTarget(rt);
+          if (s || states.length === 1) p.push(r.compileAsync(tmpD, cam, this.scene));
+          p.push(r.compileAsync(tmp, cam, this.scene));
+        } else {
+          r.compile(tmp, cam, this.scene);
+          r.setRenderTarget(rt);
+          if (s || states.length === 1) r.compile(tmpD, cam, this.scene);
+        }
         r.setRenderTarget(prev);
-        Promise.all(p).then(done, (e) => { console.warn('Buildings: precompile', e); done(); });
-      } else {
-        r.compile(tmp, cam, this.scene);
-        r.setRenderTarget(rt);
-        r.compile(tmpD, cam, this.scene);
-        r.setRenderTarget(prev);
-        done();
       }
     } catch (e) {
       r.setRenderTarget(prev);
       console.warn('Buildings: precompile', e);
-      done();
+    } finally {
+      if (sun) sun.castShadow = cast;
     }
+    Promise.all(p).then(done, (e) => { console.warn('Buildings: precompile', e); done(); });
   }
 
   // ------------------------------------------------------------------------------ module API
   update(f) {
     const on = !this.forcedOff && !this.failed && this.app?.settings?.buildings !== false;
     if (this.group.visible !== on) this.group.visible = on;
+    this.stats.off = !on;                // for the tests: nothing will stream
     if (!on) {
       // switched off: free the video memory too (switching on streams everything in again)
       if (this._loaded) { for (const t of this.tiles.values()) this._unloadTile(t); this._loaded = false; }
@@ -494,7 +505,7 @@ export class Buildings {
 
   /** The tile's ground shadow decals (sorted by ground level in the worker). */
   _buildShadowMesh(t, sh) {
-    if (!sh || !sh.count) return;
+    if (!sh || !sh.count || !this.shadowsOn) return;     // ?bshadows=0: not built at all
     const g = new THREE.InstancedBufferGeometry();
     g.setIndex(this._hex.index.clone());
     g.setAttribute('position', this._hex.position.clone());
@@ -529,7 +540,7 @@ export class Buildings {
 
   /** The tile's obstruction lights (one Points object). */
   _buildLights(t, li) {
-    if (!li || !li.count) return;
+    if (!li || !li.count || !this.lightsOn) return;       // ?blights=0: not built at all
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(li.pos, 3));
     g.setAttribute('aLight', new THREE.BufferAttribute(li.kind, 2));
