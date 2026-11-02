@@ -119,7 +119,7 @@ export class FlightModel {
       crashed: false, crashReason: '', warnings: [],
       // extras (SI unless named): handy for the HMD / HUD and tests
       ias_kt: 0, tas_kt: 0, alt_ft: 0, vs_fpm: 0, gamma: 0, groundSpeed: 0, qbar: 0, mass: 0, time: 0,
-      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false, apc: false,
+      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false, apc: false, apcRetard: false,
     };
     this._stance = this._computeStance();
     this.reset({ x: 0, y: 0, z: 0, heading_deg: 0, on_ground: true });
@@ -186,6 +186,8 @@ export class FlightModel {
     this._timeAirborne = 0;
     this._apcOn = false;
     this._apcRetard = false;
+    this._apcFlare = false;        // RETARD in the flare (below cfg.apc.retardAgl)
+    this._apcFlareRate = 0;
     this._apcI = 0;
     this._apcV = spawn.on_ground === false ? (+spawn.speed_ms || 0) : 0;
     this._apcVdot = 0;
@@ -277,8 +279,14 @@ export class FlightModel {
    * from the throttle in use (no jump) and gives way on the ground, with the gear moving, in the
    * 50 deg AoA mode and with the engine out; the input layer turns it off when the pilot moves the
    * lever, and follows its throttle with the lever meanwhile (main.js).
+   * Close to the runway (agl: the main wheels' height) it adds no more power below noAddAgl, and
+   * below retardAgl it closes the throttle to idle over retardTime (RETARD, as an airliner's
+   * auto-throttle does at ~27 ft): the flare then bleeds the approach speed.  Holding 13 deg AoA
+   * through the flare, it used to add power against the pull (0.26 -> 0.49): the jet floated ~7 s
+   * and landed 620 m long at full approach speed.  A climb back above noAddAgl (a balloon or a
+   * go-around flown on it) cancels the retard.
    */
-  _throttleCmd(h, inp, alpha, V, onGround) {
+  _throttleCmd(h, inp, alpha, V, onGround, agl = Infinity) {
     const c = this.cfg.apc;
     const lever = clamp(inp.throttle != null ? +inp.throttle : this._throttle, 0, 1);
     if (!c) return lever;
@@ -291,11 +299,18 @@ export class FlightModel {
     // the jet does not roll down the runway at approach power, nor bounce into a re-engagement
     if (this._apcOn && onGround && inp.apc) this._apcRetard = true;
     const on = !!inp.apc && !this._apcRetard && !onGround && this.gearPos > 0.999 && !inp.highAoA && V > 30 && !this.crashed && this.engine.running;
-    if (!on) { this._apcOn = false; return this._apcRetard ? 0 : lever; }
-    if (!this._apcOn) { this._apcOn = true; this._apcI = this._throttle; }
+    if (!on) { this._apcOn = false; this._apcFlare = false; return this._apcRetard ? 0 : lever; }
+    if (!this._apcOn) { this._apcOn = true; this._apcI = this._throttle; this._apcFlare = false; }
+    if (agl < c.retardAgl && !this._apcFlare) {
+      this._apcFlare = true;
+      this._apcFlareRate = Math.max(this._throttle, 0.05) / c.retardTime;
+    } else if (agl > c.noAddAgl) this._apcFlare = false;
+    if (this._apcFlare) return approach(this._throttle, 0, this._apcFlareRate * h);   // integrator frozen
     const e = alpha - c.alpha;                          // + = slow: more power
-    this._apcI = clamp(this._apcI + c.ki * e * h, c.min, c.max);
-    const cmd = clamp(this._apcI + c.kp * e - c.kd * this._apcVdot, c.min, c.max);
+    const low = agl < c.noAddAgl;
+    if (!low || e < 0) this._apcI = clamp(this._apcI + c.ki * e * h, c.min, c.max);
+    let cmd = clamp(this._apcI + c.kp * e - c.kd * this._apcVdot, c.min, c.max);
+    if (low) cmd = Math.min(cmd, this._throttle);
     return approach(this._throttle, cmd, c.rate * h);
   }
 
@@ -467,7 +482,7 @@ export class FlightModel {
     const onGround = wowMain || wowNose;
 
     // ---------------------------------------------------------------- discrete systems
-    const thr = this._throttleCmd(h, inp, alpha, V, onGround);
+    const thr = this._throttleCmd(h, inp, alpha, V, onGround, aglMains);
     this._throttle = thr;
     const handleDown = inp.gearHandle !== false;
     if (handleDown) this.gearPos = Math.min(1, this.gearPos + h / cfg.gear.retractTime);
@@ -759,6 +774,7 @@ export class FlightModel {
     st.lastTouchdown = this.lastTouchdown;
     st.highAoA = !!(inp && inp.highAoA);
     st.apc = this._apcOn;                  // the auto-throttle is flying the throttle
+    st.apcRetard = this._apcOn && this._apcFlare;   // ... closing it in the flare (RETARD)
     // warnings
     const wn = st.warnings;
     wn.length = 0;

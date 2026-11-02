@@ -209,6 +209,10 @@ export const F35I_CONFIG = {
     groundLawSpeed: [15, 35],                      // m/s: direct stick-to-stabilator below, attitude law above
     groundRollGain: 0.5,
     takeoffModeTime: 10, takeoffModeMaxCas: 230 * 0.514444,
+    // A take-off roll: at least takeoffRollTime s on the wheels and takeoffRollGain m/s faster at
+    // lift-off than at the slowest point of the ground contact (a bounce or a landing roll only slows
+    // down).  After a bounce the attitude it left the runway with is held for up to bounceHoldTime s.
+    takeoffRollTime: 3, takeoffRollGain: 5, bounceHoldTime: 4,
     // s: a pull still held when the take-off law hands over to C* comes in over this time constant
     // (fcs.js).  Taken away for good, a held pull flew the path the jet had just after lift-off and
     // the nose sank while the pilot held it back (a scripted climb needed 150 s instead of 85); all
@@ -222,10 +226,15 @@ export const F35I_CONFIG = {
     // roll
     rollRateMax: 200 * D,
     rollQbar: [0.35, 1500, 11000],                 // fraction at low qbar, qbar (Pa) where it starts / is full
-    rollAlpha: [12 * D, 30 * D, 0.55],             // full below 12 deg AoA, down to 55 % at 30 deg (F-35 keeps
-                                                   // usable roll at high AoA: ~50 deg/s at 25 deg, 125 kt)
+    rollAlpha: [12 * D, 30 * D, 0.55],             // full below 12 deg AoA, down to 55 % at 30 deg
     rollMach: [1.1, 1.8, 0.55],
-    rollBetaMax: 6 * D, rollBetaGain: 3.0, rollCoordMin: 8 * D,   // high-AoA roll / yaw coordination (fcs.js)
+    // High-AoA roll / yaw coordination (fcs.js).  In slow flight the velocity-vector roll is limited by
+    // the yaw rate the rudders can build, not by the schedule above (which would allow ~57 deg/s at
+    // 25 deg AoA and 125 kt): full rudder adds ~11 deg/s^2 of yaw acceleration there, so the roll
+    // builds up to ~25-35 deg/s and 90 deg of bank takes ~2.8 s (~2.2 s at 150 kt, ~1.9 s at 180 kt).
+    // Sideslip limit and its linear gain close to the limit, the share of the rudder authority the
+    // roll command plans with (the rest is left to the sideslip loop), and the floor of the cap.
+    rollBetaMax: 6 * D, rollBetaGain: 3.0, rollYawShare: 0.7, rollCoordMin: 8 * D,
     tauP: 0.12,
     kPhi: 1.2, bankSnap: 5 * D, bankHoldRate: 45 * D, bankHoldMaxPitch: 70 * D,
     // yaw
@@ -238,8 +247,11 @@ export const F35I_CONFIG = {
   // of the drag curve (the approach) a fixed throttle runs away in speed: from the trimmed 140 kt
   // the jet was at 300 kt on the runway 100 s later. Throttle per rad of AoA error (0.08 per deg),
   // its integral, damping on the acceleration along the path (per m/s^2, filtered over vdotTau s),
-  // the range (idle to MIL, never the afterburner) and the slew rate (per s).
-  apc: { alpha: 13 * D, kp: 4.6, ki: 1.2, kd: 0.03, vdotTau: 0.4, min: 0.03, max: 0.75, rate: 0.3 },
+  // the range (idle to MIL, never the afterburner) and the slew rate (per s).  Close to the runway
+  // (main-wheel height): no added power below noAddAgl (50 ft), RETARD to idle over retardTime from
+  // retardAgl (30 ft; airliner auto-throttles retard at ~27 ft), so the flare bleeds the speed.
+  apc: { alpha: 13 * D, kp: 4.6, ki: 1.2, kd: 0.03, vdotTau: 0.4, min: 0.03, max: 0.75, rate: 0.3,
+    noAddAgl: 50 * 0.3048, retardAgl: 10 * 0.3048, retardTime: 2.0 },
 
   // ------------------------------------------------------------------------------ actuators
   actuators: {

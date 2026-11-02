@@ -8,6 +8,8 @@
 //             and hold altitude / speed (`cruiseKt`).
 //   land      from a final: localizer and a 3 deg glide slope to an aim point 300 m past the
 //             threshold at `approachKt`, flare, touchdown, nose down, brakes to a stop on the runway.
+//             With `apc: true` it leaves the throttle to the auto-throttle (throttle null: the
+//             input layer keeps the APC on) down to the touchdown, retard included.
 //
 // update(state, dt) returns the inputs to apply this step: {pitch, roll, yaw, throttle, brake,
 // gearHandle, parkingBrake, nwsEnable, speedbrake}. `phase` names what it is doing; `events`
@@ -66,6 +68,7 @@ export class TestPilot {
     this.glide = (o.glideDeg || 3) * DEG;
     this.aim = o.aimM ?? 300;
     this.milTime = o.milTime ?? 3;                       // s at MIL before the burner
+    this.apc = !!o.apc;                                  // land: the auto-throttle flies the throttle
     this.phase = this.plan === 'land' ? 'approach' : 'roll';
     this.t = 0;
     this.tPhase = 0;
@@ -221,7 +224,7 @@ export class TestPilot {
         o.pitch = this._pitchFor(st, gCmd, gearDown);
         const trackCmd = rw.hdg - clamp(f.cross * 0.15, -15, 15) * DEG;
         o.roll = this._rollFor(st, this._bankForTrack(st, trackCmd, 20 * DEG));
-        o.throttle = this._throttleFor(st, this.vapp, h, 0.75);
+        o.throttle = this.apc ? null : this._throttleFor(st, this.vapp, h, 0.75);
         if (hm < 14 && f.along > -500) this._to('flare', st);
         break;
       }
@@ -235,7 +238,7 @@ export class TestPilot {
         const trackCmd = rw.hdg - clamp(f.cross * 0.15, -8, 8) * DEG;
         o.roll = this._rollFor(st, this._bankForTrack(st, trackCmd, 8 * DEG));
         o.yaw = 0;
-        o.throttle = hm < 2 ? 0 : this._throttleFor(st, this.vapp, h, 0.75);
+        o.throttle = this.apc ? null : hm < 2 ? 0 : this._throttleFor(st, this.vapp, h, 0.75);
         if (wowMain || st.onGround) this._to('touchdown', st);
         break;
       }

@@ -18,8 +18,10 @@
 // Ground:       pitch stick commands a pitch attitude (60 % aft stick or more = the 12 deg take-off
 //               attitude, proportional below, rotation rate limited); roll and yaw are direct; pedals
 //               also steer the nose wheel (gear.js).
-// Takeoff:      after lift-off the attitude mode is kept while the stick stays pulled, then the air
-//               laws take over.  The stick still held at that moment is "ratcheted": the C* law
+// Takeoff:      after lift-off from a take-off roll the attitude mode is kept while the stick stays
+//               pulled, then the air laws take over.  After a bounce (a short ground contact, no
+//               acceleration) the attitude mode holds the attitude the jet left the runway with for
+//               up to bounceHoldTime, hands-off too; a push or gear up hands over to the air laws.  The stick still held at that moment is "ratcheted": the C* law
 //               only sees stick beyond what was held, the reference follows the stick down as it is
 //               released and fades out over ratchetTau (3 s), so a held pull comes in smoothly
 //               instead of pulling the jet toward the AoA limit at once.
@@ -42,6 +44,12 @@ export class FlightControlSystem {
     this.bankRef = opts.bankRef || 0;
     this.groundInt = 0;          // pitch integrator used on the ground (overcomes the main-gear moment)
     this.timeAirborne = 0;
+    // current ground contact: how long, and the lowest airspeed in it (a take-off roll accelerates
+    // from it; a bounce or a landing roll never gets faster than it)
+    this.groundTime = this.mode === 'ground' ? 1e9 : 0;
+    this.vGroundMin = 0;
+    this.thFloor = -Infinity;    // attitude held after a bounce (the take-off law's floor)
+    this.thTouchdown = 0;        // pitch attitude when the current ground contact began
     this.spRef = 0;              // pitch stick ratchet (shaped units) after the ground / take-off laws
     this.out = { de: opts.de || 0, da: 0, dr: 0 };
     this.debug = { qCmd: 0, CsCmd: 0, nzCmd: 1, pCmd: 0, rCmd: 0, limiter: '' };
@@ -76,13 +84,36 @@ export class FlightControlSystem {
     // ------------------------------------------------------------------ mode logic
     const prevMode = this.mode;
     if (onGround) {
+      if (this.mode !== 'ground') { this.groundTime = 0; this.vGroundMin = s.V; this.thTouchdown = s.theta; }
       this.mode = 'ground';
       this.timeAirborne = 0;
+      this.groundTime += h;
+      this.vGroundMin = Math.min(this.vGroundMin, s.V);
     } else {
       this.timeAirborne += h;
-      if (this.mode === 'ground') this.mode = sp > c.freeStick ? 'takeoff' : 'air';
-      if (this.mode === 'takeoff' && (sp <= c.freeStick || this.timeAirborne > c.takeoffModeTime
-        || s.gearDown < 0.99 || s.cas > c.takeoffModeMaxCas)) this.mode = 'air';
+      if (this.mode === 'ground') {
+        // Only a real take-off roll (on the wheels for a while and faster now than at its slowest)
+        // hands the held stick to the take-off attitude law.  A bounce used to land there too: the
+        // flare pull still held read as a ~6 deg attitude and the FCS pushed the nose down in the
+        // air (11 -> 5 deg in 0.6 s), setting up a nose-first second touchdown.  After a bounce the
+        // attitude law holds the attitude the jet left the runway with (stick above it still
+        // raises the nose, a push hands over to the air law), as a pilot holds the landing attitude.
+        const roll = this.groundTime >= c.takeoffRollTime && s.V > this.vGroundMin + c.takeoffRollGain;
+        if (roll) {
+          this.mode = sp > c.freeStick ? 'takeoff' : 'air';
+          this.thFloor = -Infinity;
+        } else {
+          // the attitude at the touchdown, before the main wheels' slap-down pitched the nose down
+          this.mode = 'takeoff';
+          this.thFloor = Math.min(Math.max(s.theta, this.thTouchdown), c.tailStrikePitch);
+        }
+      }
+      if (this.mode === 'takeoff') {
+        const bounce = this.thFloor > -Infinity;
+        const out = bounce ? sp < -c.freeStick || this.timeAirborne > c.bounceHoldTime : sp <= c.freeStick;
+        if (out || this.timeAirborne > c.takeoffModeTime || s.gearDown < 0.99 || s.cas > c.takeoffModeMaxCas) this.mode = 'air';
+      }
+      if (this.mode !== 'takeoff') this.thFloor = -Infinity;
     }
     if (this.mode !== 'air') {           // re-arm the holds for the moment the air laws engage
       this.gammaHold = false;
@@ -128,7 +159,7 @@ export class FlightControlSystem {
       // air; here it left a half pull at ~4 deg, which only flies off at ~260 kt).
       const thG = c.groundPitch;
       const rot = clamp(rawPitch / (c.rotateStick || 1), 0, 1);
-      const thCmd = thG + rot * (c.takeoffPitch - thG);
+      const thCmd = Math.max(thG + rot * (c.takeoffPitch - thG), this.mode === 'takeoff' ? this.thFloor : -Infinity);
       qCmd = clamp(c.kTheta * (thCmd - s.theta), -c.derotationRate, c.rotationRate);
       qCmd = this._limitAlphaG(qCmd, s, V, c.alphaMax, a, mp, geo, qbarEff);
       const ndi = ndiPitch(qCmd, gearM) + this.groundInt;
@@ -235,15 +266,22 @@ export class FlightControlSystem {
           this.bankRef = s.phi;
         }
       }
-      // High-AoA coordination: the sideslip grows as beta_dot = p sin(a) - r cos(a) + ay / V, and a
-      // stability-axis roll (p = pS cos a) needs the yaw rate to keep up.  Where the rudders cannot
-      // build it quickly (slow flight, 20-30 deg AoA, where gravity adds g sin(phi) / V as the bank
-      // grows) cap the command to what the yaw axis already does plus a bounded sideslip build-up;
-      // no effect at normal AoA, where sin(a) is small.
+      // High-AoA coordination: the sideslip grows as beta_dot = cos(a) (pS sin(a) - rEff), rEff =
+      // r - ay / (V cos a): a stability-axis roll (p = pS cos a) needs the yaw rate to keep up.  Where
+      // the rudders cannot build it quickly (slow flight, 20-30 deg AoA) cap the command to the yaw
+      // rate the jet already has plus the deficit the sideslip room can absorb while the rudders
+      // close it: a braking curve sqrt(2 A room / cos a), A = the yaw acceleration a share of the
+      // rudder travel adds, linear (rollBetaGain) close to the limit.  The roll then builds up
+      // together with the yaw rate; a plain linear room term let the roll rate overshoot, the
+      // sideslip run into its limit and the roll rate fall back by half (a hesitation after the
+      // first 15 deg of bank).  No effect at normal AoA, where sin(a) is small.
       if (sa > 0.1 && pS !== 0) {
         const sg = Math.sign(pS);
         const room = Math.max(0, c.rollBetaMax - sg * s.beta);
-        const cap = Math.max(c.rollCoordMin, (sg * (r * ca - s.ay / V) + c.rollBetaGain * room) / (ca * sa));
+        const qsbI = qbarEff * geo.S * geo.b / Izz;
+        const yawAcc = Math.max(0, (c.rollYawShare ?? 0.7) * Math.abs(a.Cn_dr) + sg * a.Cn0) * qsbI;
+        const slack = Math.min(c.rollBetaGain * room, Math.sqrt(2 * yawAcc * room * ca)) / ca;
+        const cap = Math.max(c.rollCoordMin, (sg * (r - s.ay / (V * ca)) + slack) / sa);
         if (Math.abs(pS) > cap) pS = sg * cap;
       }
       const pCmd = pS * ca;
