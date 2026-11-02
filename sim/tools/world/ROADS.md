@@ -207,24 +207,26 @@ kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
   positions; aprons as 5 m concrete slabs with stains. Lit exactly as the terrain (sun through
   the atmosphere, sky, the aircraft's shadow) plus GGX sheen, then the same aerial perspective.
   At night: street lights along lit roads (sodium on main roads, warm LED in town) and apron
-  floodlights, with the eye's adaptation the capped exposure lacks once the sky is dark. The
+  floodlights, with the eye's adaptation the capped exposure lacks once the sky is dark
+  (`env.lightGain`, the rule every module's lights follow: js/env/README.md "Lights at night"). The
   terrain's own shadows (hills over valleys at a low sun) when gfx-terrain's horizon maps are in
   (`terrain.horizon.uniforms` and `HORIZON_GLSL` of js/terrain/horizonMap.js, loaded only then;
   one more sampler).
-* **Airfield lights** (`AirportLights.js`): one `THREE.Points` per airfield, camera-facing
-  sprites. Each light has a colour and intensity (cd) per side of its axis and a beam; the
-  vertex shader computes the illuminance at the eye through the atmosphere (`I T / d^2`) against
-  the threshold of a point source on the background (Allard: `E_t = 10^(0.64 log B - 5.7)` lux,
-  `B` from the sun's elevation). The light's irradiance is spread over a Gaussian of at least
-  0.65 px (wider when bright, as glare) integrated over each pixel (erf), so a light keeps its
-  energy wherever it falls between pixel centres: no twinkling as it moves. A display cannot show
-  a point as bright as the eye sees it, so a light the eye sees well is at least as bright as its
-  excess over the threshold says (as star magnitudes), up to 0.85 of white; only physically
-  bright (near) lights saturate, up to 64 in HDR (the bloom). Radians per pixel from the drawing
-  buffer (HiDPI counted once). PAPI white above its unit's angle, red below (2 white 2 red on
-  3 deg); sequenced flashers held 40 ms (two or three frames; an 8 ms flash fell between
-  frames). Runway, approach and taxiway lights on from sun 8 deg (dimmer steps at night),
-  floodlights from sunset, PAPI always.
+* **Airfield lights** (`AirportLights.js`): one `THREE.Points` per airfield, camera-facing sprites.
+  Each light has a colour and intensity (cd) per side of its axis and a beam; the vertex shader
+  computes the illuminance at the eye through the atmosphere (`I T / d^2`) against the threshold of
+  a point source on the background (Allard: `E_t = 10^(0.64 log B - 5.7)` lux, `B` from the sun's
+  elevation: `env.pointThreshold`); the same GLSL (`POINT_LIGHT_VERT_GLSL`,
+  `POINT_LIGHT_FRAG_GLSL`) draws the cars and the buildings' obstruction lights. The light's
+  irradiance is spread over a Gaussian of at least 0.65 px (wider when bright, as glare) integrated
+  over each pixel (erf), so a light keeps its energy wherever it falls between pixel centres: no
+  twinkling as it moves. A display cannot show a point as bright as the eye sees it, so a light the
+  eye sees well is at least as bright as its excess over the threshold says (as star magnitudes),
+  up to 0.85 of white; only physically bright (near) lights saturate, up to 64 in HDR (the bloom).
+  Radians per pixel from the drawing buffer (HiDPI counted once). PAPI white above its unit's
+  angle, red below (2 white 2 red on 3 deg); sequenced flashers held 40 ms (two or three frames; an
+  8 ms flash fell between frames). Runway, approach and taxiway lights on from sun 8 deg (dimmer
+  steps at night), floodlights from sunset, PAPI always.
 * **Street lamps** (`AirportLights.js`, `lamps_<ix>_<iz>.bin`): one `THREE.Points` per road tile
   within 20 / 14 / 8 km (high / medium / low), their own program (16 bytes a lamp). The luminaire
   (cut-off optics: 3000 cd sodium / 1200 cd LED from below its horizontal plane, ~8 % of that from

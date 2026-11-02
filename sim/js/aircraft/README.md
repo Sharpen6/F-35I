@@ -72,19 +72,25 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   (16 / 24 / 32 steps per pixel by quality, only drawn while `ab > 0`). By day a short, mostly
   transparent orange-yellow core that fills the exit and tapers within ~2 m, a faint blue at the
   lip, pale diamonds close in; the faint back half fades out against a daylight sky (no pink tail
-  over blue). At night the whole core (3.2 m at full burner) and a train of five yellow-white shock
-  diamonds, each weighted by the core where it sits (attached, none past the flame). Each channel
-  saturates at a hot orange-yellow and the flame covers what is behind by its opacity
-  (premultiplied; higher by day, as the core is in reality several times brighter than the sky:
-  a transparent flame over blue sky would come out as a pale, whitish puff, worst seen from the
-  front quarter), and its display brightness grows only with the 4th root of the exposure
-  (`flameDisplayGain`, normalised to the meter's noon value `fxEnv.noonExposure`) and then goes
-  through a hue-preserving shoulder (the brightest channel rolls off, the others keep their ratio):
-  seen end-on at dusk and night the core is a saturated ~(240, 205, 140), never a white disc. Day
-  and night look (`flameDayLook`) come from the light level `fxEnv` (the sun's elevation), not from
-  the exposure. Throat glow: a dull red at idle, orange at MIL (both only seen in the dark),
-  orange-yellow in burner; with the burner lit it is drawn inside the plume shader, under the same
-  shoulder (two separately tone-mapped layers added up to white before). Nozzle petals: open at idle
+  over blue). At night a long flame (4.8 m of core at full burner): a yellow-white throat in the
+  nozzle, an orange core fading to red-orange, a blue-violet sheath along its edge for the first
+  metre, and a train of five or six yellow-white shock diamonds, each weighted by the core where it
+  sits (attached, none past the flame). The two looks are tables (`FLAME_DAY`, the look tuned
+  against daylight; `FLAME_NIGHT`) blended by the light level (`flameDayLook`, from `fxEnv`: the
+  sun's elevation, not the exposure); noon draws `FLAME_DAY` exactly. Each channel saturates and
+  the flame covers what is behind by its opacity (premultiplied; higher by day, as the core is in
+  reality several times brighter than the sky: a transparent flame over blue sky would come out as
+  a pale, whitish puff, worst seen from the front quarter). Brightness: a picture level (env
+  README "Lights at night"; a burner is far brighter than any exposure holds): by day the display
+  brightness grows only with the 4th root of the exposure (`flameDisplayGain`, normalised to the
+  meter's noon value `fxEnv.noonExposure`) and goes through a hue-preserving shoulder (the
+  brightest channel rolls off, the others keep their ratio); at night it is fixed, whatever the
+  meter (40 or 285 give the same flame), with colours AgX keeps saturated: the body at display
+  ~0.3-1 with little green, the diamonds and the throat ~2-3, the sheath ~0.2-0.4 in blue. Throat
+  glow (`throatGlow`): a dull red-orange at idle, orange at MIL (both only seen in the dark),
+  orange-yellow in burner by day, yellow-white at night; with the burner lit it is drawn inside
+  the plume shader, under the same shoulder (two separately tone-mapped layers added up to white
+  before). Nozzle petals: open at idle
   (the F135's idle nozzle), closed at MIL, opening again with the burner (`nozzleIdleOpen`); they
   follow the engine, not the lever (`lagThrottle`, first order, `NOZZLE_TAU` 1.3 s: the spool takes
   ~4.5 s from idle to MIL).
@@ -112,10 +118,15 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   0.8 s). The lens brightens when the camera is in a beam; `visual.lights.landing` `{on, position,
   direction, intensity, spread, spill, beams: [{name, direction, intensity, spread, weight}]}`
   (world) publishes both for the ground pool (`direction` and `intensity` are the dominant beam's).
-  In the dark the glows get a visibility gain (`AircraftLights.nightGain(darkness)`, up to ~200):
-  the sim's exposure stops at 40, far below a dark-adapted eye. When the frame goes to the HDR
-  chain's float target (`fxEnv.bloomOn`) the halo is fainter (the bloom makes the glare) and the
-  shoulder higher; `visual.lights.haloGain` scales the halo further.
+  At night the glows follow the rule for lights (env README "Lights at night"): the light at the
+  eye times `fxEnv.lightGain` (1 by day and in the dusk, 1400 / exposure once the sky is dark: ~6
+  at exposure 230), so a 40 cd tail light 15 m away is a bright point with a small halo, not the
+  white ball as wide as the nozzle it was with the old gain (up to ~200, tuned for a night exposure
+  of 40). A light many times over the threshold of a point source against the ground
+  (`fxEnv.pointThreshold`) keeps a visible core however far (`AircraftLights.visibleFloor`, the
+  airfield lights' floor). When the frame goes to the HDR chain's float target (`fxEnv.bloomOn`)
+  the halo is fainter (the bloom makes the glare) and the shoulder higher;
+  `visual.lights.haloGain` scales the halo further.
 * `materials.js`: calibration of Blender's Cycles materials for three.js (`TUNE`): the skin
   without the clear coat and sheen (they read as chrome plastic in three.js's BRDF) and a little
   rougher, rubber tyres, light grey wheel wells and bay interiors, painted gear legs; the nozzle
@@ -135,7 +146,7 @@ the player's FlightModel state and the AircraftVisual, never changes them, and d
 | --- | --- |
 | `Vapor.js` | wing-tip vortex trails (thin white lines, high lift in humid air), chine vortex tubes over the wing roots at high alpha, vapour sheets over the upper wings at high g low down (streaky, drifting aft, up to two layers hugging the skin from the leading-edge flap's hinge aft, fading where seen edge-on: no hairlines from ahead), the transonic vapour cone (Mach 0.93-1.01 in humid air: up to three nested, slightly irregular shells, densest near the skin, each fading where seen edge-on, streaks along the flow from the side and a mottled cloud along the axis, a sharp but ragged aft edge at the shock), the contrail above ~8-9 km (a gap of clear exhaust first, spreading and fading over 25 s; its points are spaced by speed so that they always cover the whole life: no blunt end) |
 | `TyreSmoke.js` | puffs of rubber smoke from each wheel at touchdown (ground speed > 25 m/s), denser the faster and harder: one GPU-animated point cloud (rise, growth, drift, fade over ~3 s) |
-| `LandingPool.js` | the landing and taxi beams on the ground (the terrain's shaders ignore three.js lights): a terrain-following grid ahead of the lamp, `E = sum I(theta) cos(i) / r^2` per fragment against the light already on the ground `E_amb`. By day, at sunset and at dusk the physical ratio `E / E_amb` is all there is (a faint brightening near the nose wheel); in the dark a visibility gain `poolGain(fxEnv.logLux)` (1 down to the sun ~3 deg below the horizon, up to 300 once the sky is dark) under a logarithmic roll-off on the brightness (`POOL_KNEE` 4, the channels kept in proportion): a lit runway fading out along the beam, not a flat white wedge. The canvas is already tone-mapped, and the tone curve is no multiplication (its toe crushes the red of the dark bluish night ground, its shoulder squeezes white paint), so the pool is worked out on two reference grounds, the runway's asphalt and its paint (`POOL_ALBEDO` 0.115 / 0.62), without and with the lamp through the renderer's own tone curve, and the canvas gets the map per channel that is exact on both, `drawn = dst x M + A`: three draws multiply (an 8-bit canvas clamps a blend factor at x2 a draw), one adds. The asphalt turns the lamp's warm grey, not the night's blue made brighter; the paint stays brighter and turns white, not bluish. On the HDR chain's float target the draws multiply by `1 + gain E / E_amb` per channel instead (right for any albedo). Faded by the fog; no draws with the sun more than ~4 deg up |
+| `LandingPool.js` | the landing and taxi beams on the ground (the terrain's shaders ignore three.js lights): a terrain-following grid ahead of the lamp, `E = sum I(theta) cos(i) / r^2` per fragment against the light already on the ground `E_amb`. By day, at sunset and at dusk the physical ratio `E / E_amb` is all there is (a faint brightening near the nose wheel); at night the lamp's light counts `fxEnv.lightGain` times (the rule for lights at night, env README: ~6 at exposure 230 against the boosted moonlit ground of ~20 lux), under a logarithmic roll-off far above the night's light (`poolFactor`, `POOL_KNEE` 64, the channels kept in proportion): bright under the nose, falling off along the beam as the light grazes the ground, not a flat white wedge. The canvas is already tone-mapped, and the tone curve is no multiplication (its toe crushes the red of the dark bluish night ground, its shoulder squeezes white paint), so the pool is worked out on two reference grounds, the runway's asphalt and its paint (`POOL_ALBEDO` 0.115 / 0.62), without and with the lamp through the renderer's own tone curve, and the canvas gets the map per channel that is exact on both, `drawn = dst x M + A`: three draws multiply (an 8-bit canvas clamps a blend factor at x2 a draw), one adds. The asphalt turns the lamp's warm grey, not the night's blue made brighter; the paint stays brighter and turns white, not bluish. On the HDR chain's float target the draws multiply by `1 + gain E / E_amb` per channel instead (right for any albedo). Faded by the fog; no draws with the sun more than ~4 deg up |
 | `fxshared.js` | the light level `fxEnv` (sky illuminance from the sun's elevation after the twilight tables, `darkness` 0..1, `noonExposure`, bloom detection), `fxExposure`, the air model (temperature, humidity, dew point), `condensation(state, mass, out)`, a tileable noise texture, the vapour lighting (sun with forward scattering + sky, from the Environment), three's fog for premultiplied and additive effects (`fogUniforms`, `FOG_PARS_GLSL`), camera-facing trail ribbons (a preallocated ring, vertex arrays written in place) |
 
 Condensation (`fxshared.condensation`): the local cooling `V^2 / (2 cp)` x a factor x CL (CL from
@@ -151,11 +162,13 @@ the player's jet only). Everything is hidden (no draw calls) when not needed. Sw
 (all off), `?vapour=0`, `?tyresmoke=0`, `?landingpool=0`; `setEnabled(on)` at run time.
 
 Day and night: every switch between the two (the burner's day look, the glare round the lights,
-the pool's gain, the throat's heat glow) reads `fxEnv` (fxshared.js), which `AircraftFX` updates
-every frame and on `setTime` from `env.sunElevationDeg` or `env.sunDirection`: the same sun
-elevation whatever exposure meter the Environment uses. The exposure is only used for brightness
-(`fxExposure.get`), normalised to the meter's noon value `fxEnv.noonExposure` (0.93 for main's
-meter and the HDR chain's).
+the throat's heat glow) reads `fxEnv` (fxshared.js), which `AircraftFX` updates every frame and on
+`setTime` from `env.sunElevationDeg` or `env.sunDirection`: the same sun elevation whatever
+exposure meter the Environment uses. The lights' and the pool's night gain is the Environment's
+(`fxEnv.lightGain`, `fxEnv.lightNight`, `fxEnv.pointThreshold` from `env.lightGain` etc., or the
+same functions of the sun's elevation and the exposure without them). The exposure is otherwise
+only used for brightness (`fxExposure.get`), normalised to the meter's noon value
+`fxEnv.noonExposure` (0.93 for main's meter and the HDR chain's).
 
 Shader warm-up: three.js builds a program the first time a material is drawn (tens of ms on
 ANGLE / D3D11 for the plume's ray march). `AircraftFX` draws every effect material once in the
@@ -236,8 +249,10 @@ Test page: `sim/dev/aircraft.html` (orbit camera, sliders for every control, lig
 view presets; `?view=rear34&ab=1&night=1` etc.). Tests: `node --import ./sim/tests/node-three.mjs
 sim/tests/aircraft.test.mjs` (rig playback) and `node sim/tests/aircraft_shots.mjs [outdir]`
 (Playwright screenshots, fails on console errors); `node --import ./sim/tests/node-three.mjs
-sim/tests/aircraft_fx.test.mjs` (beacon pattern, the light level, burner exposure and day look,
-the petals' lag, the condensation model, the contrail's ring buffer, the pool's gain and roll-off);
+sim/tests/aircraft_fx.test.mjs` (beacon pattern, the light level, the rule for lights at night
+and the lights' visibility floor, burner exposure, day look and night look, the petals' lag, the
+condensation model, the contrail's ring buffer, the pool's roll-off); the night scenes of all the
+modules together: `node sim/tests/night_shots.mjs` (README of `js/env`, "Lights at night");
 `node sim/tests/aircraft_scenes.mjs --port 8150 [--only park_,ab_] [--shots chase,side]` (the
 jet in the whole app: parked at noon / 07:00 / sunset / night, take-off roll in burner by day,
 dusk and night, a 7 g turn at 300 m, Mach 0.98 at 100 m over the sea, a contrail at 10 km and its

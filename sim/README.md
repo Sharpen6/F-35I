@@ -495,6 +495,15 @@ vapour first shows.
   already in the `uNight` uniform), displays drawn at a fixed picture level divide by the exposure
   (`js/env/displayLevels.js` does it for the glb's PCD glass, tablet and switch LEDs, and steps
   aside when a cockpit module sets `app.cockpit`).
+* **Lights at night** (night calibration, `js/env/README.md` "Lights at night"): one rule for every
+  artificial light and self-lit surface across the modules. Physical values (cd, cd/m^2, lux) times
+  `env.lightGain`: 1 by day and in the blue hour, once the sky is dark the gain of an eye adapted
+  to lit streets (1400 / exposure), so lamps, windows, airfield lights, cars, obstruction lights,
+  the jet's lights and its landing-light pool look the same on the screen at exposure 40 or 285;
+  point lights share one sprite shader with a visibility floor over the threshold of a point source
+  (`env.pointThreshold`). The burner and the cockpit's displays are picture levels (fixed at
+  night). Check with `node sim/tests/night_shots.mjs` (blue hour, night and noon at Ben Gurion,
+  Tel Nof, over Tel Aviv and Jerusalem; `--list`).
 * **Clouds** are filtered in time (no boiling; `app.clouds.temporal`), cast their shadows per
   fragment on three.js's own materials too (`js/env/cloudShadowChunk.js`, a patch of three's light
   chunk made once at start-up), and on high step down to the medium tier if their measured GPU

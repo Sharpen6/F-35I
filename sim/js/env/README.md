@@ -7,7 +7,7 @@ ambient light, the night sky and the moon, the HDR post chain, the clouds and th
 
 | file | |
 | --- | --- |
-| `Environment.js` | sun, moon, sky dome, lights, environment map, shadow box, exposure |
+| `Environment.js` | sun, moon, sky dome, lights, environment map, shadow box, exposure, the gain of artificial lights at night (`lightGain`) |
 | `atmosphere.js`, `atmosphereGLSL.js` | the clear-sky atmosphere (CPU and GPU twins), the cumulus field's GLSL |
 | `sun.js`, `moon.js` | sun position; moon position, phase and brightness, the sidereal frame of the stars |
 | `Post.js` | the HDR frame: MSAA target, clouds composite, sun visibility, bloom, glare, AgX output, GPU timers |
@@ -44,17 +44,11 @@ so flying out of a cloud or into the dusk shows the short glare or gloom an eye 
 The ceiling was 40, reached with the sun 4.5 deg down under a night glow as bright as the sky
 at -4 deg: dusk turned into a flat grey night by -5 deg and the stars were all out at once.
 
-**Night lights.** The terrain's city lights (and anything else tuned by eye at the old night
-exposure of 40) would be seven times brighter at 285. `env.nightLightGain = min(1, 40 / exposure)`
-(`NIGHT_LIGHTS_EXPOSURE`) and the `uNight` uniform (0..1, the night's fade with the sun from -1
-to -9 deg) carries it, so they keep the brightness on the screen they were tuned to. Lights given
-in physical units (candela / LUX_PER_UNIT, the jet's landing light) and displays drawn at a fixed
-picture level (emission / exposure) need nothing. The jet's own displays are such: their glb
-emission is a fixed radiance, right for the day, that turned the PCD into a white slab at night;
-`DisplayLevels` (`displayLevels.js`) sets it every frame to a level / exposure (1.05 by day, 0.5
-at night for the PCD, as an automatic brightness control would), on the player's jet and the
-wingmen's. When the cockpit module is there (`app.cockpit`) it drives those materials itself and
-`DisplayLevels` steps aside.
+**Night lights.** Everything that makes its own light follows one rule, below ("Lights at
+night"). The terrain's city lights and the clouds' city glow, tuned by eye at the old night
+exposure of 40, keep `env.nightLightGain = min(1, 40 / exposure)` (`NIGHT_LIGHTS_EXPOSURE`) and the
+`uNight` uniform (0..1, the night's fade with the sun from -1 to -9 deg), which keep them at the
+brightness on the screen they were tuned to.
 
 **Night vision.** `env.nightVision` (0..1) follows the light the eye is adapted to without the
 night's boosts (the real sky and moon): from ~50 lux (the end of civil twilight) to ~0.6 lux
@@ -79,6 +73,70 @@ Measured at Ben Gurion on 21 June (solar time, `few` cumulus, chase view, `sim/t
 
 With the full moon (`env.year = 2024`, 22:00 over Tel Aviv) the meter settles at ~95: the cloud
 tops are light grey and the jet clearly lit, a brighter night than the quarter moon's.
+
+## Lights at night
+
+One rule for every artificial light and self-lit surface: street lamps and the streets they
+light, cars, lit windows and facades, the airfield's lights and PAPI, obstruction lights, the
+jet's position lights, strobes and landing-light pool. The meter's exposure (up to 285) is for
+the sky and the moonlit land, which the night boosts so the land reads ("day for night", above);
+next to lit streets and aprons the eye is adapted much further, to the lights themselves. Drawn at
+the meter's exposure every lamp would come out several times too bright (a white ball for the
+jet's tail light, white slabs of windows). So artificial light is drawn as
+
+    scene radiance = physical value / LUX_PER_UNIT x lightGain
+    lightGain      = max(1, 1 + lightNight x (NIGHT_ADAPTED_EXPOSURE / exposure - 1))
+
+* the physical value: a luminance in cd/m^2 (a lit window, a lens), an illuminance in lux x
+  albedo / pi (a street or a facade under the lamps, the runway under the landing light), or for
+  a point light its intensity in cd (lux at the eye: I / d^2);
+* `lightNight` (`env.lightNight`, `lightNight(el)`): how far the eye has gone over to the lights,
+  0 while the sky lights the ground with more than ~30 lux (the sun above ~-4.5 deg), 1 below
+  ~0.3 lux (~-7.5 deg), smooth in log lux in between (`skyIlluminance(el)`);
+* `NIGHT_ADAPTED_EXPOSURE` = 1400: the exposure of an eye adapted to lit streets.
+
+`env.lightGain` holds it every frame (and after `setTime`). By day and in the blue hour the gain
+is 1: a lamp is what it is next to the daylight, and the lamps come on as the sky darkens. Once
+the sky is dark, radiance x exposure = physical x 1400 / 32000 = 0.044 per cd/m^2, whatever the
+meter does: the lights look the same at exposure 40 and at 285, and the moonlit land between them
+stays as dark as the meter makes it. On the screen (AgX): a lit window of 30 cd/m^2 is 1.3, a
+warm bright pane; a street under its lamps (~1 cd/m^2) 0.044, a dim warm grey; a facade under
+8 lux 0.04; the asphalt 15 m ahead of the landing light (400,000 cd) ~0.2-0.5, and brighter under
+the nose.
+
+**Point lights** (the airfield's lights, street lamps seen from afar, cars, obstruction lights, the
+jet's position lights and strobes) are sprites: the light's energy at the eye (I / d^2 x
+lightGain) spread over a pixel-sized blur, plus a floor from the threshold of a point source
+against the ground behind it (Allard / Blondel-Rey, E_t = 10^(0.64 log10 B - 5.7) lux for a
+background of B cd/m^2: `pointLightThreshold(el)`, `env.pointThreshold`). A light a few times over
+its threshold stays a visible dot even where its energy over a pixel would be too faint (an edge
+light 3 km out): the dot's peak rises from 0 at the threshold to ~0.35 three stops over and never
+past ~0.85 (no white blobs). One GLSL for all of them, `js/world/AirportLights.js`
+`POINT_LIGHT_VERT_GLSL` / `POINT_LIGHT_FRAG_GLSL` (the airfield, the cars of `Traffic.js`, the
+obstruction lights of `js/world/Buildings.js`); the jet's lights use the same numbers on the CPU
+(`js/aircraft/lights.js` `visibleFloor`).
+
+**Picture levels.** A few self-lit things are set by eye or lie far outside anything an exposure
+holds; they are drawn at a fixed brightness on the screen, level / exposure:
+* the cockpit's displays, the switch LEDs and the kneeboard (`displayLevels.js`,
+  `js/aircraft/Cockpit.js`): 1.05 by day, 0.5 at night for the PCD, as a pilot dims them. Under
+  the rule that is ~11 cd/m^2 at night, a dimmed display; the light the display throws on the
+  canopy and the tub is that luminance, so its reflections fade with it;
+* the burner's flame (~10^4-10^5 cd/m^2, `js/aircraft/Afterburner.js`): by day its brightness on
+  the screen grows with the exposure's 4th root; at night it is a fixed picture level with its own
+  colours (what AgX keeps saturated): a long orange flame with yellow-white shock diamonds and a
+  blue-violet sheath, a dull red-orange throat at idle.
+
+| module | light | physical value |
+| --- | --- | --- |
+| `js/world/Roads.js` | street lamps and apron floodlights on the roads and aprons | ~26-32 lux at a lamp's foot, up to 300 lux under a mast |
+| `js/world/AirportLights.js` | runway, taxiway, approach lights, PAPI, lamp heads | cd per light (ICAO) |
+| `js/world/Traffic.js` | head and tail lights | cd |
+| `js/world/Buildings.js` | lit windows, facades under the street lamps, obstruction lights | 30 cd/m^2 (`WINDOW_CD`), 8 lux (`FACADE_LUX`), 32 cd steady / 2,000 cd flashing (`OBSTRUCTION_CD`) |
+| `js/aircraft/lights.js` | position lights, tail light, anti-collision beacons | 150 cd, 40 cd, 600 cd |
+| `js/aircraft/LandingPool.js` | the landing and taxi beams on the ground | 400,000 cd and 250,000 cd, a roll-off far above the night's light (`POOL_KNEE` 64) |
+| `js/aircraft/Afterburner.js` | the flame and the throat | a picture level |
+| `js/aircraft/Cockpit.js`, `displayLevels.js` | PCD, LEDs, kneeboard | a picture level |
 
 ## Ambient light
 
@@ -348,10 +406,13 @@ the same resolution (~70 %); low marches at a quarter resolution with no detail 
 * Moonlight and the night glow are boosted ("day for night", above); the eye's real night vision
   is far dimmer, and the night exposure (285) still stops short of a fully dark-adapted eye.
 * Low quality keeps the shadow box around the jet: no building or tree shadows near the ground.
-* Light that other modules tuned by eye at the old night exposure (40) shows ~7 x brighter at
-  night (285) until it is multiplied by `env.nightLightGain`: here the jet's throat glow at idle
-  (`js/aircraft/Afterburner.js`, an orange disc in the night shots); the aircraft track's light
-  sprites and landing-light pool when they are merged.
+* Light that a module tuned by eye at the old night exposure (40) shows ~7 x brighter at night
+  (285) unless it follows the rule ("Lights at night") or `env.nightLightGain` (the terrain's
+  city lights and the clouds' city glow do the latter).
+* Night vision (`Post.js`) shifts colours darker than display ~0.6 towards rod vision; under the
+  rule that is ~14 cd/m^2, where the eye still sees colour (CIE mesopic: down to ~5 cd/m^2). The
+  burner's body, the lit streets and the facades lose some of their warmth to it; the cockpit's
+  displays are exempt (their alpha), the lights' cores are bright enough.
 * There is no GPU in the development container: the GPU costs above are estimates; the bench's
   GPU time line measures them on a real GPU.
 
