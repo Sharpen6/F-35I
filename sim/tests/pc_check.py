@@ -140,17 +140,21 @@ class WS:
 
 
 class CDP:
-    def __init__(self, ws_url):
+    def __init__(self, ws_url, slow=1):
         self.ws = WS(ws_url)
         self.next_id = 0
         self.events = []
+        self.slow = slow                        # every timeout times this (SwiftShader)
 
     def call(self, method, params=None, timeout=120):
         self.next_id += 1
         mid = self.next_id
         self.ws.send(json.dumps({"id": mid, "method": method, "params": params or {}}))
+        timeout *= self.slow
         t0 = time.time()
         while time.time() - t0 < timeout:
+            # (the socket waits as long as the call may: a page in a long frame sends nothing meanwhile)
+            self.ws.sock.settimeout(max(1.0, timeout - (time.time() - t0)))
             msg = json.loads(self.ws.recv())
             if msg.get("id") == mid:
                 if "error" in msg:
@@ -231,6 +235,8 @@ def main():
                     help="no vsync / frame-rate limit, so the frame times show the real cost (headless Chrome "
                          "otherwise paces frames at about 56-60 per second whatever the load)")
     a = ap.parse_args()
+    # SwiftShader (no GPU): a scene's first frame can take minutes there (the DevTools calls wait longer)
+    slow = 10 if a.swiftshader else 1
 
     os.makedirs(a.out, exist_ok=True)
     report = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "args": vars(a), "runs": [], "errors": []}
@@ -284,7 +290,7 @@ def main():
             time.sleep(0.2)
         if not page:
             raise RuntimeError("browser did not open a page")
-        cdp = CDP(page["webSocketDebuggerUrl"])
+        cdp = CDP(page["webSocketDebuggerUrl"], slow)
         for m in ("Page.enable", "Runtime.enable", "Log.enable"):
             cdp.call(m)
         cdp.call("Emulation.setDeviceMetricsOverride", {"width": w, "height": h, "deviceScaleFactor": 1, "mobile": False})
