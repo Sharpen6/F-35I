@@ -29,6 +29,7 @@ import { EngineSound } from './audio/EngineSound.js';
 import { Buildings } from './world/Buildings.js';       // graphics module: 3D buildings (sim/js/world)
 import { Clouds } from './env/Clouds.js';      // lighting: cumulus and cirrus, weather presets
 import { AircraftFX } from './aircraft/AircraftFX.js';     // graphics module: vapour, tyre smoke, landing-light pool
+import { Roads } from './world/Roads.js';                 // roads, railways, airfield surfaces and lights (roads track)
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -168,8 +169,8 @@ class App {
     this.ui.buildMenu({
       spawns: this.terrain.spawns,
       settings: this.settings,
-      // the terrain's data credits, then each graphics module's (module.attribution)
-      attribution: [this.terrain.attribution || this.terrain.manifest?.attribution || '', ...this.modules.map((m) => m.attribution)]
+      // the terrain's data credits, then each graphics module's (module.attribution or module.credits)
+      attribution: [this.terrain.attribution || this.terrain.manifest?.attribution || '', ...this.modules.map((m) => m.attribution || m.credits)]
         .filter(Boolean).join(' '),
       model: 'Aircraft: the procedural F-35I Adir Blender model of this project (scripts/f35, scripts/pilot).',
     });
@@ -267,6 +268,7 @@ class App {
     this.addModule(new Buildings(ctx));
     if (!STUBS) this.addModule(new Clouds(ctx));          // lighting: clouds (?clouds=, menu Weather), drawn by Post
     this.addModule(new AircraftFX(ctx));      // aircraft: vapour, contrail, tyre smoke, landing-light pool, burner quality
+    this.addModule(new Roads(ctx));                      // js/world/Roads.js (owns js/world/AirportLights.js)
   }
 
   /**

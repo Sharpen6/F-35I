@@ -206,6 +206,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `buildings=0` | no 3D buildings (the menu's option turns them off too) |
 | `buildingsDebug=1` | buildings tinted by level of detail: boxes blue, full detail red |
 | `acfx=0` | none of the aircraft's effects (vapour, contrail, tyre smoke, landing-light pool); `vapour=0`, `tyresmoke=0`, `landingpool=0` one each |
+| `roads=0` / `airportlights=0` / `traffic=0` | no roads, railways and airfield surfaces / no airfield lights / no night traffic (see Roads) |
 
 ## Files (the app shell)
 
@@ -229,6 +230,18 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 
 The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terrain` and
 `js/world` (terrain rendering and queries), `js/aircraft` (the jet), `js/fdm` (flight model).
+
+### Roads, railways and airfield lights
+
+`js/world/Roads.js` (a graphics module) drapes the roads, railways, taxiways and aprons of
+`data/world/roads/` and `data/world/airfields/airfields.json` (OpenStreetMap via Overture, built
+by `tools/world/roads.py` and `airfields.py`) exactly on the terrain within 3.4 km (high), 2.4
+km (medium) or 1.5 km (low), with lane markings, kerbs, rails, taxiway lines and holding
+positions, street lights and floodlit aprons at night, fading into the imagery beyond. It owns
+`js/world/AirportLights.js`: runway edge, threshold, centreline and touchdown lights, approach
+lights with flashers, PAPI, blue taxiway lights and floodlight masts, switched by the sun, and
+`js/world/Traffic.js`: the head and tail lights of cars on the main roads at night. Without the
+data it draws nothing. Formats, layouts and rebuild: `tools/world/ROADS.md`.
 
 ### How the shell runs
 
@@ -424,6 +437,9 @@ occlusion into the export (ORM texture + per vertex); the app uses it when the d
 * **Buildings**: © OpenStreetMap contributors and Microsoft ML Building Footprints (ODbL 1.0),
   via the Overture Maps Foundation; the air bases traced from the ESA WorldCover Sentinel-2
   imagery (CC BY 4.0). Facades and roofs are procedural.
+* **Roads, railways and airfields** (`data/world/roads`, `data/world/airfields`): © OpenStreetMap
+  contributors, ODbL 1.0, via the Overture Maps Foundation (release 2026-10-21.0). The menu
+  shows it with the terrain's credits.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here. The sky, stars, moon and clouds are procedural (formulas: Hillaire 2020
