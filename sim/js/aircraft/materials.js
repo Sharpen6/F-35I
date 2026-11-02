@@ -22,11 +22,19 @@
 //   neither and render as before. The cockpit interior and the pilot (COCKPIT_AO) take none: the
 //   cockpit computes its own occlusion of the tub (pcd/interior.js), which a second one would
 //   darken twice (the export leaves them white since, vertex_ao.py; earlier exports did not).
+// * Exterior (skin.js, exterior track): the skin's coating (two specular lobes, panel patchwork,
+//   caulk lines, RAM edges, soot, flakes) and the jet's own shadow on every exterior part
+//   (JetShadow.js). opts.exterior = false (?exterior=0) leaves the materials as exported.
 
 import * as THREE from 'three';
+import { exteriorUniforms, isExterior, patchExterior, viewHook } from './skin.js';
 
 // Blender's canopy coating (scripts/f35/materials.py): 131 nm film of n 1.62 on the glass
 const THIN_FILM = { F35_canopy: { ior: 1.62, nm: 131 }, F35_eots_glass: { ior: 1.9, nm: 220 } };
+/** Reflectance of the glass's outer surface over bare glass (F0 0.04): the canopy's coating. */
+export const GLASS_F0 = { F35_canopy: 3.2 };
+/** Colour of that reflection (the gold film reflects the red end more: the sky turns bronze). */
+const GLASS_REFLECT = { F35_canopy: [1.0, 0.86, 0.62] };
 
 const TINT_VERT = /* glsl */`
   #include <common>
@@ -46,13 +54,15 @@ const TINT_FRAG = /* glsl */`
   #include <logdepthbuf_pars_fragment>
   uniform vec3 uTint;        // per-surface transmittance (linear)
   uniform float uInside;     // 0 outside .. 1 camera in the cockpit
-  uniform float uF0;
+  uniform float uF0;         // seen from inside
+  uniform float uF0Out;      // seen from outside (the coating's GLASS_F0)
   varying vec3 vNormalV;
   varying vec3 vViewV;
   void main() {
     #include <logdepthbuf_fragment>
     float c = abs(dot(normalize(vNormalV), normalize(vViewV)));
-    float F = uF0 + (1.0 - uF0) * pow(1.0 - c, 5.0);
+    float f0 = mix(uF0Out, uF0, uInside);
+    float F = f0 + (1.0 - f0) * pow(1.0 - c, 5.0);
     vec3 T = pow(uTint, vec3(mix(1.0, 0.22, uInside)));
     gl_FragColor = vec4(T * (1.0 - F * mix(1.0, 0.3, uInside)), 1.0);
     // a factor on what is already in the target: encode it like the target (sRGB canvas or linear
@@ -65,7 +75,7 @@ function makeGlass(mesh, src, shared) {
   const tint = src.color.clone();
   const tintMat = new THREE.ShaderMaterial({
     name: src.name + '_tint',
-    uniforms: { uTint: { value: tint }, uInside: shared.uInside, uF0: { value: 0.045 } },
+    uniforms: { uTint: { value: tint }, uInside: shared.uInside, uF0: { value: 0.045 }, uF0Out: { value: 0.045 } },
     vertexShader: TINT_VERT,
     fragmentShader: TINT_FRAG,
     transparent: true,
@@ -75,6 +85,11 @@ function makeGlass(mesh, src, shared) {
     premultipliedAlpha: true,
   });
   const film = THIN_FILM[src.name];
+  // the canopy's gold coating (ITO + gold film) reflects more than bare glass: from outside it is
+  // a dark bronze mirror of the sky with the pilot behind it (exterior track; photos at noon). The
+  // view from the cockpit keeps the bare glass's loss (the cockpit's own canopy pass does the rest)
+  const f0 = GLASS_F0[src.name] || 1;
+  tintMat.uniforms.uF0Out.value *= f0;
   const refl = new THREE.MeshPhysicalMaterial({
     name: src.name + '_reflect',
     color: 0x000000,
@@ -82,7 +97,8 @@ function makeGlass(mesh, src, shared) {
     roughness: Math.max(0.02, src.roughness ?? 0.02),
     ior: src.ior ?? 1.5,
     specularIntensity: 1,
-    specularColor: src.specularColor ? src.specularColor.clone() : new THREE.Color(1, 1, 1),
+    specularColor: (src.specularColor ? src.specularColor.clone() : new THREE.Color(1, 1, 1)).multiplyScalar(f0)
+      .multiply(new THREE.Color().fromArray(GLASS_REFLECT[src.name] || [1, 1, 1])),
     iridescence: film ? 1 : 0,
     iridescenceIOR: film ? film.ior : 1.3,
     iridescenceThicknessMinimum: film ? film.nm : 100,
@@ -242,9 +258,12 @@ function nozzleMaterial(src, meshes) {
  * @param {number} [opts.anisotropy=8]
  * @param {object} [opts.rig]   f35i_rig.json: rig.ao {orm, vertex} says what the export baked;
  *                              rig.info.nozzle.node names the nozzle node
- * @returns {{byName: Map<string, THREE.Material[]>, glass: THREE.Material[], uniforms: object}}
+ * @param {THREE.Object3D} [opts.body] the aircraft's body-frame group (exterior lookups)
+ * @param {boolean} [opts.exterior=true] the exterior shading (skin.js)
+ * @returns {{byName: Map<string, THREE.Material[]>, glass: THREE.Material[], uniforms: object,
+ *   exterior: {uniforms: object, hookState: object, materials: THREE.Material[]}|null}}
  */
-export function setupMaterials(root, { anisotropy = 8, rig = null } = {}) {
+export function setupMaterials(root, { anisotropy = 8, rig = null, body = null, exterior = true } = {}) {
   const shared = { uInside: { value: 0 }, uVertexAO: { value: 1 } };
   const byName = new Map();
   const glass = [];
@@ -307,5 +326,22 @@ export function setupMaterials(root, { anisotropy = 8, rig = null } = {}) {
     const list = byName.get(mat.name);
     if (!list.includes(mat)) list.push(mat);
   }
-  return { byName, glass, uniforms: shared };
+  // the exterior: coating and jet shadow, on every outside material (not the cockpit, the pilot,
+  // the glass, the lenses)
+  let ext = null;
+  if (exterior) {
+    const U = exteriorUniforms();
+    const hookState = { frame: -1, camera: null, shadowFromBody: null };
+    const hook = viewHook(U, body || root, hookState);
+    const list = [];
+    for (const mat of seenMat) {
+      if (!isExterior(mat, COCKPIT_AO) || /^F35_hose/.test(mat.name)) continue;
+      patchExterior(mat, U, addPatch);
+      mat.onBeforeRender = hook;
+      mat.needsUpdate = true;
+      list.push(mat);
+    }
+    ext = { uniforms: U, hookState, materials: list };
+  }
+  return { byName, glass, uniforms: shared, exterior: ext };
 }

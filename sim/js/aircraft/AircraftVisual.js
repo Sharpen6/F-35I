@@ -59,6 +59,16 @@ function infoWithPoints(info) {
   return walk(info);
 }
 
+/** ?name=0|false|off|no turns a feature off (default on). */
+function urlFlag(name) {
+  try {
+    const v = new URLSearchParams(window.location.search).get(name);
+    return v === null || !/^(0|false|off|no)$/i.test(v);
+  } catch (e) {
+    return true;
+  }
+}
+
 const _eye = new THREE.Vector3();
 const _cam = new THREE.Vector3();
 
@@ -100,6 +110,8 @@ export class AircraftVisual {
     this._gear = 1;
     this._onGround = false;
     this._ctl = {};                            // setControls: rig values and strut compressions, reused
+    this._nozzleOpen = 0;
+    this.exterior = null;
     this._comp = {};
     if (scene) scene.add(this.object3d);
   }
@@ -121,9 +133,11 @@ export class AircraftVisual {
     root.name = 'F35I_gltf';
     this.root = root;
     this.model.add(root);
-    // materials, rig, lights, burner
-    const mats = setupMaterials(root, { rig });
+    // materials (with the exterior's coating and jet-shadow receivers unless ?exterior=0), rig,
+    // lights, burner
+    const mats = setupMaterials(root, { rig, body: this.object3d, exterior: urlFlag('exterior') });
     this.materials = mats;
+    this.exterior = mats.exterior;              // skin.js uniforms and hook state (Exterior.js drives them)
     this.player = new RigPlayer(rig, root);
     if (this.player.missing.length) console.warn('AircraftVisual: rig nodes missing in the glb:', this.player.missing);
     this.lights = new AircraftLights(root, rig.info, mats.byName);
@@ -206,6 +220,7 @@ export class AircraftVisual {
     // (the burner's own fill already lags in the flight model)
     this._engine = lagThrottle(this._engine, this._throttle, dt);
     const open = Math.max(ab, nozzleIdleOpen(this._engine));
+    this._nozzleOpen = open;                   // (JetShadow's redraw signature)
     this.player.overrideMorph('AB_Open', open);
     this.player.apply();
     this.afterburner.set(ab, this._engine, open);
