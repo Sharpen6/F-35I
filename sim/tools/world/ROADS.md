@@ -12,6 +12,10 @@ Two builders for the sim's ground network, and the runtime that draws it:
 | `sim/js/world/roadShaders.js` | road / rail / taxiway / apron shader: surfaces, markings, lighting, depth bias |
 | `sim/js/world/AirportLights.js` | runway, approach, PAPI, taxiway, floodlight and street lamp sprites |
 | `sim/js/world/Traffic.js` | head and tail lights of cars on the main roads at night |
+| `sim/js/world/Runways.js` | graphics module: the paved runway surfaces over the terrain's runway paint (below) |
+| `sim/js/world/runwayMesh.js` | a runway rectangle cut exactly out of the terrain's 25 m triangles (also runs in node) |
+| `sim/js/world/runwayShaders.js` | runway surface shader: pavement, rubber, cracks, concrete, markings, cables, lighting |
+| `sim/js/world/runwayFixtures.js` | edge light fixtures, distance-remaining and arresting gear signs by day |
 
 Data: **© OpenStreetMap contributors, ODbL 1.0, via the Overture Maps Foundation** (release
 `2026-10-21.0`, themes `transportation` and `base/infrastructure`). Anyone who shares the data
@@ -28,6 +32,8 @@ python3 sim/tools/world/roads.py --cache /tmp/roads_cache --out sim/data/world -
 # airfields (needs sim/data/terrain/airports.json and the roads module for its helpers)
 python3 sim/tools/world/airfields.py --cache /tmp/airfields_cache --stages fetch
 python3 sim/tools/world/airfields.py --cache /tmp/airfields_cache --out sim/data/world --stages build
+# runway surfaces (~3 s, no network: airports.json, the L0 imagery and airfields.json if there)
+python3 sim/tools/world/airfields.py --out sim/data/world --terrain sim/data/terrain --stages runways
 ```
 
 Needs `numpy` and `pyarrow` (and `Pillow` for `check`). Both tools only read the public bucket
@@ -255,6 +261,119 @@ kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
   terrain's horizon map; the lights and lamps 0.
 * Main thread: the noise texture is computed in the worker (it took 0.15-0.4 s at start-up), the
   floodlight masts are chosen again only after 100 m of travel (no garbage per frame).
+
+## Runway surfaces (airfield track: `runways.json`, `js/world/Runways.js`)
+
+The terrain paints every runway one uniform asphalt grey (`runwayShade` in
+js/terrain/terrainShaders.js, faded out at 5-9 km). `Runways.js` draws the paved runways, their
+shoulders and overruns over it as they look from the cockpit lined up, on the roll, on final,
+from 3,000 ft and from the tower: one mesh per airfield, each runway's rectangle cut exactly out
+of the terrain's 25 m triangles (`runwayMesh.js`, `tests/airfield_mesh.mjs`), so it lies on the
+rendered terrain at every distance. `?runways=0` turns it off.
+
+**Data** (`airfields.py --stages runways`, 2.8 s): from `data/terrain/airports.json` (positions,
+widths, displaced thresholds, overruns as the terrain has them, plus `OVERRUN_FIX`), the
+terrain's L0 imagery (6.25 m / px Sentinel-2 mosaic, `color/L0`) and the taxiways of
+`airfields.json` when it is there. Per airfield (`RUNWAY_SURFACE`): military or not, the paved
+shoulder each side (Ben Gurion, Tel Nof, Hatzor 7.5 m; Palmachim 3 m), how worn the paint is.
+
+```
+runways.json: { version, format: 'ROADS.md', attribution, built,
+  strip: { file: 'runways.bin', samples: 1024, rows: 32, layers, rubberDark: 0.3 },
+  runways: [ { icao, ids: [end 0, end 1], len, hw (half width), sh (shoulder), ov: [overrun 0, 1],
+               disp: [displaced threshold 0, 1], layer, strip: [s0, s1, T] (the strip's extent:
+               s from end 0, +-T across), conc: [concrete from pavement end 0, end 1 (m)],
+               rubber: [mean deposit share of touchdown zone 0, 1], tone (the clean pavement's linear
+               luminance in the imagery), cables: [s, s] (arresting gear), dtg: [[s, thousands of
+               feet left towards end 1, towards end 0]], military, wear, closed, lit,
+               cl: [centreline lights 0, 1], tdzl: [touchdown zone lights 0, 1],
+               cross: [[sB, tB, cos, sin, half width, from, to]] (a longer runway crossing this
+               one: its end 0 and direction in this frame), turns: [[s, side, ds, dt]] (taxiway
+               turn-offs: where a taxiway leaves the side +1 right / -1 left, its direction) } ] }
+runways.bin: uint8 RGBA, layers x 32 rows x 1024 samples: rgb the imagery's pavement (sRGB),
+             a the share m of it darkened by rubber and oil (x 255)
+```
+
+* **Strip**: the imagery sampled along the runway (1024 x 32 samples, 4 m beyond the shoulders
+  and 12 m beyond the pavement ends), the paint taken out (the ICAO markings' footprint inpainted
+  from the samples beside them along each row), the edge rows and ends repeated from inside the
+  pavement (the 10 m pixels there mix in the soil), smoothed (~4 m along, ~2 m across). The clean
+  pavement `P` is the 85th percentile across the runway (over ~60 m along); a sample `Y` darker
+  than that is covered by deposits of RUBBER_DARK times its albedo over the share
+  `m = (1 - Y / P) / (1 - RUBBER_DARK)`.
+* **Concrete ends** (military fields): where the clean pavement is more than 10 % lighter than
+  the runway's middle from a pavement end inwards, at most 330 m past the threshold (Tel Nof
+  15L/33R and 15R/33L, Hatzor 11L/29R).
+* **Arresting gear** (military runways of 2000 m and more): a BAK-12 cable 460 m past each
+  threshold. **Distance-remaining signs** every 1000 ft both sides (FAA AC 150/5340-18: the
+  excess over whole thousands split between the ends).
+* **Turn-offs**: taxiway end points within 3 m of a runway's side (102 at the seven fields).
+
+**Shading** (`runwayShaders.js`, in the runway frame: s along from end 0, t across):
+
+* Tone: the pavement's albedo (aged asphalt 0.10-0.20 by how light the imagery shows the
+  runway, `PAVE` in Runways.js; concrete ~0.25) times the imagery's own light and dark sections
+  relative to the runway's median (compressed), tinted a little by it. The imagery as it is
+  makes a runway as light as the sand beside it (its 10 m pixels mix in paint and soil, and the
+  terrain's albedo gain is tuned for soil); far away (4.4-8.8 km on high) the tone turns into the
+  imagery's own, which the terrain shows once the surface has faded out.
+* Rubber and oil: streaks along the runway (long streaks of the keel, short tyre marks in the
+  touchdown zones) whose mean cover is the strip's `m`, so the heaviest deposits are where the
+  imagery has them (the main landing ends) and fade toward mid-runway; far away, where the
+  streaks filter out, the mean is the imagery's again. Glossier than the dusty pavement.
+* Asphalt: paving lanes (~4.6 m) with their own tone per ~280 m session, longitudinal joints
+  sealed in ~70 m pieces, transverse cracks every ~13 m sealed across some lanes, meandering sealed
+  cracks (more on the shoulders), darker patches with sealed rims, aggregate grain and
+  mottling, oil drips along the keel and where the jets hold at the ends.
+* Concrete ends: 7.5 m slabs a lane wide, sealed joints, replaced (lighter) slabs, corner cracks,
+  dirt and water stains drifting across the slabs.
+* Shoulders: older, dustier asphalt, more cracks; blast pads and overruns: yellow chevrons
+  (0.9 m, 30 m apart, apex towards the runway).
+* Markings (ICAO Annex 14): threshold stripes (4-16 by width) 6-36 m past the threshold,
+  designation digits 9 m tall (and the L / R / C letter), centreline 30 m stripes / 20 m gaps,
+  aiming point (400 m on runways of 2400 m and more, else 300 m), touchdown zone pattern A
+  (3-3-2-2-1 bars per side, every 150 m), 0.9 m edge stripes, displaced threshold bar and arrows.
+  Worn by the field's `wear`, chipped (noise), blackened by the rubber in the touchdown zone,
+  crossed by the sealant.
+* By day: the arresting cable (32 mm, on rubber supports every 2.4 m) under yellow discs 3 m across
+  9 m apart; inset light fixtures (steel rings with a lens slot: centreline every 30 m,
+  touchdown zone barrettes, threshold and end bars) on runways that have those lights; tyre marks
+  of the turns between the centreline and each taxiway (both ways, radius by the turn's angle).
+* Every pattern is box-filtered by the pixel's footprint along and across the runway (bands,
+  dashes, discs), the noise is a mipmapped texture sampled with true gradients, and detail too
+  fine for a pixel fades into its mean: no crawling or moire at grazing angles.
+* Lit as the terrain (sun through the atmosphere, sky, the sun's shadow map, the terrain's horizon
+  shadow), GGX sheen, the terrain's aerial perspective; faded out at 8.8-11 km (high), 7.4-9.5 km
+  (medium), 5.25-7 km (low).
+* Depth: (5 + priority) steps of the roads' bias (priority: the longer of two crossing runways
+  over the shorter), plus up to 64 more between 3.2 and 12 km, where the terrain's coarser levels
+  leave the flat runway by up to a metre. The roads' taxiways (39+ steps) and aprons (7+) stay on
+  top of the shoulders they cross.
+* Samplers: 4 (strip atlas, per-runway data, noise, glyphs) + 3 atmosphere LUTs + the shadow map
+  + the terrain's horizon map = 9. Fixtures: 5.
+
+**Fixtures** (`runwayFixtures.js`, one merged mesh per airfield, drawn within 2.2 / 1.5 / 0.9 km):
+elevated edge lights on lit runways (every <= 60 m, 1 m outside the edge: frangible stem, yellow
+body, clear dome; AirportLights.js lights them at night), distance-remaining signs 12 m beyond
+the shoulders (a white number on black, the other end's on the back), arresting gear signs
+(a yellow disc on black) and the arresting engines' housings 28 m beyond the shoulders.
+
+**Taxiways and aprons** (`roadShaders.js`, the airfield track's part): concrete slabs on the
+taxiways from 60 m before each holding position to the runway (where jets wait and run up, oil
+stains there), the main gears' tracks and nose-wheel drips along the centreline; on the aprons
+replaced slabs, corner cracks, fuel and hydraulic drips and darker, oil-stained parking stands.
+
+Precompiled at start-up (a stand-in mesh of each program, with and without the shadow map) like
+the other modules. Built one runway per frame after the data loads (14 frames, 0.1-0.4 s in all
+and at most 30-100 ms in one on the loaded 4-core test VM: `stats.buildMs`, `stats.buildMaxMs`).
+
+**Cost** (960 x 540 on the SwiftShader test VM, against `?runways=0`; Tel Nof 36 lined up / from
+3,000 ft): +5 / +2-3 draw calls (one per airfield in view, the fixtures within range), +22k /
++4-18k triangles, +8 programs (surface and fixtures, with and without the sun's shadow map, for
+the canvas and the post chain's target, compiled in the background at start-up) and +10.7 MB of
+GPU memory (geometry 6.1 MB, mostly the fixtures; textures 4.6 MB), the same on every quality.
+On an RTX 3070 at 1080p some 0.1-0.2 ms lined up (~250k runway pixels, ~30 texture reads and a few
+hundred ALU operations each, drawn over the terrain) and under 0.05 ms from altitude.
 
 ## Alignment check
 

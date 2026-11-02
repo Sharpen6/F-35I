@@ -241,6 +241,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `buildingsDebug=1` | buildings tinted by level of detail: boxes blue, full detail red |
 | `acfx=0` | none of the aircraft's effects (vapour, contrail, tyre smoke, landing-light pool); `vapour=0`, `tyresmoke=0`, `landingpool=0` one each |
 | `roads=0` / `airportlights=0` / `traffic=0` | no roads, railways and airfield surfaces / no airfield lights / no night traffic (see Roads) |
+| `runways=0` | no runway surfaces: the terrain's own uniform runway paint shows (see Roads) |
 | `bshadows=0` / `blights=0` | no ground shadows of the buildings / no obstruction lights |
 | `terrainDetail=0` / `terrainShadows=0` / `cityLights=0` | terrain: near ground materials, hill shadows, city lights off (`js/terrain/README.md`) |
 
@@ -300,6 +301,15 @@ lights with flashers, PAPI, blue taxiway lights and floodlight masts, switched b
 the street lamps out to 20 / 14 / 8 km (lit cities to the horizon at night), and
 `js/world/Traffic.js`: the head and tail lights of cars driving along the main roads at night.
 Without the data it draws nothing. Formats, layouts and rebuild: `tools/world/ROADS.md`.
+
+`js/world/Runways.js` draws the paved runways over the terrain's uniform runway paint, out to
+11 / 9.5 / 7 km: the pavement's tone and its light and dark sections from the imagery
+(`data/world/airfields/runways.json` + `runways.bin`, `tools/world/airfields.py --stages runways`),
+rubber in the touchdown zones, paving lanes, sealed joints and cracks, patches, oil, concrete
+ends with slabs, shoulders, blast pads with chevrons, worn ICAO markings, arresting gear, inset
+light fixtures and tyre marks at the turn-offs, all filtered by the pixel's footprint; by day the
+edge light fixtures, distance-remaining and arresting gear signs stand beside them. The roads'
+taxiways get concrete at the holding positions and the aprons darker parking stands.
 
 ### How the shell runs
 
@@ -537,7 +547,9 @@ vapour first shows.
   imagery (CC BY 4.0). Facades and roofs are procedural.
 * **Roads, railways and airfields** (`data/world/roads`, `data/world/airfields`): © OpenStreetMap
   contributors, ODbL 1.0, via the Overture Maps Foundation (release 2026-10-21.0). The menu
-  shows it with the terrain's credits.
+  shows it with the terrain's credits. The runway surfaces (`runways.json`, `runways.bin`) come
+  from the terrain's Sentinel-2 imagery and airports.json (credited above); their markings,
+  rubber, cracks, concrete and signs are procedural (ICAO Annex 14, FAA AC 150/5340-18).
 * **Vegetation**: placed from the terrain's ESA WorldCover 2021 land cover and Sentinel-2
   imagery (credited above, CC BY 4.0) and kept off the mapped roads, railways, airfield surfaces
   and buildings of the world layers when they are there (© OpenStreetMap contributors and
