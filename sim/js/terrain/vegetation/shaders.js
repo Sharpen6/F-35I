@@ -12,10 +12,17 @@
 //   decals       one draw: each tree's silhouette as seen from the sun, projected onto the
 //                ground: the shadow, blended over the terrain with its haze kept
 //
-// Meshes and impostors cross-fade with complementary screen-space dither at the mesh range;
-// impostors thin out (by rank) towards the far range. Light: sun through the atmosphere
-// (wrapped diffuse, the crown's ambient occlusion, translucency against the light), sky and
-// ground ambient, aerial perspective from the sky-view LUT, per vertex, as on the terrain.
+// Meshes and impostors cross-fade with complementary screen-space dither over a narrow band at
+// the mesh range; impostors thin out (by rank) towards the far range. Light: sun through the
+// atmosphere (wrapped diffuse, the crown's ambient occlusion, translucency against the light),
+// sky and ground ambient, aerial perspective from the sky-view LUT, per vertex, as on the
+// terrain. The sun is hidden by the slope a tree stands on, by the hills toward it when the
+// terrain has horizon maps (Scatter.js puts HORIZON_GLSL at "// @horizon"), and in a stand the
+// lower crowns are in their neighbours' shade when it is low.
+//
+// One shadow per tree: near the ground the sun's shadow map covers the ground around the camera
+// (the lighting's wide box); the near meshes there cast into it (vegCasts: within uCast.x of the
+// camera and wholly inside the map) and their decals are left out; every other tree has a decal.
 
 import { ATMOSPHERE_PARS } from '../../env/atmosphereGLSL.js';
 import { SPECIES_COUNT } from './species.js';
@@ -51,11 +58,33 @@ uniform vec3 uSpC[VEG_NSP];   // the species' foliage colour (linear): the tint 
 uniform vec4 uVeg;            // x: tint gain, y: wind, z: brightness, w: unused
 uniform vec4 uLod;            // x: mesh range, y: mesh fade band, z: far range, w: far fade fraction
 uniform vec3 uMainCam;        // the view camera (the shadow pass has its own cameraPosition)
+uniform vec4 uCast;           // x: range of the trees casting into the sun's shadow map (0: none), y: its clip units per m
+uniform mat4 uCastBox;        // world -> the sun's shadow map clip space
 ${NOISE}
 // mesh weight of a tree at distance d (1: mesh, 0: impostor), per-tree jittered range
 float vegMeshWeight(float d, float rank) {
   float r = uLod.x * (0.85 + 0.3 * fract(rank * 7.31));
   return 1.0 - smoothstep(r - uLod.y, r, d);
+}
+
+// does the tree (centre wc, world; d from the camera; sphere radius S) cast into the sun's shadow
+// map? Near the camera and with its whole shadow on the map (in the light's view a shadow covers
+// the same texels as the tree). The depth pass and the decals ask the same question.
+bool vegCasts(vec3 wc, float d, float rank, float S) {
+  if (uCast.x <= 0.0 || d > uCast.x * (0.9 + 0.2 * fract(rank * 3.7))) return false;
+  vec4 c = uCastBox * vec4(wc, 1.0);
+  float r = S * uCast.y;
+  return abs(c.x) < 1.0 - r && abs(c.y) < 1.0 - r;
+}
+
+// in a stand (wImg: the imagery decided the colour: forest, orchard), the neighbours toward a low
+// sun shade a crown below their shadow line: a neighbour of the same height about a crown width
+// away. y: height in the tree (0 base .. 1 top), wc: crown width / height.
+float vegCanopySun(float y, float wImg, float wc) {
+  float stand = smoothstep(0.35, 0.85, wImg);
+  float tanE = uSunDir.y / max(length(uSunDir.xz), 1e-3);
+  float line = 1.0 - 1.15 * wc * tanE;
+  return mix(1.0, mix(0.18, 1.0, smoothstep(line - 0.18, line + 0.18, y)), stand);
 }
 
 // far fade: higher ranks give up earlier (thinning with distance), each over a band
@@ -125,7 +154,7 @@ float vegCoverage(float part, vec2 uv, vec3 obj, float facing, float fluff, out 
 `;
 
 // Ground heights (the core's 25 m grid, as the terrain draws its triangles) and the sun hidden by
-// the slope a tree stands on.
+// the slope a tree stands on (and by the hills, with the terrain's horizon maps).
 const GROUND = /* glsl */ `
 uniform highp usampler2D uHCore;    // terrain heights (the core, 25 m), as the terrain draws them
 float decodeH(uint v) { return float(v) * 0.05 - 500.0; }
@@ -141,13 +170,27 @@ float groundAt(vec2 xz) {
 }
 // 1 where the sun reaches the tree, 0 where the hillside it stands on faces away from a low sun
 // (the terrain is dark there too: no golden crowns on a slope in shade). Flat ground stays lit
-// down to sunset; no horizon map, so a valley in a far ridge's shadow is not caught.
+// down to sunset; a valley in a far ridge's shadow needs the horizon maps (vegSunVis).
 float vegSlopeSun(vec2 xz) {
   ivec2 p = ivec2(clamp(floor((xz + 51200.0) / 25.0 + 0.5), vec2(1.0), vec2(4095.0)));
   float dx = hCore(p + ivec2(1, 0)) - hCore(p - ivec2(1, 0));
   float dz = hCore(p + ivec2(0, 1)) - hCore(p - ivec2(0, 1));
   return smoothstep(-0.08, 0.02, dot(normalize(vec3(-dx, 50.0, -dz)), uSunDir));
 }
+// the sun seen from the ground at xz: the slope, and the hills toward it (terrain horizon maps)
+float vegSunVis(vec2 xz, float h) {
+  float v = vegSlopeSun(xz);
+  #ifdef VEG_HORIZON
+    vec2 r = xz - cameraPosition.xz;
+    v *= terrainSunVisibility(xz, h, normalize(vec3(r.x / uEarthRadius, 1.0, r.y / uEarthRadius)));
+  #endif
+  return v;
+}
+`;
+
+// per model (species x variant): the impostors' size, and the casting test's sphere (meshes, decals)
+const IMPOSTOR_PARS = /* glsl */ `
+uniform vec4 uModel[VEG_NSP * 2];     // x: bounding sphere radius about (0, 0.5, 0) (unit tree)
 `;
 
 // ------------------------------------------------------------------------------------------
@@ -159,6 +202,8 @@ export const MESH_VERT = /* glsl */ `
 #include <shadowmap_pars_vertex>
 ${ATMOSPHERE_PARS}
 ${COMMON}
+${IMPOSTOR_PARS}
+// @horizon
 ${GROUND}
 attribute vec3 aPos;
 attribute vec4 aD0;
@@ -192,7 +237,14 @@ void main() {
   float d = length(relMain + vec3(0.0, 0.5 * h, 0.0));
   float m = vegMeshWeight(d, rank);
   vFade = m;
-  if (m <= 0.0 || h <= 0.0) {
+  #ifdef VEG_DEPTH
+    // the sun's shadow map: only the trees whose ground shadow is not a decal
+    int model = sp * 2 + int(mod(floor(spv / 16.0), 2.0));
+    bool casts = h > 0.0 && vegCasts(aPos + vec3(0.0, 0.5 * h, 0.0), d, rank, uModel[model].x * h * 1.02);
+  #else
+    bool casts = true;
+  #endif
+  if (m <= 0.0 || h <= 0.0 || !casts) {
     gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
     #include <logdepthbuf_vertex>
     return;
@@ -227,10 +279,12 @@ void main() {
   #ifndef VEG_DEPTH
     float hW = aPos.y + p.y;
     float L = length(rel);
-    vSunE = atmoSunIrradianceAt(rel, hW) * vegSlopeSun(aPos.xz);
+    float wImg = floor(spv / 32.0) / 7.0;
+    vSunE = atmoSunIrradianceAt(rel, hW) * vegSunVis(aPos.xz, aPos.y) * vegCanopySun(p.y / h, wImg, uSpB[sp].w * wf);
     atmoAerialParts(rel / max(L, 1e-3), L, hW, vT, vIns);
     #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
-      vec4 worldPosition = vec4(rel + cameraPosition, 1.0);
+      // normal offset (as three's own materials): no acne of the crown on itself
+      vec4 worldPosition = vec4(rel + cameraPosition + vN * directionalLightShadows[ 0 ].shadowNormalBias, 1.0);
       vDirectionalShadowCoord[ 0 ] = directionalShadowMatrix[ 0 ] * worldPosition;
     #endif
   #endif
@@ -299,10 +353,6 @@ void main() {
 // ------------------------------------------------------------------------------------------
 // impostors
 
-const IMPOSTOR_PARS = /* glsl */ `
-uniform vec4 uModel[VEG_NSP * 2];     // x: bounding sphere radius about (0, 0.5, 0) (unit tree)
-`;
-
 export const IMPOSTOR_VERT = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
@@ -310,6 +360,7 @@ export const IMPOSTOR_VERT = /* glsl */ `
 ${ATMOSPHERE_PARS}
 ${COMMON}
 ${IMPOSTOR_PARS}
+// @horizon
 ${GROUND}
 attribute vec3 aPos;
 attribute vec4 aD0;
@@ -317,6 +368,7 @@ attribute vec4 aD1;
 attribute vec2 corner;
 
 varying vec2 vUv;
+varying float vCanopy;         // the stand's shade on this height of the crown (sun factor)
 flat varying vec3 vLayer;      // layer of frame k0, of frame k1, blend
 flat varying vec3 vLb;         // sun direction in billboard space
 flat varying vec3 vUb;         // up in billboard space
@@ -390,13 +442,18 @@ void main() {
   vTint = clamp(pow(aD1.rgb, vec3(2.2)) * uVeg.x / max(uSpC[sp], vec3(1e-3)), 0.25, 3.0);
   vS.w = 0.86 + 0.28 * j;
   float hWc = aPos.y + 0.5 * h;
-  vSunE = atmoSunIrradianceAt(cRel, hWc) * vegSlopeSun(aPos.xz);
+  vSunE = atmoSunIrradianceAt(cRel, hWc) * vegSunVis(aPos.xz, aPos.y);
+  // the corner's height in the tree (seen from the side the quad spans the tree's height)
+  float wImg = floor(spv / 32.0) / 7.0;
+  vCanopy = vegCanopySun(clamp(0.5 + corner.y * hh * (1.0 - se) / max(h, 0.1), -0.2, 1.2), wImg, uSpB[sp].w * wf);
   atmoAerialParts(V, d, hWc, vT, vIns);
   vec4 mvPosition = vec4(mat3(viewMatrix) * P, 1.0);
   gl_Position = projectionMatrix * mvPosition;
   #include <logdepthbuf_vertex>
   #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
-    vec4 worldPosition = vec4(P + cameraPosition, 1.0);
+    // offset toward the viewer and the sun (the quad stands in the middle of the crown)
+    vec3 nOff = normalize(uSunDir - V) * (directionalLightShadows[ 0 ].shadowNormalBias + 0.25 * S);
+    vec4 worldPosition = vec4(P + cameraPosition + nOff, 1.0);
     vDirectionalShadowCoord[ 0 ] = directionalShadowMatrix[ 0 ] * worldPosition;
   #endif
 }
@@ -414,6 +471,7 @@ ${LIGHT}
 uniform highp sampler2DArray uAtlasA;   // albedo (sRGB) + coverage
 uniform highp sampler2DArray uAtlasN;   // normal x / y (billboard space), depth, ambient occlusion
 varying vec2 vUv;
+varying float vCanopy;
 flat varying vec3 vLayer;
 flat varying vec3 vLb;
 flat varying vec3 vUb;
@@ -450,7 +508,7 @@ void main() {
     }
   #endif
   vec3 albedo = A.rgb * mix(vec3(1.0), vTint, vS.x) * vS.w;
-  vec3 rad = vegLight(albedo, dot(n, vLb), dot(n, vUb), vP.w, Nn.w, vS.y, vS.z, dot(n, normalize(vHb)), vSunE * shadow);
+  vec3 rad = vegLight(albedo, dot(n, vLb), dot(n, vUb), vP.w, Nn.w, vS.y, vS.z, dot(n, normalize(vHb)), vSunE * (shadow * vCanopy));
   gl_FragColor = vec4(rad * vT + vIns, alpha);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -466,6 +524,7 @@ export const DECAL_VERT = /* glsl */ `
 ${ATMOSPHERE_PARS}
 ${COMMON}
 ${IMPOSTOR_PARS}
+// @horizon
 ${GROUND}
 uniform vec4 uShadow;               // x: range, y: strength, z: fade fraction, w: on (0 / 1)
 attribute vec3 aPos;
@@ -491,14 +550,16 @@ void main() {
   vec3 L = uSunDir;
   float range = uShadow.x * (1.0 - 0.5 * rank);
   float fade = 1.0 - smoothstep(range * (1.0 - uShadow.z), range, d);
-  fade *= smoothstep(0.03, 0.12, L.y) * vegFarFade(d, rank, uSpA[sp].w);
-  if (h <= 0.0 || fade <= 0.0 || uShadow.w < 0.5) {
+  // down to the sun's last degree: the long shadows of the golden hour
+  fade *= smoothstep(0.012, 0.045, L.y) * vegFarFade(d, rank, uSpA[sp].w);
+  int model = sp * 2 + variant;
+  float S = uModel[model].x * h * 1.02;
+  // a tree whose shadow the sun's shadow map draws has no decal
+  if (h <= 0.0 || fade <= 0.0 || uShadow.w < 0.5 || vegCasts(aPos + vec3(0.0, 0.5 * h, 0.0), d, rank, S)) {
     cull();
     #include <logdepthbuf_vertex>
     return;
   }
-  int model = sp * 2 + variant;
-  float S = uModel[model].x * h * 1.02;
   // the tree's silhouette as the sun sees it (the impostor frame for the sun's elevation) ...
   vec3 Vs = -L;
   vec3 R = normalize(vec3(L.z, 0.0, -L.x) + 1e-6);
@@ -510,11 +571,15 @@ void main() {
   vec3 C = rel + vec3(0.0, 0.5 * h, 0.0);
   vec3 Q = C + R * corner.x * S * wf + U * corner.y * S * mix(1.0, wf, se);
   // ... projected along the sun onto the level of the tree's base, then laid on the ground
-  float t = (Q.y - rel.y) / max(L.y, 0.03);
+  float t = (Q.y - rel.y) / max(L.y, 0.012);
   vec3 G = Q - L * t;
-  // long shadows of low sun: not past ~5 tree heights
+  // long shadows of a low sun: a lone tree's reaches ~20 tree heights; in a stand (forest,
+  // orchard) the shadows merge into one shade after a few heights, so they stop at ~6 (fewer
+  // overlapping decals to darken the same ground, and far less to fill)
+  float wImg = floor(spv / 32.0) / 7.0;
+  float stand = smoothstep(0.35, 0.85, wImg);
   vec2 off = G.xz - rel.xz;
-  float lim = 5.0 * h + S;
+  float lim = mix(20.0, 6.0, stand) * h + S;
   if (length(off) > lim) G.xz = rel.xz + off * lim / length(off);
   vec2 world = G.xz + cameraPosition.xz;
   G.y = groundAt(world) - cameraPosition.y;
@@ -530,9 +595,9 @@ void main() {
   float ls = dot(sunE, vec3(0.2126, 0.7152, 0.0722)), la = dot(skyE, vec3(0.2126, 0.7152, 0.0722));
   float kLin = ls / max(ls + la, 1e-4);
   // where the tree took the imagery's colour, the imagery shows it with its shadow already
-  // (a forest's ground is canopy and shade): lighter there than under a lone tree in a field
-  float wImg = floor(spv / 32.0) / 7.0;
-  vK = kLin * uShadow.y * fade * (0.75 + 0.25 * uSpB[sp].z) * (1.0 - 0.45 * wImg) * vegSlopeSun(aPos.xz);
+  // (a forest's ground is canopy and shade): lighter there than under a lone tree in a field;
+  // none on ground that the hills or its slope already keep in shade
+  vK = kLin * uShadow.y * fade * (0.75 + 0.25 * uSpB[sp].z) * (1.0 - 0.45 * wImg) * vegSlopeSun(aPos.xz) * vegSunVis(world, hG);
   vec3 tt;
   atmoAerialParts(G / max(gl, 1e-3), gl, hG, tt, vIns);
   vec4 mvPosition = vec4(mat3(viewMatrix) * Gv, 1.0);

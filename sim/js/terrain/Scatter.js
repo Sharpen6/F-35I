@@ -4,40 +4,49 @@
 //
 // Placement runs in a worker (vegetation/worker.js, rules in vegetation/placement.js) from the
 // terrain's own data: ESA WorldCover land cover and the L0 colour imagery of each tile, per
-// 200 m cell, deterministic. The main thread keeps the cells within the far range and draws:
+// 200 m cell, deterministic, kept off the mapped roads, airfield surfaces and buildings
+// (vegetation/obstacles.js). The main thread keeps the cells within the far range and draws:
 //
 //   impostors   every tree in range, one draw: a camera-facing quad with the frame of the
 //               impostor atlas (rendered at start-up from the procedural meshes) for the view's
 //               elevation; per-pixel normals, depth and ambient occlusion
-//   near meshes the trees within the mesh range, one InstancedMesh per species and variant
-//               (procedural meshes, vegetation/meshes.js), wind sway, ragged foliage edges
-//   shadows     every tree's silhouette from the sun projected onto the ground, one draw
+//   near meshes the trees within the mesh range, InstancedMeshes per species and variant at two
+//               levels of detail (the full mesh close by, the same tree with coarser clumps
+//               further out), wind sway, ragged foliage edges
+//   shadows     every tree's silhouette from the sun projected onto the ground, one draw; near
+//               the ground, where the sun's shadow map covers the ground around the camera, the
+//               closest trees cast into it instead (one shadow per tree either way)
 //
-// Meshes and impostors cross-fade with complementary dither; impostors thin out by rank
-// towards the far range; everything is lit by the environment's sun and sky with the same
-// aerial perspective and logarithmic depth as the terrain. Quality: setQuality(), the table
-// below. Off: ?vegetation=0 or the menu option (settings.vegetation).
+// Meshes and impostors cross-fade with complementary dither over a narrow band; impostors thin
+// out by rank towards the far range, which grows with the height above the ground (the same
+// reach over the ground from a cruise as from low level). A cell uploads only the trees that
+// can be seen from its distance (the far fade's thinning), and more of them as the camera comes
+// closer. Everything is lit by the environment's sun and sky with the same aerial perspective
+// and logarithmic depth as the terrain. Quality: setQuality(), the table below. Off: ?vegetation=0
+// or the menu option (settings.vegetation); off for OFF_FREE_MS, the module frees its memory.
 //
 // Instance record (20 bytes): float32 x, y (ground - 0.25 m), z; u8 species | variant << 4 |
 // imagery weight of the colour (0..7) << 5,
 // height / 0.125 m, crown width factor * 128, rotation; u8 imagery colour R, G, B, rank.
 
 import * as THREE from 'three';
-import { SPECIES, SPECIES_COUNT } from './vegetation/species.js';
+import { SPECIES, SPECIES_COUNT, SP } from './vegetation/species.js';
 import { buildTree, VARIANTS } from './vegetation/meshes.js';
-import { ImpostorBaker, bakeImpostors } from './vegetation/impostors.js';
+import { ImpostorBaker } from './vegetation/impostors.js';
 import { MESH_VERT, MESH_FRAG, IMPOSTOR_VERT, IMPOSTOR_FRAG, DECAL_VERT, DECAL_FRAG } from './vegetation/shaders.js';
 import { CELL_M, CELLS, TILES, CORE_HALF, REC_U8 } from './vegetation/placement.js';
 
 /**
- * density: share of the trees kept (by rank); mesh: mesh range (m); band: mesh / impostor
- * cross-fade (m); far: impostor range (m); shadow: ground shadow range (m); capacity: trees in
- * the impostor buffer; meshCap: trees per near mesh; atlas: impostor frame size (px).
+ * density: share of the trees kept (by rank); mesh: mesh range (m); full: range of the full
+ * detail meshes (beyond: the reduced ones); band: mesh / impostor cross-fade (m); far: impostor
+ * range near the ground (m); shadow: ground shadow range (m); cast: range of the trees that cast
+ * into the sun's shadow map when it covers the ground (m, 0: never); capacity: trees in the
+ * impostor buffer; meshCap: trees per near mesh; atlas: impostor frame size (px).
  */
 export const VEG_QUALITY = {
-  low: { density: 0.45, mesh: 70, band: 12, far: 2000, shadow: 900, capacity: 260000, meshCap: 3000, atlas: 64, shrubs: false },
-  medium: { density: 0.7, mesh: 110, band: 16, far: 3000, shadow: 1600, capacity: 520000, meshCap: 6000, atlas: 128, shrubs: true },
-  high: { density: 1.0, mesh: 160, band: 22, far: 4200, shadow: 2400, capacity: 1200000, meshCap: 10000, atlas: 128, shrubs: true },
+  low: { density: 0.45, mesh: 100, full: 30, band: 8, far: 2000, shadow: 900, cast: 0, capacity: 200000, meshCap: 3000, atlas: 96, shrubs: false },
+  medium: { density: 0.7, mesh: 110, full: 45, band: 8, far: 3000, shadow: 1600, cast: 60, capacity: 400000, meshCap: 6000, atlas: 128, shrubs: true },
+  high: { density: 1.0, mesh: 150, full: 60, band: 10, far: 4200, shadow: 2400, cast: 80, capacity: 800000, meshCap: 10000, atlas: 128, shrubs: true },
 };
 
 const MAX_INFLIGHT = 2;
@@ -45,6 +54,10 @@ const CELLS_PER_REQUEST = 48;
 const UPLOAD_BUDGET = 200000;     // instances per frame (a new start point fills up in a few frames)
 const INIT_BUDGET_MS = 6;         // start-up work per frame while flying (behind the menu: 40)
 const RELEASE_MARGIN = 500;       // m beyond the wanted radius before a cell is dropped
+const MOVE_MARGIN = 250;          // m the camera may close in on a cell before it needs more trees
+const OFF_FREE_MS = 10000;        // switched off this long: the buffers, atlas and worker go
+const FAR_MAX = 2;                // the far range grows with the height up to FAR_MAX x the table's
+const RANK_K = 0.62;              // the far fade's thinning (shaders.js, vegFarFade)
 const WORLD_CELLS = TILES * CELLS;
 
 const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
@@ -60,36 +73,66 @@ export class Scatter {
     this.env = env;
     this.terrain = terrain;
     this.app = app;
-    this.attribution = 'Vegetation: procedural trees and shrubs placed from the terrain\'s ESA WorldCover 2021 land cover and Sentinel-2 imagery (CC BY 4.0, as above); no third-party models or textures';
+    this.attribution = 'Vegetation: procedural trees and shrubs placed from the terrain\'s ESA WorldCover 2021 land cover and Sentinel-2 imagery (CC BY 4.0, as above), kept off the Overture Maps roads and buildings (ODbL, as above); no third-party models or textures';
     // needs the real terrain (heights texture, tiles); ?stubs=1 has none
     this.available = !!(terrain && terrain.textures && terrain.textures.hCore && terrain.baseUrl);
     const setting = app && app.settings ? app.settings.vegetation : undefined;
     this.enabled = this.available && params.get('vegetation') !== '0' && setting !== false;
     this.qualityName = 'high';
     this.Q = VEG_QUALITY.high;
-    this.ready = false;
     this.failed = false;
     this.group = new THREE.Group();
     this.group.name = 'Vegetation';
     this.group.visible = false;
     scene.add(this.group);
+    this._camPos = new THREE.Vector3();
+    this._frustum = new THREE.Frustum();
+    this._pv = new THREE.Matrix4();
+    this._sphere = new THREE.Sphere();
+    this._lim = new Float32Array(SPECIES_COUNT);
+    this._limNear = new Float32Array(SPECIES_COUNT);
+    this.stats = { cells: 0, instances: 0, capacity: 0, highWater: 0, near: 0, nearTris: 0, bakeMs: 0, atlasMB: 0, workerMs: 0, tileMs: 0, replies: 0, initMs: 0, startMs: 0,
+      uploadFailures: 0, evicted: 0, compactions: 0, upgrades: 0, rebakes: 0, freed: 0 };
+    this.tuning = { tintGain: 0.92, wind: 1, brightness: 1, shadowStrength: 0.75 };
+    this._reset();
+    // the terrain's horizon maps (when it has them): the hills toward a low sun shade the trees
+    this._horizon = null;
+    const H = terrain && terrain.horizon;
+    this._horizonWait = !!(H && H.uniforms && H.uniforms.uHorizon);
+    if (this._horizonWait) {
+      import('./horizonMap.js').then((m) => {
+        if (typeof m.HORIZON_GLSL === 'string' && m.HORIZON_GLSL.includes('terrainSunVisibility')) this._horizon = { glsl: m.HORIZON_GLSL, uniforms: H.uniforms };
+      }).catch(() => {}).finally(() => { this._horizonWait = false; });
+    }
+  }
 
+  /** The state that a teardown (OFF_FREE_MS) forgets: everything is built again when needed. */
+  _reset() {
+    this.ready = false;
+    this._initIter = null;
+    this._built = null;
+    this._worker = null;
     this.cells = new Map();         // key -> cell
+    this._wanted = new Set();
     this._queue = [];               // cells waiting for the worker
-    this._uploads = [];             // cells with data waiting for the GPU
+    this._uploads = [];             // cells with data waiting for the GPU (or for more of it)
     this._inflight = 0;
     this._tiles = new Map();        // tile key -> {obstacles, timing} from the worker (statistics)
     this._free = [];                // free blocks [{off, len}] sorted by offset
     this._hw = 0;                   // high-water mark of the impostor buffer
     this._used = 0;
-    this._camPos = new THREE.Vector3();
     this._lastWant = new THREE.Vector3(1e9, 0, 1e9);
     this._lastNear = new THREE.Vector3(1e9, 0, 1e9);
     this._nearDirty = true;
     this._meshScale = 1;
+    this._farScale = 1;             // < 1 while the buffer cannot hold the whole far range
+    this._farF = this.Q.far;
+    this._agl = 0;
+    this._inView = true;
     this._frame = 0;
-    this.stats = { cells: 0, instances: 0, capacity: 0, highWater: 0, near: 0, nearTris: 0, bakeMs: 0, atlasMB: 0, workerMs: 0, tileMs: 0, replies: 0, initMs: 0, startMs: 0 };
-    this.tuning = { tintGain: 0.92, wind: 1, brightness: 1, shadowStrength: 0.75 };
+    this._offSince = 0;
+    this._rebaker = null;
+    this._casting = false;
   }
 
   // ------------------------------------------------------------------------------ module API
@@ -101,14 +144,15 @@ export class Scatter {
     if (this.ready) this._applyQuality();      // otherwise at the end of the start-up
   }
 
-  /** Rebuilds what the quality changes: buffers, near meshes, atlas, the uploaded instances. */
+  /** Rebuilds what the quality changes: buffers, near meshes, atlas (over frames), the uploads. */
   _applyQuality() {
     const B = this._built || {}, Q = this.Q;
     if (B.meshCap !== Q.meshCap) this._buildNearMeshes();
     if (B.capacity !== Q.capacity) this._buildImpostorBuffer();
-    if (B.atlas !== Q.atlas) this._bake();
-    if (B.density !== Q.density || B.shrubs !== Q.shrubs || B.capacity !== Q.capacity) this._reuploadAll();
+    if (B.atlas !== Q.atlas) this._startRebake();
+    if (B.density !== Q.density || B.shrubs !== Q.shrubs || B.capacity !== Q.capacity || B.far !== Q.far) this._reuploadAll();
     this._built = { ...Q };
+    this._farScale = 1;
     this._lastWant.set(1e9, 0, 1e9);
     this._nearDirty = true;
   }
@@ -129,28 +173,30 @@ export class Scatter {
   }
 
   update(f) {
-    if (!this.enabled || this.failed) { this.group.visible = false; return; }
+    if (!this.enabled || this.failed) {
+      this.group.visible = false;
+      if (!this.failed) this._idleOff();
+      return;
+    }
+    this._offSince = 0;
+    if (this._horizonWait) return;                    // (a moment at the start)
     if (!this._worker) this._startWorker();
     this._frame++;
     const cam = f.camera.getWorldPosition(this._camPos);
     if (cam.distanceToSquared(this._lastWant) > 60 * 60 || this._frame % 30 === 0) this._updateWanted(cam);
     this._pump();
     if (!this.ready && !this._initStep()) return;     // the start-up, a few ms per frame
-    this._uploadSome(cam);
+    if (this._rebaker) this._rebakeStep();            // a new atlas size, a few ms per frame
+    this._uploadSome();
     if (cam.distanceToSquared(this._lastNear) > 15 * 15 || this._nearDirty) this._rebuildNear(cam);
     this._updateUniforms(cam);
+    this._cullDraws(f.camera);
     this.group.visible = true;
   }
 
   dispose() {
-    this._worker?.terminate();
+    this._teardown();
     this.scene.remove(this.group);
-    for (const m of this._nearMeshes || []) m.geometry.dispose();
-    this._impGeom?.dispose();
-    for (const mat of [this._meshMat, this._depthMat, this._impMat, this._decalMat]) mat?.dispose();
-    this._atlas?.albedo.dispose();
-    this._atlas?.normal.dispose();
-    for (const t of this._trees || []) t.geometry.dispose();
   }
 
   /** Small summary for tests and the console. */
@@ -161,6 +207,9 @@ export class Scatter {
       instances: s.instances, highWater: s.highWater, capacity: s.capacity, near: s.near,
       nearTris: s.nearTris, bakeMs: Math.round(s.bakeMs), atlasMB: +s.atlasMB.toFixed(1), initMs: Math.round(s.initMs), startMs: Math.round(s.startMs),
       workerMs: Math.round(s.workerMs), tileMs: Math.round(s.tileMs), replies: s.replies, inflight: this._inflight, queued: this._queue.length,
+      uploads: this._uploads.length, uploadFailures: s.uploadFailures, evicted: s.evicted, compactions: s.compactions, upgrades: s.upgrades,
+      far: Math.round(this._farF), farScale: +this._farScale.toFixed(2), casting: this._casting, inView: this._inView,
+      decals: !!(this._decalMesh && this._decalMesh.visible), horizon: !!this._horizon, rebakes: s.rebakes, freed: s.freed,
       world: s.world || null, ...this._tileSummary(),
       idle: this.idle(),
     };
@@ -179,7 +228,39 @@ export class Scatter {
 
   /** Nothing left to do for the current position (tests wait for it before a screenshot). */
   idle() {
-    return !this.enabled || this.failed || (this.ready && !this._queue.length && !this._inflight && !this._uploads.length && !this._nearDirty);
+    return !this.enabled || this.failed || (this.ready && !this._rebaker && !this._queue.length && !this._inflight && !this._uploads.length && !this._nearDirty);
+  }
+
+  // ------------------------------------------------------------------------------ off
+  /** Switched off: after OFF_FREE_MS the GPU buffers, the atlas and the worker are freed. */
+  _idleOff() {
+    if (!this._worker && !this._trees) return;
+    const now = performance.now();
+    if (!this._offSince) this._offSince = now;
+    else if (now - this._offSince > OFF_FREE_MS) this._teardown();
+  }
+
+  _teardown() {
+    if (!this._worker && !this._trees) return;
+    this._worker?.terminate();
+    this._rebaker?.dispose();
+    for (const m of this._nearMeshes || []) { this.group.remove(m); m.geometry.dispose(); }
+    this._nearMeshes = null;
+    if (this._impMesh) this.group.remove(this._impMesh, this._decalMesh);
+    this._impMesh = this._decalMesh = null;
+    this._impGeom?.dispose();
+    this._impGeom = this._aPos = this._aD0 = this._aD1 = null;
+    for (const mat of [this._meshMat, this._depthMat, this._impMat, this._decalMat]) mat?.dispose();
+    this._meshMat = this._depthMat = this._impMat = this._decalMat = null;
+    this._atlas?.albedo.dispose();
+    this._atlas?.normal.dispose();
+    this._atlas = null;
+    for (const t of [...(this._trees || []), ...(this._treesLow || [])]) t.geometry.dispose();
+    this._trees = this._treesLow = null;
+    this._uniforms = null;
+    this._reset();
+    Object.assign(this.stats, { cells: 0, instances: 0, capacity: 0, highWater: 0, near: 0, nearTris: 0, atlasMB: 0 });
+    this.stats.freed++;
   }
 
   // ------------------------------------------------------------------------------ set-up
@@ -210,14 +291,22 @@ export class Scatter {
   *_initSteps() {
     const t0 = performance.now();
     this._trees = [];
+    this._treesLow = [];
     for (let sp = 0; sp < SPECIES_COUNT; sp++) {
-      for (let v = 0; v < VARIANTS; v++) { this._trees.push(buildTree(sp, v, 1)); yield; }
+      for (let v = 0; v < VARIANTS; v++) {
+        this._trees.push(buildTree(sp, v, 1));
+        this._treesLow.push(buildTree(sp, v, 0));
+        yield;
+      }
     }
+    // what is built for which quality (setQuality may come in the middle of the start-up)
+    const built = { ...this.Q };
     this._makeUniforms();
     this._makeMaterials(this._uniforms);
     this._buildImpostorBuffer();
     this._buildNearMeshes();
     yield;
+    built.atlas = this.Q.atlas;
     const baker = new ImpostorBaker(this.renderer, this._trees, this._bakeOptions());
     let compiled = false;
     this._compile(baker).then(() => { compiled = true; }, (e) => { console.warn('vegetation: compile', e); compiled = true; });
@@ -225,26 +314,29 @@ export class Scatter {
     while (baker.renderModel()) yield;
     while (!baker.finishSome(6)) yield;
     this._setAtlas(baker.result(), baker.ms);
-    this._built = { ...this.Q };
+    this._built = built;
     this.ready = true;
     this._applyQuality();       // in case the quality changed meanwhile
     this.stats.startMs = performance.now() - t0;
-    console.info(`vegetation: ready after ${this.stats.startMs.toFixed(0)} ms (${this.stats.initMs.toFixed(0)} ms of work, impostor bake ${this.stats.bakeMs.toFixed(0)} ms, atlas ${this.stats.atlasMB.toFixed(1)} MB)`);
+    console.info(`vegetation: ready after ${this.stats.startMs.toFixed(0)} ms (${this.stats.initMs.toFixed(0)} ms of work, impostor bake ${this.stats.bakeMs.toFixed(0)} ms, atlas ${this.stats.atlasMB.toFixed(1)} MB${this._horizon ? ', terrain horizon' : ''})`);
   }
 
   _makeUniforms() {
     const U = this._uniforms = {
       uSpA: { value: SPECIES.map((s) => new THREE.Vector4(s.tint, s.translucency, s.sway, s.far)) },
-      uSpB: { value: SPECIES.map((s) => new THREE.Vector4(s.fluff, s.specular, s.shadow, 0)) },
+      uSpB: { value: SPECIES.map((s) => new THREE.Vector4(s.fluff, s.specular, s.shadow, s.crown)) },
       uSpC: { value: SPECIES.map((s) => new THREE.Vector3(...s.foliage.map((c) => Math.pow(c / 255, 2.2)))) },
       uVeg: { value: new THREE.Vector4(this.tuning.tintGain, this.tuning.wind, this.tuning.brightness, 0) },
       uLod: { value: new THREE.Vector4(this.Q.mesh, this.Q.band, this.Q.far, 0.22) },
       uMainCam: { value: new THREE.Vector3() },
+      uCast: { value: new THREE.Vector4(0, 0, 0, 0) },
+      uCastBox: { value: new THREE.Matrix4() },
       uModel: { value: this._trees.map((t) => new THREE.Vector4(t.info.sphere, t.info.radiusXZ, 0, 0)) },
       uAtlasA: { value: null },
       uAtlasN: { value: null },
       uHCore: { value: this.terrain.textures.hCore },
       uShadow: { value: new THREE.Vector4(this.Q.shadow, this.tuning.shadowStrength, 0.3, 1) },
+      ...(this._horizon ? this._horizon.uniforms : {}),     // shared with the terrain, by reference
     };
     return U;
   }
@@ -256,10 +348,22 @@ export class Scatter {
     };
   }
 
-  /** The whole atlas at once (a quality change). */
-  _bake() {
-    const a = bakeImpostors(this.renderer, this._trees, this._bakeOptions());
-    this._setAtlas(a, a.ms);
+  /** A new atlas (another frame size) baked over frames; the old one is drawn meanwhile. */
+  _startRebake() {
+    this._rebaker?.dispose();
+    this._rebaker = new ImpostorBaker(this.renderer, this._trees, this._bakeOptions());
+    this.stats.rebakes++;
+  }
+
+  _rebakeStep() {
+    const b = this._rebaker, t0 = performance.now();
+    while (performance.now() - t0 < INIT_BUDGET_MS) {
+      if (b.renderModel()) continue;
+      if (!b.finishSome(4)) continue;
+      this._setAtlas(b.result(), b.ms);
+      this._rebaker = null;
+      return;
+    }
   }
 
   _setAtlas(atlas, ms) {
@@ -275,23 +379,26 @@ export class Scatter {
   _makeMaterials(U) {
     const env = this.env.uniforms;
     const lights = () => THREE.UniformsUtils.clone(THREE.UniformsLib.lights);
+    // the terrain's horizon GLSL where the shaders leave room for it ("// @horizon")
+    const H = this._horizon ? `#define VEG_HORIZON 1\n${this._horizon.glsl}` : '';
+    const vs = (src) => src.replace('// @horizon', H);
     this._meshMat = new THREE.ShaderMaterial({
       name: 'VegetationMesh', uniforms: { ...lights(), ...env, ...U },
-      vertexShader: MESH_VERT, fragmentShader: MESH_FRAG, lights: true, fog: false, side: THREE.FrontSide,
+      vertexShader: vs(MESH_VERT), fragmentShader: MESH_FRAG, lights: true, fog: false, side: THREE.FrontSide,
     });
     this._meshMat.alphaToCoverage = true;
     this._depthMat = new THREE.ShaderMaterial({
       name: 'VegetationMeshDepth', uniforms: { ...env, ...U }, defines: { VEG_DEPTH: 1 },
-      vertexShader: MESH_VERT, fragmentShader: MESH_FRAG, fog: false, side: THREE.FrontSide,
+      vertexShader: vs(MESH_VERT), fragmentShader: MESH_FRAG, fog: false, side: THREE.FrontSide,
     });
     this._impMat = new THREE.ShaderMaterial({
       name: 'VegetationImpostor', uniforms: { ...lights(), ...env, ...U },
-      vertexShader: IMPOSTOR_VERT, fragmentShader: IMPOSTOR_FRAG, lights: true, fog: false, side: THREE.DoubleSide,
+      vertexShader: vs(IMPOSTOR_VERT), fragmentShader: IMPOSTOR_FRAG, lights: true, fog: false, side: THREE.DoubleSide,
     });
     this._impMat.alphaToCoverage = true;
     this._decalMat = new THREE.ShaderMaterial({
       name: 'VegetationShadow', uniforms: { ...env, ...U },
-      vertexShader: DECAL_VERT, fragmentShader: DECAL_FRAG, fog: false, side: THREE.DoubleSide,
+      vertexShader: vs(DECAL_VERT), fragmentShader: DECAL_FRAG, fog: false, side: THREE.DoubleSide,
       transparent: true, depthWrite: false,
       blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
       blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
@@ -336,37 +443,43 @@ export class Scatter {
     this._free.length = 0;
     this._hw = 0;
     this._used = 0;
-    for (const c of this.cells.values()) c.block = null;
+    for (const c of this.cells.values()) { c.block = null; c.upgrade = false; }
     this.stats.capacity = cap;
   }
 
+  /** Near meshes: per model, the full mesh (index m) and the reduced one (index models + m). */
   _buildNearMeshes() {
     for (const m of this._nearMeshes || []) { this.group.remove(m); m.geometry.dispose(); }
     this._nearMeshes = [];
     const cap = this.Q.meshCap;
-    this._nearCap = cap;
-    for (let m = 0; m < this._trees.length; m++) {
-      const src = this._trees[m].geometry;
-      const g = new THREE.InstancedBufferGeometry();
-      g.setIndex(src.index);
-      for (const name of ['position', 'normal', 'aColor', 'aVert', 'uv']) g.setAttribute(name, src.getAttribute(name));
-      g.setAttribute('aPos', new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3).setUsage(THREE.DynamicDrawUsage));
-      g.setAttribute('aD0', new THREE.InstancedBufferAttribute(new Uint8Array(cap * 4), 4, true).setUsage(THREE.DynamicDrawUsage));
-      g.setAttribute('aD1', new THREE.InstancedBufferAttribute(new Uint8Array(cap * 4), 4, true).setUsage(THREE.DynamicDrawUsage));
-      g.instanceCount = 0;
-      g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e8);
-      const mesh = new THREE.Mesh(g, this._meshMat);
-      mesh.name = `VegetationMesh_${SPECIES[Math.floor(m / VARIANTS)].name}_${m % VARIANTS}`;
-      mesh.frustumCulled = false;
-      mesh.renderOrder = 1;
-      mesh.receiveShadow = true;
-      mesh.castShadow = !!this._casting;      // see _updateUniforms
-      mesh.customDepthMaterial = this._depthMat;
-      mesh.matrixAutoUpdate = false;
-      mesh.visible = false;
-      mesh.userData.tris = src.index.count / 3;
-      this._nearMeshes.push(mesh);
-      this.group.add(mesh);
+    const sets = [this._trees, this._treesLow];
+    for (let lod = 0; lod < 2; lod++) {
+      for (let m = 0; m < sets[lod].length; m++) {
+        const src = sets[lod][m].geometry;
+        const g = new THREE.InstancedBufferGeometry();
+        g.setIndex(src.index);
+        for (const name of ['position', 'normal', 'aColor', 'aVert', 'uv']) g.setAttribute(name, src.getAttribute(name));
+        // the full meshes hold the inner disc: a smaller buffer is enough
+        const n = lod ? cap : Math.ceil(cap * 0.4);
+        g.setAttribute('aPos', new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3).setUsage(THREE.DynamicDrawUsage));
+        g.setAttribute('aD0', new THREE.InstancedBufferAttribute(new Uint8Array(n * 4), 4, true).setUsage(THREE.DynamicDrawUsage));
+        g.setAttribute('aD1', new THREE.InstancedBufferAttribute(new Uint8Array(n * 4), 4, true).setUsage(THREE.DynamicDrawUsage));
+        g.instanceCount = 0;
+        g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e8);
+        const mesh = new THREE.Mesh(g, this._meshMat);
+        mesh.name = `VegetationMesh_${SPECIES[Math.floor(m / VARIANTS)].name}_${m % VARIANTS}${lod ? '_low' : ''}`;
+        mesh.frustumCulled = false;
+        mesh.renderOrder = 1;
+        mesh.receiveShadow = true;
+        mesh.castShadow = !!this._casting;      // see _updateUniforms
+        mesh.customDepthMaterial = this._depthMat;
+        mesh.matrixAutoUpdate = false;
+        mesh.visible = false;
+        mesh.userData.tris = src.index.count / 3;
+        mesh.userData.cap = n;
+        this._nearMeshes.push(mesh);
+        this.group.add(mesh);
+      }
     }
   }
 
@@ -404,10 +517,23 @@ export class Scatter {
   }
 
   // ------------------------------------------------------------------------------ streaming
+  /**
+   * The far range for a height above the ground: the table's near the ground, longer higher up
+   * (the same reach over the ground), shorter while the buffer cannot hold it.
+   */
+  _farFor(agl) {
+    const f = this.Q.far;
+    return Math.min(FAR_MAX * f, Math.hypot(f, Math.max(0, agl - 300))) * this._farScale;
+  }
+
   _updateWanted(cam) {
     this._lastWant.copy(cam);
-    const R = this.Q.far + 150;
     const g = this.terrain.heightAt(cam.x, cam.z);
+    this._agl = Math.max(0, cam.y - g);
+    // room in the buffer again: back towards the full far range
+    if (this._farScale < 1 && this._used < 0.7 * this.Q.capacity) this._farScale = Math.min(1, this._farScale * 1.05);
+    const F = this._farF = this._farFor(this._agl);
+    const R = F + 150;
     const dy = Math.max(0, cam.y - g - 30);
     const wanted = new Set();
     if (dy < R) {
@@ -422,7 +548,9 @@ export class Scatter {
           wanted.add(key);
           let c = this.cells.get(key);
           if (!c) {
-            c = { key, X, Z, ix: Math.floor(X / CELLS), iz: Math.floor(Z / CELLS), cx: X % CELLS, cz: Z % CELLS, state: 'queued', block: null, d, inQueue: true };
+            const y = this.terrain.heightAt(-CORE_HALF + (X + 0.5) * CELL_M, -CORE_HALF + (Z + 0.5) * CELL_M);
+            c = { key, X, Z, ix: Math.floor(X / CELLS), iz: Math.floor(Z / CELLS), cx: X % CELLS, cz: Z % CELLS, state: 'queued', block: null, d, inQueue: true,
+              y: Number.isFinite(y) ? y : 0, dEff: 0, F: 0, upgrade: false };
             this.cells.set(key, c);
             this._queue.push(c);
           } else if (c.state === 'queued' && !c.inQueue) {
@@ -430,6 +558,11 @@ export class Scatter {
             this._queue.push(c);
           }
           c.d = d;
+          // uploaded for a farther view (or a shorter far range): it needs more of its trees now
+          if (c.state === 'ready' && c.block && c.count && !c.upgrade && (this._dEff(c, cam) < c.dEff - 100 || F > c.F * 1.06)) {
+            c.upgrade = true;
+            this._uploads.push(c);
+          }
         }
       }
       this._releaseBeyond(cam, rh + RELEASE_MARGIN);
@@ -441,6 +574,27 @@ export class Scatter {
     this._uploads.sort((a, b) => a.d - b.d);
     this._wanted = wanted;
     this.stats.cells = this.cells.size;
+  }
+
+  /**
+   * The nearest the camera can be to a cell's trees before the cell is looked at again (its
+   * distance less MOVE_MARGIN, counting the height above them): the far fade's thinning at that
+   * distance says which of its trees can be seen at all.
+   */
+  _dEff(c, cam) {
+    const dh = this._cellDist(c.X, c.Z, cam);
+    const dy = Math.max(0, cam.y - c.y - 130);
+    return Math.max(0, Math.hypot(dh, dy) - MOVE_MARGIN);
+  }
+
+  /** Per species, the rank bytes (aD1.w * 255) below which a tree can be seen from dEff. */
+  _limits(dEff, F, out) {
+    for (let s = 0; s < SPECIES_COUNT; s++) {
+      // vegFarFade: a tree of rank r is gone beyond F * far * (1 - RANK_K * r)
+      const r = dEff > 0 ? (1 - dEff / (F * SPECIES[s].far)) / RANK_K : 2;
+      out[s] = (!this.Q.shrubs && s === SP.shrub) ? 0 : Math.min(this.Q.density * 256, Math.max(0, r) * 255);
+    }
+    return out;
   }
 
   /** Wanted cells whose trees are not in yet. */
@@ -518,42 +672,58 @@ export class Scatter {
     this._pump();      // keep the worker busy whatever the frame rate
   }
 
-  /** Is instance i of cell c drawn at this quality? */
-  _keep(c, i) {
-    const d = c.data;
-    if (d[i * REC_U8 + 7] >= this.Q.density * 256) return false;
-    if (!this.Q.shrubs && (d[i * REC_U8] & 15) === 7) return false;
-    return true;
-  }
-
-  _uploadSome(cam) {
+  // ------------------------------------------------------------------------------ the buffer
+  _uploadSome() {
     let budget = UPLOAD_BUDGET;
     while (this._uploads.length && budget > 0) {
       const c = this._uploads[0];
-      if (this.cells.get(c.key) !== c || c.block) { this._uploads.shift(); continue; }
+      if (this.cells.get(c.key) !== c || c.state !== 'ready' || (c.block && !c.upgrade)) { this._uploads.shift(); continue; }
       const n = this._uploadCell(c);
-      if (n < 0) break;           // buffer full: try again once far cells are released
-      this._uploads.shift();
-      budget -= n;
+      if (n >= 0) { this._uploads.shift(); budget -= Math.max(1, n); continue; }
+      // no run of free slots long enough: give up the cells kept only by the release margin,
+      // then the farthest ones (they come back when there is room), compact, and try again
+      if (this._makeRoom(c, -n)) continue;
+      // only nearer trees in the buffer: a shorter far range until they fit
+      this.stats.uploadFailures++;
+      this._farScale = Math.max(0.4, this._farScale * 0.9);
+      this._lastWant.set(1e9, 0, 1e9);
+      break;
     }
-    void cam;
   }
 
+  /** Writes the cell's visible trees into the buffer: their count, or -count if no room. */
   _uploadCell(c) {
+    const dEff = c.count ? this._dEff(c, this._camPos) : 0;
+    const L = this._limits(dEff, this._farF, this._lim);
+    const D = c.data;
     let n = 0;
-    for (let i = 0; i < c.count; i++) if (this._keep(c, i)) n++;
-    if (!n) { c.block = { off: 0, len: 0 }; return 1; }
-    const off = this._alloc(n);
-    if (off < 0) return -1;
+    for (let i = 0; i < c.count; i++) if (D[i * REC_U8 + 7] < L[D[i * REC_U8] & 15]) n++;
+    if (!n) {
+      this._freeCell(c);
+      c.block = { off: 0, len: 0 };
+      c.dEff = dEff; c.F = this._farF; c.upgrade = false;
+      return 0;
+    }
+    let off = this._alloc(n);
+    if (off < 0 && c.block && c.block.len) {      // an upgrade: its own old slots may make the room
+      this._freeCell(c);
+      off = this._alloc(n);
+    }
+    if (off < 0) return -n;
+    this._freeCell(c);
     c.block = { off, len: n };
+    c.dEff = dEff;
+    c.F = this._farF;
+    if (c.upgrade) this.stats.upgrades++;
+    c.upgrade = false;
     const P = this._aPos.array, A = this._aD0.array, B = this._aD1.array;
     let k = off;
     for (let i = 0; i < c.count; i++) {
-      if (!this._keep(c, i)) continue;
-      P[k * 3] = c.pos[i * 3]; P[k * 3 + 1] = c.pos[i * 3 + 1]; P[k * 3 + 2] = c.pos[i * 3 + 2];
       const s = i * REC_U8;
-      A[k * 4] = c.data[s]; A[k * 4 + 1] = c.data[s + 1]; A[k * 4 + 2] = c.data[s + 2]; A[k * 4 + 3] = c.data[s + 3];
-      B[k * 4] = c.data[s + 4]; B[k * 4 + 1] = c.data[s + 5]; B[k * 4 + 2] = c.data[s + 6]; B[k * 4 + 3] = c.data[s + 7];
+      if (D[s + 7] >= L[D[s] & 15]) continue;
+      P[k * 3] = c.pos[i * 3]; P[k * 3 + 1] = c.pos[i * 3 + 1]; P[k * 3 + 2] = c.pos[i * 3 + 2];
+      A[k * 4] = D[s]; A[k * 4 + 1] = D[s + 1]; A[k * 4 + 2] = D[s + 2]; A[k * 4 + 3] = D[s + 3];
+      B[k * 4] = D[s + 4]; B[k * 4 + 1] = D[s + 5]; B[k * 4 + 2] = D[s + 6]; B[k * 4 + 3] = D[s + 7];
       k++;
     }
     this._aPos.addUpdateRange(off * 3, n * 3);
@@ -565,6 +735,71 @@ export class Scatter {
     this.stats.instances = this._used;
     this.stats.highWater = this._hw;
     return n;
+  }
+
+  /**
+   * Room for n more trees for cell c: cells no longer wanted go first, then wanted ones farther
+   * than c (back into the upload queue), then the buffer is compacted if the free slots are
+   * scattered. False if only nearer trees fill it.
+   */
+  _makeRoom(c, n) {
+    let free = this.Q.capacity - this._used;
+    if (free < n) {
+      const cand = [];
+      for (const o of this.cells.values()) {
+        if (o === c || !o.block || !o.block.len) continue;
+        if (!this._wanted.has(o.key) || o.d > c.d + 200) cand.push(o);
+      }
+      cand.sort((a, b) => (this._wanted.has(a.key) - this._wanted.has(b.key)) || b.d - a.d);
+      for (const o of cand) {
+        if (free >= n) break;
+        free += o.block.len;
+        this._freeCell(o);
+        o.upgrade = false;
+        if (this._wanted.has(o.key)) this._uploads.push(o);
+        else this.cells.delete(o.key);
+        this.stats.evicted++;
+      }
+      this._uploads.sort((a, b) => a.d - b.d);
+      if (free < n) return false;
+    }
+    if (!this._fits(n)) this._compact();
+    return true;
+  }
+
+  _fits(n) {
+    if (this._hw + n <= this.Q.capacity) return true;
+    for (const f of this._free) if (f.len >= n) return true;
+    return false;
+  }
+
+  /** Moves every block down over the holes (then one upload of the whole used range). */
+  _compact() {
+    const list = [];
+    for (const c of this.cells.values()) if (c.block && c.block.len) list.push(c);
+    list.sort((a, b) => a.block.off - b.block.off);
+    const P = this._aPos.array, A = this._aD0.array, B = this._aD1.array;
+    let k = 0;
+    for (const c of list) {
+      const b = c.block;
+      if (b.off !== k) {
+        P.copyWithin(k * 3, b.off * 3, (b.off + b.len) * 3);
+        A.copyWithin(k * 4, b.off * 4, (b.off + b.len) * 4);
+        B.copyWithin(k * 4, b.off * 4, (b.off + b.len) * 4);
+        b.off = k;
+      }
+      k += b.len;
+    }
+    this._hw = k;
+    this._free.length = 0;
+    for (const a of [this._aPos, this._aD0, this._aD1]) {
+      a.clearUpdateRanges();
+      a.addUpdateRange(0, k * a.itemSize);
+      a.needsUpdate = true;
+    }
+    this._impGeom.instanceCount = k;
+    this.stats.highWater = k;
+    this.stats.compactions++;
   }
 
   _freeCell(c) {
@@ -620,6 +855,7 @@ export class Scatter {
     this._uploads = [];
     for (const c of this.cells.values()) {
       c.block = null;
+      c.upgrade = false;
       if (c.state === 'ready' && c.count) this._uploads.push(c);
     }
     this._uploads.sort((a, b) => a.d - b.d);
@@ -632,10 +868,13 @@ export class Scatter {
     this._nearDirty = false;
     const R = this.Q.mesh * 1.15 * this._meshScale + 30;
     const R2 = R * R;
-    const counts = new Int32Array(this._nearMeshes.length);
-    const cap = this._nearCap;
+    const models = this._trees.length;
     const meshes = this._nearMeshes;
+    const counts = new Int32Array(meshes.length);
     const arrays = meshes.map((m) => [m.geometry.getAttribute('aPos').array, m.geometry.getAttribute('aD0').array, m.geometry.getAttribute('aD1').array]);
+    const L = this._limits(0, this._farF, this._limNear);
+    // the full meshes close by (each tree at its own distance), the reduced ones beyond
+    const full = this.Q.full * this._meshScale;
     let overflow = false;
     const X0 = Math.floor((cam.x - R + CORE_HALF) / CELL_M), X1 = Math.floor((cam.x + R + CORE_HALF) / CELL_M);
     const Z0 = Math.floor((cam.z - R + CORE_HALF) / CELL_M), Z1 = Math.floor((cam.z + R + CORE_HALF) / CELL_M);
@@ -648,13 +887,15 @@ export class Scatter {
           const dx = P[i * 3] - cam.x, dz = P[i * 3 + 2] - cam.z;
           if (dx * dx + dz * dz > R2) continue;
           const s = i * REC_U8;
+          if (D[s + 7] >= L[D[s] & 15]) continue;
           const h = D[s + 1] * 0.125;
           const dy = P[i * 3 + 1] + 0.5 * h - cam.y;
-          if (dx * dx + dy * dy + dz * dz > R2) continue;
-          if (!this._keep(c, i)) continue;
-          const m = (D[s] & 15) * VARIANTS + ((D[s] >> 4) & 1);
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > R2) continue;
+          const fr = full * (0.85 + 0.3 * ((D[s + 7] * 0.0371) % 1));
+          const m = (D[s] & 15) * VARIANTS + ((D[s] >> 4) & 1) + (d2 < fr * fr ? 0 : models);
           const k = counts[m];
-          if (k >= cap) { overflow = true; continue; }
+          if (k >= meshes[m].userData.cap) { overflow = true; continue; }
           const [ap, a0, a1] = arrays[m];
           ap[k * 3] = P[i * 3]; ap[k * 3 + 1] = P[i * 3 + 1]; ap[k * 3 + 2] = P[i * 3 + 2];
           a0[k * 4] = D[s]; a0[k * 4 + 1] = D[s + 1]; a0[k * 4 + 2] = D[s + 2]; a0[k * 4 + 3] = D[s + 3];
@@ -688,17 +929,53 @@ export class Scatter {
 
   // ------------------------------------------------------------------------------ per frame
   _updateUniforms(cam) {
-    const U = this._uniforms;
+    const U = this._uniforms, Q = this.Q;
     U.uMainCam.value.copy(cam);
-    U.uLod.value.set(this.Q.mesh * this._meshScale, this.Q.band, this.Q.far, 0.22);
+    const meshR = Q.mesh * this._meshScale;
+    U.uLod.value.set(meshR, Q.band, this._farF, 0.22);
     U.uVeg.value.set(this.tuning.tintGain, this.tuning.wind, this.tuning.brightness, 0);
-    U.uShadow.value.set(this.Q.shadow, this.tuning.shadowStrength, 0.3, 1);
-    // cast into the sun's shadow map only when it covers more than the aircraft
-    const sc = this.env.sunLight?.shadow?.camera;
-    const cast = !!(sc && this.env.sunLight.castShadow && (sc.right - sc.left) > 120);
+    U.uShadow.value.set(Q.shadow, this.tuning.shadowStrength, 0.3, 1);
+    // near the ground the sun's shadow map covers the ground around the camera (the lighting's
+    // wide box): the near trees cast into it and their decals are left out (vegCasts). The
+    // range stays inside the mesh range (only meshes cast).
+    const L = this.env.sunLight, sc = L && L.shadow && L.shadow.camera;
+    const wide = !!(sc && L.castShadow && (sc.right - sc.left) > 120);
+    const castR = wide ? Math.max(0, Math.min(Q.cast, 0.85 * meshR - Q.band - 5)) : 0;
+    if (castR > 0) {
+      // the matrices the shadow pass will use this frame (three computes the same in render())
+      L.updateMatrixWorld();
+      L.target.updateMatrixWorld();
+      L.shadow.updateMatrices(L);
+      U.uCastBox.value.multiplyMatrices(sc.projectionMatrix, sc.matrixWorldInverse);
+    }
+    U.uCast.value.set(castR, castR > 0 ? 2 / (sc.right - sc.left) : 0, 0, 0);
+    const cast = castR > 0;
     if (cast !== this._casting) {
       this._casting = cast;
       for (const m of this._nearMeshes) m.castShadow = cast;
     }
+  }
+
+  /**
+   * Skips the draws that cannot show anything: the ground shadows from higher than their range
+   * or with the sun down, everything when no cell with trees is in the view.
+   */
+  _cullDraws(camera) {
+    if (this._frame % 4 === 0) {
+      this._pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      this._frustum.setFromProjectionMatrix(this._pv, camera.coordinateSystem, camera.reversedDepth === true);
+      const sph = this._sphere;
+      sph.radius = CELL_M * 0.71 + 30;
+      let any = false;
+      for (const c of this.cells.values()) {
+        if (!c.block || !c.block.len) continue;
+        sph.center.set(-CORE_HALF + (c.X + 0.5) * CELL_M, c.y + 15, -CORE_HALF + (c.Z + 0.5) * CELL_M);
+        if (this._frustum.intersectsSphere(sph)) { any = true; break; }
+      }
+      this._inView = any;
+    }
+    const sunUp = this.env.sunDirection ? this.env.sunDirection.y > 0.012 : true;
+    this._impMesh.visible = this._inView;
+    this._decalMesh.visible = this._inView && sunUp && this._agl < this.Q.shadow;
   }
 }
