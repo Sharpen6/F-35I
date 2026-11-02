@@ -264,7 +264,11 @@ void main() {
   #include <logdepthbuf_fragment>
   float dist = max(length(vRel), 1e-3);
   vec3 V = vRel / dist;                                     // camera -> point
-  float fh = max(vInf.x, 2.0), bay = max(vInf.y, 1.0), seed = vInf.z, floors = floor(vInf.w + 0.5);
+  // Ids (style, seed, floors, kind) arrive through perspective-correct interpolation, which does
+  // not give a constant back bit-exact (v/w and 1/w are interpolated separately): they are rounded
+  // once here and only the rounded values are compared with ==. (Not 'flat' varyings: ANGLE on
+  // Direct3D 11 may emulate GL's provoking vertex for those at a cost.)
+  float fh = max(vInf.x, 2.0), bay = max(vInf.y, 1.0), seed = floor(vInf.z + 0.5), floors = floor(vInf.w + 0.5);
 
   // ---- surface: normal, kind, facade coordinates, colour, style ----
   vec3 N;
@@ -284,13 +288,13 @@ void main() {
     fac = roofFace ? vLoc.xz : wallFac;
     kind = roofFace ? 1.0 : 0.0;
     col = roofFace ? vRoof.rgb : vWall.rgb;
-    sty = roofFace ? vRoof.a : vWall.a;
+    sty = floor((roofFace ? vRoof.a : vWall.a) + 0.5);
   #else
     N = normalize(vN);
     fac = vFac;
     kind = floor(vKind + 0.5);
     col = vCol.rgb;
-    sty = vCol.a;
+    sty = floor(vCol.a + 0.5);
   #endif
   vec2 fw = fwidth(fac);                                    // metres per pixel along u / v
   float near = uAlbedo.z * (1.0 - smoothstep(0.08, 0.5, max(fw.x, fw.y)));   // fine detail (< 0.5 m)
