@@ -14,6 +14,7 @@ import { FlightModel } from '../js/fdm/FlightModel.js';
 import { F35I_CONFIG, configWithRig } from '../js/fdm/f35i_config.js';
 import { atmosphere, tasFromCas, KT, G0 } from '../js/fdm/atmosphere.js';
 import { TestPilot } from '../js/test/TestPilot.js';
+import { keyRamp } from '../js/input/Input.js';
 
 const DT = 1 / 60;                    // the app's frame time; the FDM sub-steps at 240 Hz inside
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
@@ -505,6 +506,37 @@ tests.roll = () => {
     info(`160 KCAS, gear and flaps down: peak ${pMax.toFixed(0)} deg/s at AoA ${(st.alpha * R2D).toFixed(1)} deg`);
     check('roll rate in the landing configuration', pMax, 50, 120, 'deg/s', 'reduced at low dynamic pressure and higher AoA');
   }
+};
+
+// ==============================================================================================
+tests.keyboard = () => {
+  // The arrow keys through Input's keyRamp, as the app feeds them (60 Hz frames).  The ramp's second
+  // stage used to rise at 3 /s from 0.3: a 0.4 s press was 0.68 of full stick, 18 deg of bank or
+  // 4.9 g, so a short correction overshot.
+  section('Keyboard stick: short presses are small corrections, a held key still reaches the limits');
+  const press = (axis, dur, cas, secs) => {
+    const fdm = newFdm(seaLevelLand);
+    const r = airSpawn(fdm, cas, 3000);
+    const st = fdm.state;
+    const inp = { ...base(), throttle: r.throttle, gearHandle: false };
+    for (let i = 0; i < 30; i++) fdm.step(DT, inp);
+    let x = 0, nMax = 0;
+    for (let i = 0; i < secs * 60; i++) {
+      x = keyRamp(x, i * DT < dur - 1e-9 ? 1 : 0, DT);
+      inp[axis] = x;
+      fdm.step(DT, inp);
+      nMax = Math.max(nMax, st.gLoad);
+    }
+    return { bank: st.roll * R2D, nMax };
+  };
+  const r04 = press('roll', 0.4, 350, 4), r10 = press('roll', 1.0, 350, 4);
+  const p04 = press('pitch', 0.4, 450, 4), p15 = press('pitch', 1.5, 450, 3);
+  info(`350 KCAS: a 0.4 s roll press banks ${r04.bank.toFixed(1)} deg, 1.0 s ${r10.bank.toFixed(0)} deg;`
+    + ` 450 KCAS: a 0.4 s pull peaks at ${p04.nMax.toFixed(2)} g, a 1.5 s pull ${p15.nMax.toFixed(2)} g`);
+  check('bank after a 0.4 s roll press', r04.bank, 4, 15, 'deg', 'a short press is a correction (it was 18 deg)');
+  check('bank after a 1 s roll press', r10.bank, 60, 160, 'deg', 'a held key still rolls briskly');
+  check('peak g of a 0.4 s pull at 450 KCAS', p04.nMax, 1.5, 4, 'g', 'a short pull is a correction (it was 4.9 g)');
+  check('peak g of a 1.5 s pull at 450 KCAS', p15.nMax, 8.5, 9.0, 'g', 'a held key still reaches the 9 g limit');
 };
 
 // ==============================================================================================

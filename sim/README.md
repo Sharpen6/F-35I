@@ -69,12 +69,12 @@ The same list is in the sim (F1 or the Controls help button).
 
 | | |
 | --- | --- |
-| `↓` / `↑` | pull (nose up) / push (nose down): a tap is a small correction, held for half a second it is full stick |
+| `↓` / `↑` | pull (nose up) / push (nose down): a tap is a small correction; held on, it is full stick after about 0.7 s |
 | `←` / `→` | roll left / right |
 | `Z` / `X` | rudder and nose-wheel steering left / right |
 | `Shift` / `Ctrl` or `+` / `-` | throttle up / down; it stops at MIL: hold on or press again for afterburner |
 | `Page Up` / `Page Down` | full afterburner / idle |
-| `T` | auto-throttle on / off: with the gear down in the air it flies the approach AoA (13 deg) with the throttle; any throttle input takes over (on at the 10 km final start) |
+| `Y` | auto-throttle on / off: with the gear down in the air it flies the approach AoA (13 deg) with the throttle; any throttle input takes over (on at the 10 km final start) |
 | `B` (hold) | wheel brakes (with `Ctrl` held too: throttle back and brakes) |
 | `Shift`+`B` | parking brake on / off (set at the start) |
 | `G` | landing gear up / down |
@@ -133,7 +133,15 @@ The same list is in the sim (F1 or the Controls help button).
 **Joysticks and HOTAS**: open *Joystick & gamepad* in the menu, press *Bind* next to an action
 and move the axis or press the button. Axes: pitch, roll, rudder, throttle (an absolute lever:
 the MIL detent is at 75 % of its travel), brakes; buttons for everything above. A hat switch
-looks around. Bindings are kept per controller in the browser's local storage.
+looks around. Bindings are kept per controller in the browser's local storage. A throttle lever
+takes the throttle back only once it is moved through the throttle setting (after the
+auto-throttle, the keys or a restart set it; until then the helmet display shows `LVR` and where
+the lever is); pushed through MIL into afterburner it takes over at once (a go-around).
+
+**Browser shortcuts**: `Ctrl` is also "throttle down", and the browser keeps some `Ctrl`
+shortcuts for itself in a window (`Ctrl`+`W` / `T` / `N`, `Ctrl`+`Tab`, `Ctrl`+`Page Up` /
+`Page Down`). In full screen (`F`) the sim takes them (Keyboard Lock); the auto-throttle is on `Y`
+(it was `T`: `Ctrl`+`T` opened a tab).
 
 **Flying the F-35I**
 
@@ -141,7 +149,7 @@ looks around. Bindings are kept per controller in the browser's local storage.
 | --- | --- |
 | take-off | MIL or afterburner, release the parking brake (`Shift`+`B`); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (`G`) once climbing, then centre the stick: the jet holds the climb (a pull held on keeps the nose coming up) |
 | fly-by-wire | the stick commands g (pitch rate when slow) and roll rate; let go and the jet holds its flight path and bank; the FCS limits AoA to 25 deg and g to +9 / -3 |
-| landing | gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (`T`) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft); idle and brakes (`B`) after touchdown |
+| landing | gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (`Y`) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft); idle and brakes (`B`) after touchdown |
 | crash | the cause is shown (hard landing, gear up, water, terrain, over-g ...); `R` starts again. A firm touchdown without a flare shows HARD LANDING; above about 15 ft/s (4.6 m/s) the gear collapses |
 
 ## Cameras
@@ -331,7 +339,8 @@ then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
   while the wingmen stand beside it the shadow box covers all three.
 * `HMD.draw(state, camera, viewMode, extra)`: the optional `extra` carries what is not in the
   flight model state (the drawn pose, throttle lever, brakes, parking brake, speed brake, the
-  peak g, the mouse-stick position).
+  peak g, the mouse-stick position, and `leverMismatch`: a HOTAS lever's position until it has
+  picked the throttle up, from `input.leverMismatch`).
 * `EngineSound.update(state, viewMode, dt, opts)`: optional `opts` (camera position for distance
   and Doppler, canopy, active); also `setVolume`, `setMuted`, `toggleMute`, `setPaused`.
 * `Input.update(dt)` also returns `brake`, `speedbrake`, `highAoA`, `apc`, look axes, drag and

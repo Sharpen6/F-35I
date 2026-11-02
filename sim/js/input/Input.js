@@ -23,18 +23,23 @@
 //
 // Throttle: Shift / Ctrl, + / -, gamepad triggers or right stick move it; it stops at the MIL
 // detent (0.75): keep holding (0.5 s) or press again to go into afterburner (and the same on the
-// way back). Page Up = full afterburner, Page Down = idle. A bound HOTAS lever sets it directly.
+// way back). Page Up = full afterburner, Page Down = idle. A bound HOTAS lever sets it directly
+// once it has picked the throttle up (soft takeover, _leverStep); until then `leverMismatch` is
+// where the lever is (the HMD shows it).  Y = auto-throttle (T was Ctrl + T: a new browser tab
+// while Ctrl, "throttle down", is held).
 
 import { Bindings, STANDARD_GAMEPAD, HELD_ACTIONS, povHas, povDirection } from './Bindings.js';
 
 const MIL = 0.75;
 const THROTTLE_RATE = 0.55;          // lever travel per second at full key / trigger
 const DETENT_HOLD = 0.5;             // s of holding at the MIL detent before it lets go
-// Keyboard stick, two stages: a slow start so a tap is a small correction (a 0.3 s tap used to be
-// 0.78 of full stick: 20 deg of bank, 5 g), then quicker to full deflection for a held key.
-const KEY_FINE = 0.3;                // deflection reached at the fine rate (after 0.25 s)
-const KEY_FINE_RATE = 1.2;           // deflection per s up to KEY_FINE
-const KEY_RISE = 3.0;                // ... per s beyond it (full stick after ~0.5 s)
+// Keyboard stick, two stages: a slow start so a tap is a small correction, then quicker to full
+// deflection for a held key.  A 0.3 s tap used to be 0.78 of full stick; then the second stage
+// (3 /s from 0.3) still made a 0.4 s press 18 deg of bank at 350 KCAS or 4.9 g at 450 KCAS.  Now a
+// 0.4 s press is 9 deg or 2.5 g, and a held key is full stick after 0.67 s (fdm.test "keyboard").
+const KEY_FINE = 0.45;               // deflection reached at the fine rate (after 0.39 s)
+const KEY_FINE_RATE = 1.15;          // deflection per s up to KEY_FINE
+const KEY_RISE = 2.0;                // ... per s beyond it (full stick after ~0.67 s)
 const KEY_RETURN = 5.0;              // ... and back to centre when released
 const RESET_HOLD = 1.0;              // s to hold R (or a bound reset button) to restart in flight
 // Mouse stick: a full throw is 0.22 x the smaller window side; inside MOUSE_DEADZONE (of a throw)
@@ -45,6 +50,13 @@ export const MOUSE_DEADZONE = 0.06;        // (the HMD draws it round the mouse-
 const MOUSE_ROLL_IDLE = 0.25;
 const MOUSE_ROLL_RETURN = 3.0;       // throw per s
 const LOOK_KEYS = { Numpad8: [0, 1], Numpad2: [0, -1], Numpad4: [-1, 0], Numpad6: [1, 0] };
+// HOTAS lever soft takeover (_leverStep)
+const PICKUP = 0.02;                 // the lever moved to within this of the throttle picks it up
+const LEVER_NOISE = 0.003;           // lever travel below this is sensor noise, not the pilot
+const LEVER_GO_AROUND = MIL + 0.03;  // pushed up through the MIL detent past this: takes over at once
+// Browser shortcuts with Ctrl ("throttle down") that a page cannot cancel: close / new tab or
+// window, next / previous tab.  In fullscreen the Keyboard Lock API hands them to the page.
+const LOCK_KEYS = ['KeyW', 'KeyT', 'KeyN', 'Tab', 'PageUp', 'PageDown'];
 
 /** Keys this module uses: their browser defaults are suppressed while flying. */
 const OWN_KEYS = new Set([
@@ -52,7 +64,7 @@ const OWN_KEYS = new Set([
   'KeyH', 'KeyV', 'KeyM', 'KeyP', 'KeyR', 'KeyS', 'KeyF', 'PageUp', 'PageDown', 'Home', 'F1',
   'BracketLeft', 'BracketRight', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'Slash',
   'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Numpad8', 'Numpad2', 'Numpad4', 'Numpad6',
-  'Numpad5', 'Space', 'Tab', 'KeyA', 'KeyT',
+  'Numpad5', 'Space', 'Tab', 'KeyA', 'KeyY',
 ]);
 const THR_UP_KEYS = new Set(['ShiftLeft', 'ShiftRight', 'Equal', 'NumpadAdd']);
 const THR_DOWN_KEYS = new Set(['ControlLeft', 'ControlRight', 'Minus', 'NumpadSubtract']);
@@ -106,7 +118,10 @@ export class Input {
     this._wheel = 0;
     this._modUsed = new Map();           // modifier code -> {throttleAtPress, used}
     this._padPrev = new Map();           // pad index -> {buttons: bool[], axes: number[]}
-    this._throttleAxisLast = new Map();  // pad id -> last absolute lever value
+    this._hotas = new Map();             // pad id -> HOTAS lever state (_leverStep)
+    this._leverSeen = null;              // ... of the lever read this frame
+    /** HOTAS lever position (0..1) while it has not picked up the throttle, else null (HMD). */
+    this.leverMismatch = null;
     this._capture = null;                // binding capture {kind, pad, rest, callback}
     this._trigPrev = { up: false, down: false };
     this._wasEnabled = true;
@@ -130,6 +145,13 @@ export class Input {
     this._onWheel = (e) => this._mouseWheel(e);
     this._onContext = (e) => e.preventDefault();
     this._onLockChange = () => { if (document.pointerLockElement !== this.dom) this._locked = false; else this._locked = true; };
+    // fullscreen: keep Ctrl + W / T / N / Tab / Page Up / Page Down in the sim (see LOCK_KEYS)
+    this._onFullscreen = () => {
+      const kb = navigator.keyboard;
+      if (!kb || !kb.lock) return;
+      if (document.fullscreenElement) kb.lock(LOCK_KEYS).catch(() => {});
+      else kb.unlock();
+    };
     window.addEventListener('keydown', this._onKeyDown, { capture: true });
     window.addEventListener('keyup', this._onKeyUp, { capture: true });
     window.addEventListener('blur', this._onBlur);
@@ -139,6 +161,7 @@ export class Input {
     domElement.addEventListener('wheel', this._onWheel, { passive: false });
     domElement.addEventListener('contextmenu', this._onContext);
     document.addEventListener('pointerlockchange', this._onLockChange);
+    document.addEventListener('fullscreenchange', this._onFullscreen);
     this._locked = false;
   }
 
@@ -152,6 +175,7 @@ export class Input {
     this.dom.removeEventListener('wheel', this._onWheel);
     this.dom.removeEventListener('contextmenu', this._onContext);
     document.removeEventListener('pointerlockchange', this._onLockChange);
+    document.removeEventListener('fullscreenchange', this._onFullscreen);
   }
 
   /** Put the levers where the flight model set them up (after reset(spawn)). */
@@ -167,7 +191,9 @@ export class Input {
     this.detent.hold = 0;
     this.kb.pitch = this.kb.roll = this.kb.yaw = 0;
     this.mouseStickPos.x = this.mouseStickPos.y = 0;
-    this._throttleAxisLast.clear();
+    this._hotas.clear();                 // a HOTAS lever picks the new throttle up again
+    this._leverSeen = null;
+    this.leverMismatch = null;
     this._resetHeld = -1;                // R still held through the restart does not count again
   }
 
@@ -246,7 +272,7 @@ export class Input {
       case 'KeyP': case 'Escape': q('pause'); break;
       case 'KeyR': this._resetPress(); break;
       case 'KeyA': q('highAoAToggle'); break;
-      case 'KeyT': q('apcToggle'); break;
+      case 'KeyY': q('apcToggle'); break;
       case 'KeyS': q('speedbrakeToggle'); break;
       case 'KeyF': q('fullscreen'); break;
       case 'Home': case 'Numpad5': q('lookCenter'); break;
@@ -385,6 +411,7 @@ export class Input {
     this.padStatus = [];
     let thrRate = 0, upPress = false, downPress = false;
     this._padResetDown = false;
+    this._leverSeen = null;
     for (const pad of pads) {
       seen.add(pad.index);
       const B = this.bindings.forPad(pad);
@@ -418,17 +445,12 @@ export class Input {
         if (v !== 0) active = true;
         out[name] += v;
       }
-      // absolute throttle lever (HOTAS): it wins whenever it moves
+      // absolute throttle lever (HOTAS), with a soft takeover
       const tb = B.axes && B.axes.throttle;
       if (tb && Number.isFinite(pad.axes[tb.index])) {
         let v = pad.axes[tb.index];
         if (tb.invert) v = -v;
-        const lever = clamp((v + 1) / 2, 0, 1);
-        const last = this._throttleAxisLast.get(pad.id);
-        if (last === undefined || Math.abs(lever - last) > 0.015) {
-          if (last !== undefined) { this.levers.throttle = lever; this.levers.apc = false; this.detent.hold = 0; active = true; }
-          this._throttleAxisLast.set(pad.id, lever);
-        }
+        if (this._leverStep(pad.id, clamp((v + 1) / 2, 0, 1))) active = true;
       }
       // brake axis (toe brakes): resting end = 0
       const bb = B.axes && B.axes.brake;
@@ -477,6 +499,41 @@ export class Input {
     }
     for (const k of [...this._padPrev.keys()]) if (!seen.has(k)) this._padPrev.delete(k);
     return { thrRate, upPress, downPress };
+  }
+
+  /**
+   * A HOTAS throttle lever, one frame.  It drives the throttle once it has picked it up: whenever
+   * something else set the throttle (the auto-throttle flying it, the keys or triggers, a new
+   * flight) the lever must first be moved through the throttle's position (or to within PICKUP of
+   * it), so taking over does not jump the throttle.  It used to take over wherever it was: a
+   * nudge with the auto-throttle on short final could cut the throttle from 45 % to idle.  Pushed
+   * up through the MIL detent (a go-around) it takes over at once.  Only the lever's own travel
+   * counts: the throttle passing a lever at rest (the auto-throttle, the keys) does not pick it
+   * up.  Returns true when the pilot moved the lever this frame.
+   */
+  _leverStep(id, lever) {
+    const L = this.levers;
+    let H = this._hotas.get(id);
+    if (!H) { H = { lever, prev: lever, synced: false, set: NaN }; this._hotas.set(id, H); }
+    if (H.synced && (L.apc || L.throttle !== H.set)) H.synced = false;   // something else set it
+    // a move: travel beyond the noise since the last move (so a slow move adds up)
+    const moved = Math.abs(lever - H.prev) > LEVER_NOISE;
+    if (moved) {
+      const thr = L.throttle;
+      if (!H.synced) {
+        const passed = (thr - H.prev) * (thr - lever) <= 0;               // the throttle within this move
+        const goAround = H.prev < LEVER_GO_AROUND && lever >= LEVER_GO_AROUND && lever > thr;
+        if (passed || Math.abs(lever - thr) < PICKUP || goAround) H.synced = true;
+      }
+      H.prev = lever;
+    }
+    H.lever = lever;
+    if (H.synced) {
+      if (L.throttle !== lever || L.apc) { L.throttle = lever; L.apc = false; this.detent.hold = 0; }
+      H.set = lever;
+    }
+    this._leverSeen = H;
+    return moved;
   }
 
   _padEdge(action, out) {
@@ -611,6 +668,10 @@ export class Input {
     if (f.apcToggle) L.apc = !L.apc;                     // the app may put it back (gear up, on the ground)
     if (f.gearToggle) L.gearHandle = !L.gearHandle;      // the app may put it back
     if (f.canopyToggle) L.canopy = !L.canopy;            // the app may put it back
+
+    // a HOTAS lever that has not picked up the throttle: where it is (the HMD shows it)
+    const H = this._leverSeen;
+    if (on) this.leverMismatch = H && !H.synced && Math.abs(H.lever - L.throttle) >= PICKUP ? H.lever : null;
 
     f.throttle = L.throttle;
     f.parkingBrake = L.parkingBrake;

@@ -391,7 +391,7 @@ class App {
     let hint = sp.on_ground !== false
       ? (pad ? 'Parking brake set: L3 releases it. Throttle: right stick up or the right trigger. Start: menu'
         : 'Parking brake set: Shift+B releases it. Throttle: Shift / Page Up. F1: help')
-      : `${sp.label}.${this.input.levers.apc ? ` Auto-throttle on${pad ? '' : ' (T)'}.` : ''} ${pad ? 'Start: menu' : 'F1: help'}`;
+      : `${sp.label}.${this.input.levers.apc ? ` Auto-throttle on${pad ? '' : ' (Y)'}.` : ''} ${pad ? 'Start: menu' : 'F1: help'}`;
     if (this.settings.mouseStick && !pad) hint += '. Mouse stick: click the view to capture the mouse';
     this.ui.toast(hint, 4200);
   }
