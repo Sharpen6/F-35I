@@ -73,7 +73,7 @@ export class Scatter {
     this.env = env;
     this.terrain = terrain;
     this.app = app;
-    this.attribution = 'Vegetation: procedural trees and shrubs placed from the terrain\'s ESA WorldCover 2021 land cover and Sentinel-2 imagery (CC BY 4.0, as above), kept off the Overture Maps roads and buildings (ODbL, as above); no third-party models or textures';
+    this.attribution = 'Vegetation: procedural trees and shrubs placed from the terrain\'s ESA WorldCover 2021 land cover and Sentinel-2 imagery (CC BY 4.0, as above), kept off the mapped roads, railways, airfield surfaces and buildings (© OpenStreetMap contributors and Microsoft ML Buildings, ODbL 1.0, via Overture Maps Foundation); no third-party models or textures';
     // needs the real terrain (heights texture, tiles); ?stubs=1 has none
     this.available = !!(terrain && terrain.textures && terrain.textures.hCore && terrain.baseUrl);
     const setting = app && app.settings ? app.settings.vegetation : undefined;
@@ -665,6 +665,14 @@ export class Scatter {
       c.count = r.count;
       c.pos = r.pos;
       c.data = r.data;
+      // the ground under the trees (the cell's height from heightAt may have come from a coarser
+      // tile): the view test's sphere and the distances need it
+      if (r.count) {
+        let y0 = Infinity, y1 = -Infinity;
+        for (let i = 1; i < r.count * 3; i += 3) { const y = r.pos[i]; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        c.y = 0.5 * (y0 + y1);
+        c.dy = 0.5 * (y1 - y0);
+      }
       if (r.count) this._uploads.push(c);
       if (c.d < this.Q.mesh * 1.2 + 250) this._nearDirty = true;
     }
@@ -961,19 +969,20 @@ export class Scatter {
    * or with the sun down, everything when no cell with trees is in the view.
    */
   _cullDraws(camera) {
-    if (this._frame % 4 === 0) {
-      this._pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-      this._frustum.setFromProjectionMatrix(this._pv, camera.coordinateSystem, camera.reversedDepth === true);
-      const sph = this._sphere;
-      sph.radius = CELL_M * 0.71 + 30;
-      let any = false;
-      for (const c of this.cells.values()) {
-        if (!c.block || !c.block.len) continue;
-        sph.center.set(-CORE_HALF + (c.X + 0.5) * CELL_M, c.y + 15, -CORE_HALF + (c.Z + 0.5) * CELL_M);
-        if (this._frustum.intersectsSphere(sph)) { any = true; break; }
-      }
-      this._inView = any;
+    // every frame (a few microseconds: it stops at the first cell in view), so trees never lag a
+    // fast roll into view; the camera's matrices are this frame's (getWorldPosition in update)
+    this._pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this._frustum.setFromProjectionMatrix(this._pv, camera.coordinateSystem, camera.reversedDepth === true);
+    const sph = this._sphere;
+    let any = false;
+    for (const c of this.cells.values()) {
+      if (!c.block || !c.block.len) continue;
+      // the cell's trees: 200 m square, from the lowest ground to 30 m over the highest
+      sph.radius = Math.hypot(CELL_M * 0.71, (c.dy || 0) + 30);
+      sph.center.set(-CORE_HALF + (c.X + 0.5) * CELL_M, c.y + 15, -CORE_HALF + (c.Z + 0.5) * CELL_M);
+      if (this._frustum.intersectsSphere(sph)) { any = true; break; }
     }
+    this._inView = any;
     const sunUp = this.env.sunDirection ? this.env.sunDirection.y > 0.012 : true;
     this._impMesh.visible = this._inView;
     this._decalMesh.visible = this._inView && sunUp && this._agl < this.Q.shadow;
