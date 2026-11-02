@@ -216,6 +216,27 @@ WARMUP_JS = "(() => { const w = window.__sim.app.warmup; return w && w.info ? w.
 LATE_JS = "(() => { const w = window.__sim.app.warmup; return w ? w.late.slice(%d) : []; })()"
 LATE_N_JS = "(() => { const w = window.__sim.app.warmup; return w ? w.late.length : 0; })()"
 
+# ---- exterior (js/aircraft/JetShadow.js): the jet's own shadow map and underside map redraws (with
+# what redrew them) at a scene's start and end, and in the FPS window the frame times of the frames
+# that redrew one ("redraw"), of the frames right after them ("next": the GPU's share can land
+# there) and of the others: are the slow frames the redraws? --input adds pilot inputs for every
+# run, e.g. '{"roll": 0.6}' (a roll: the light turns in the jet's frame, a redraw every frame).
+EXT_JS = r"""(() => { const e = window.__sim.app.exterior, j = e && e.jet;
+  return j ? { on: e.on, redraws: j.redraws, ao: j.aoRedraws, by: { ...(j.redrawBy || {}) } } : null; })()"""
+EXT_TRACE_JS = r"""(() => { const e = window.__sim.app.exterior, j = e && e.jet; if (!j) return false;
+  const T = window.__extTrace = { dt: [], dr: [] }; let last = performance.now(), n0 = j.redraws + j.aoRedraws; const t0 = last;
+  function f() { const now = performance.now(), n = j.redraws + j.aoRedraws; T.dt.push(now - last); T.dr.push(n - n0);
+    last = now; n0 = n; if (now - t0 < %d) requestAnimationFrame(f); }
+  requestAnimationFrame(f); return true; })()"""
+EXT_TRACE_OUT_JS = r"""(() => { const T = window.__extTrace; if (!T) return null;
+  const g = { redraw: [], next: [], other: [] };
+  T.dt.forEach((d, i) => { if (i > 0) g[T.dr[i] ? 'redraw' : T.dr[i - 1] ? 'next' : 'other'].push(d); });
+  const o = { frames: T.dt.length - 1 };
+  for (const k in g) { const s = g[k].sort((a, b) => a - b);
+    o[k] = { n: s.length, med_ms: s.length ? +s[s.length >> 1].toFixed(2) : null, max_ms: s.length ? +s[s.length - 1].toFixed(1) : null,
+             over12: s.filter((d) => d > 12).length }; }
+  return o; })()"""
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -234,6 +255,7 @@ def main():
     ap.add_argument("--uncapped", action="store_true",
                     help="no vsync / frame-rate limit, so the frame times show the real cost (headless Chrome "
                          "otherwise paces frames at about 56-60 per second whatever the load)")
+    ap.add_argument("--input", default="", help='pilot inputs added for every run (JSON), e.g. \'{"roll": 0.6}\'')
     a = ap.parse_args()
     # SwiftShader (no GPU): a scene's first frame can take minutes there (the DevTools calls wait longer)
     slow = 10 if a.swiftshader else 1
@@ -325,9 +347,14 @@ def main():
                        f" window.__sim.camera({json.dumps(cam)}); true")
                 ground = cdp.js("window.__sim.summary().onGround")
                 cdp.js("window.__sim.setInput(" + json.dumps({"throttle": 1.0, "brake": 0} if ground else {}) + "); true")
+                if a.input:                                      # (exterior: --input, e.g. a roll)
+                    cdp.js("window.__sim.setInput(" + json.dumps(json.loads(a.input)) + "); true")
+                ext0 = cdp.js(EXT_JS)                            # (exterior: the jet's maps, see EXT_JS)
                 first = cdp.js(FIRST_JS % 3000, timeout=60)      # the scene's first 3 s from its first frame: any start-up hitch
                 time.sleep(max(0.0, a.seconds - 8))
+                cdp.js(EXT_TRACE_JS % 5000)                      # (exterior: alongside the FPS window)
                 fps = cdp.js(FPS_JS % 5000, timeout=60)
+                ext = {"start": ext0, "end": cdp.js(EXT_JS), "fps_window": cdp.js(EXT_TRACE_OUT_JS)}
                 made = cdp.js(MADE_JS % mark)
                 late = cdp.js(LATE_JS % late0)
                 stats = cdp.js(STATS_JS)
@@ -341,6 +368,7 @@ def main():
                 report["runs"].append(run)
                 line = {k: run[k] for k in ("spawn", "camera", "fps", "calls", "triangles", "programs_made")}
                 line["first_worst_ms"] = first.get("worst_ms") if first else None
+                run["exterior"] = line["exterior"] = ext          # (exterior)
                 print(json.dumps(line), flush=True)
         for e in cdp.events:
             m = e.get("method")
