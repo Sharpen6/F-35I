@@ -8,8 +8,11 @@
 // MSAA and no depth: only the last pass draws to it). Everything in that target is scene-referred
 // radiance (Environment units: a white surface in the noon sun is about 1). Then:
 //
-//   1. clouds      an optional module (env/Clouds.js) composites its volumes into the HDR frame,
-//                  using the resolved depth; see setClouds()
+//   1. clouds      an optional module (env/Clouds.js) composites its volumes over the resolved
+//                  frame into a second (single-sample) target, writing the scene's depth there too;
+//                  the transparent things near the camera are drawn into it after the clouds,
+//                  depth tested. One MSAA resolve per frame (colour, and the depth only with clouds);
+//                  see setClouds()
 //   2. sun         a tiny pass measures how much of the sun's disc is visible (terrain, the jet,
 //                  the canopy frame or clouds in front of it) into a 1 x 1 target, read back by the
 //                  output pass on the GPU (no CPU readback, no stall)
@@ -18,9 +21,12 @@
 //                  spills over its neighbours; a 13-tap downsample chain with a Karis average on
 //                  the first level and a tent-filtered upsample chain (Jimenez, SIGGRAPH 2014)
 //   4. output      exposure (Environment.exposure), sun glare and faint lens ghosts when looking
-//                  near the sun, AgX with a look (contrast, saturation), night vision (scotopic
-//                  blue shift and desaturation when the eye is dark adapted), optional vignette and
-//                  grain, dither, sRGB
+//                  near the sun, AgX with a look (contrast, saturation, a lifted toe), night vision
+//                  (rod vision's Purkinje shift: blues hold, reds fade, and a partial desaturation,
+//                  when the eye is dark adapted), optional vignette and grain, dither, sRGB
+//
+// The GPU time of the scene, the clouds and the post passes is measured with timer queries when
+// the browser has EXT_disjoint_timer_query_webgl2 (gpuTimes, ms, smoothed; the bench shows them).
 //
 // The HTML helmet display and the menus are separate canvases on top and are not touched.
 // Quality tiers scale the MSAA, the bloom chain and the glare; every effect can be switched off
@@ -123,7 +129,6 @@ const SUN_VIS_FRAG = /* glsl */`
   uniform vec2 uSunUv;          // sun centre (uv)
   uniform vec2 uDiscUv;         // disc radius in uv (x, y)
   uniform float uDiscRadiance;  // expected radiance of the visible disc (scene units)
-  uniform float uPrev;          // last value (smoothing)
   in vec2 vUv;
   out vec4 outColor;
   void main() {
@@ -303,6 +308,58 @@ const _cp = new THREE.Vector3();
 const _c = new THREE.Vector3();
 const _size = new THREE.Vector2();
 
+/**
+ * GPU time per pass with EXT_disjoint_timer_query_webgl2 (one query at a time: the passes are in
+ * sequence). Results arrive a frame or more later; they are smoothed. No extension: times stay empty.
+ */
+class GpuTimer {
+  constructor(renderer) {
+    this.gl = renderer.getContext();
+    let ext = null;
+    try { ext = this.gl.getExtension('EXT_disjoint_timer_query_webgl2'); } catch (e) { ext = null; }
+    this.ext = ext;
+    this.times = {};
+    this._pending = [];
+    this._free = [];
+    this._open = null;
+  }
+  begin(name) {
+    if (!this.ext || this._open) return;
+    const q = this._free.pop() || this.gl.createQuery();
+    this.gl.beginQuery(this.ext.TIME_ELAPSED_EXT, q);
+    this._open = { name, q };
+  }
+  end() {
+    if (!this._open) return;
+    this.gl.endQuery(this.ext.TIME_ELAPSED_EXT);
+    this._pending.push(this._open);
+    this._open = null;
+  }
+  poll() {
+    if (!this.ext) return;
+    const gl = this.gl;
+    const disjoint = gl.getParameter(this.ext.GPU_DISJOINT_EXT);
+    while (this._pending.length) {
+      const p = this._pending[0];
+      if (!gl.getQueryParameter(p.q, gl.QUERY_RESULT_AVAILABLE)) break;
+      this._pending.shift();
+      const ms = gl.getQueryParameter(p.q, gl.QUERY_RESULT) / 1e6;
+      if (!disjoint && Number.isFinite(ms)) {
+        const o = this.times[p.name];
+        this.times[p.name] = o === undefined ? ms : o + (ms - o) * 0.1;
+      }
+      this._free.push(p.q);
+    }
+    // a context that never answers (lost, throttled tab): do not pile queries up
+    while (this._pending.length > 24) this._free.push(this._pending.shift().q);
+  }
+  dispose() {
+    for (const p of this._pending) this.gl.deleteQuery(p.q);
+    for (const q of this._free) this.gl.deleteQuery(q);
+    this._pending = []; this._free = [];
+  }
+}
+
 export class Post {
   constructor({ renderer, env, quality = 'high' }) {
     this.renderer = renderer;
@@ -333,6 +390,7 @@ export class Post {
     this._camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
     this.hdr = null;                     // the scene target (MSAA, depth texture)
+    this._comp = null;                   // with clouds: the composited frame (single sample, depth)
     this._bloomDown = [];
     this._bloomUp = [];
     this._sunVis = halfTarget(1, 1);
@@ -346,7 +404,7 @@ export class Post {
     });
     this._sunMat = fullscreenMaterial('SunVisibility', SUN_VIS_FRAG, {
       tScene: { value: null }, uSunUv: { value: new THREE.Vector2() }, uDiscUv: { value: new THREE.Vector2() },
-      uDiscRadiance: { value: 1 }, uPrev: { value: 1 },
+      uDiscRadiance: { value: 1 },
     });
     this._outMat = fullscreenMaterial('Output', OUTPUT_FRAG, {
       tScene: { value: null }, tBloom: { value: null }, tSunVis: { value: null },
@@ -359,6 +417,9 @@ export class Post {
     this._time = 0;
     this._last = performance.now();
     this.stats = { w: 0, h: 0, samples: 0, bloomLevels: 0, passes: 0 };
+    this._timer = new GpuTimer(renderer);
+    /** GPU ms per pass ({ scene, clouds, post }), smoothed; null without timer queries. */
+    this.gpuTimes = this._timer.ext ? this._timer.times : null;
   }
 
   setQuality(q) {
@@ -367,8 +428,33 @@ export class Post {
     this._w = 0;                         // rebuild the targets on the next frame
   }
 
-  /** A clouds module: render(renderer, {scene: hdrTarget, depth, camera, width, height}) composites into hdrTarget. */
+  /**
+   * A clouds module (env/Clouds.js): active(), render(renderer, ctx) marches and filters them,
+   * composite(renderer, target, ctx) writes the resolved frame with the clouds, and the scene's
+   * depth, into the single-sample target Post gives it (ctx: {color, depth, camera, width, height}).
+   */
   setClouds(clouds) { this.clouds = clouds; }
+
+  _depthTexture(w, h) {
+    const depth = new THREE.DepthTexture(w, h);
+    // a reversed depth buffer needs float depth to keep its precision; the log depth is fine in 24 bits
+    depth.type = this.renderer.capabilities.reversedDepthBuffer ? THREE.FloatType : THREE.UnsignedIntType;
+    return depth;
+  }
+
+  /** With clouds: a single-sample target for the composited frame (the scene's depth written into it). */
+  _ensureComp() {
+    if (this._comp && this._comp.width === this._w && this._comp.height === this._h) return this._comp;
+    this._comp?.dispose();
+    this._comp = new THREE.WebGLRenderTarget(this._w, this._h, {
+      type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false,
+      depthTexture: this._depthTexture(this._w, this._h),
+      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
+    });
+    this._comp.texture.colorSpace = THREE.NoColorSpace;
+    this._comp.texture.name = 'PostComposite';
+    return this._comp;
+  }
 
   _ensureTargets() {
     const r = this.renderer;
@@ -377,9 +463,9 @@ export class Post {
     if (w === this._w && h === this._h && this.hdr) return;
     this._w = w; this._h = h;
     this.hdr?.dispose();
-    const depth = new THREE.DepthTexture(w, h);
-    // a reversed depth buffer needs float depth to keep its precision; the log depth is fine in 24 bits
-    depth.type = r.capabilities.reversedDepthBuffer ? THREE.FloatType : THREE.UnsignedIntType;
+    this._comp?.dispose();
+    this._comp = null;
+    const depth = this._depthTexture(w, h);
     this.hdr = new THREE.WebGLRenderTarget(w, h, {
       type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false,
       samples: this.tier.samples, depthTexture: depth,
@@ -387,9 +473,8 @@ export class Post {
     });
     this.hdr.texture.colorSpace = THREE.NoColorSpace;
     this.hdr.texture.name = 'PostHDR';
-    // the clouds pass samples the resolved colour and depth while drawing into the MSAA buffers:
-    // never let three attach the textures themselves (WEBGL_multisampled_render_to_texture, on
-    // some mobile and XR browsers), which would make that a feedback loop
+    // the clouds read the resolved colour and depth: never let three attach the textures to the
+    // MSAA framebuffer itself (WEBGL_multisampled_render_to_texture, on some mobile and XR browsers)
     r.properties.get(this.hdr).__useRenderToTexture = false;
     for (const t of [...this._bloomDown, ...this._bloomUp]) t.dispose();
     this._bloomDown = [];
@@ -425,28 +510,42 @@ export class Post {
     const prevTarget = r.getRenderTarget();
     const prevAutoClear = r.autoClear;
     r.autoClear = true;
+    const T = this._timer;
+    T.poll();
 
-    // 1. scene (MSAA, resolved into hdr.texture and hdr.depthTexture by three after the call).
+    // 1. scene (MSAA, resolved into hdr.texture by three after the call; the depth only with
+    // clouds, which need it: without them three skips that blit and discards the MSAA depth).
     // With clouds, the transparent things close to the camera (the burner plume, the canopy,
     // sprites, smoke) wait on layer 31 until the clouds are in: a cloud behind the jet must not
     // cover its plume. Far transparent things (tree impostors) stay in, under the clouds.
     const C = this.clouds && this.clouds.active?.() ? this.clouds : null;
     const near = C ? this._liftNear(scene, camera) : null;
+    this.hdr.resolveDepthBuffer = !!C;
+    T.begin('scene');
     r.setRenderTarget(this.hdr);
     r.render(scene, camera);
+    T.end();
 
-    // 2. clouds: ray marched at low resolution, then drawn over the MSAA buffer (every pixel is
-    // overwritten, so the content three invalidated after the resolve does not matter; the depth
-    // stays), resolved again; then the near transparent things, depth tested against the scene
+    // 2. clouds: ray marched and filtered at low resolution, then composited over the resolved
+    // frame into the single-sample composite target, with the scene's depth (the composite writes
+    // it), and the near transparent things on top, depth tested. (Drawing the composite and those
+    // back into the MSAA target cost two more colour + depth resolves, and blended over colour
+    // that three had already invalidated after the first one.)
+    let frame = this.hdr.texture;
     if (C) {
+      T.begin('clouds');
+      const comp = this._ensureComp();
       const ctx = { depth: this.hdr.depthTexture, color: this.hdr.texture, camera, width: this._w, height: this._h, post: this };
       C.render(r, ctx);
+      C.composite(r, comp, ctx);
       r.autoClear = false;
-      C.composite(r, this.hdr, ctx);
-      if (near.length) this._renderNear(scene, camera);
+      if (near.length) this._renderNear(scene, camera, comp);
       this._dropNear();
       r.autoClear = true;
+      frame = comp.texture;
+      T.end();
     }
+    T.begin('post');
 
     const env = this.env;
     const exposure = (env.exposure ?? 1) * (env.exposureBias ?? 1);
@@ -457,7 +556,7 @@ export class Post {
     const sunDir = env.sunDirection;
     let glare = 0;
     if (o.glare && sunDir && sunDir.y > -0.03) {
-      _v.copy(sunDir).multiplyScalar(1e5).add(camera.getWorldPosition(new THREE.Vector3()));
+      _v.copy(sunDir).multiplyScalar(1e5).add(camera.getWorldPosition(_cp));
       _v.project(camera);
       const inFront = _v.z < 1 && _v.z > -1;
       const su = _v.x * 0.5 + 0.5, sv = _v.y * 0.5 + 0.5;
@@ -468,7 +567,7 @@ export class Post {
       out.uSun.value.set(su, sv, inFront ? 1 : 0, 0);
       if (inFront && su > -0.6 && su < 1.6 && sv > -0.6 && sv < 1.6) {
         const S = this._sunMat.uniforms;
-        S.tScene.value = this.hdr.texture;
+        S.tScene.value = frame;
         S.uSunUv.value.set(su, sv);
         const R = 0.004654;              // the sun's angular radius
         S.uDiscUv.value.set(R / radX, R / radY);
@@ -491,7 +590,7 @@ export class Post {
       const D = this._downMat.uniforms;
       D.uExposure.value = exposure;
       D.uThreshold.value.set(L.threshold, L.knee, L.clamp);
-      let src = this.hdr.texture, sw = this._w, sh = this._h;
+      let src = frame, sw = this._w, sh = this._h;
       for (let i = 0; i < levels; i++) {
         D.tSrc.value = src;
         D.uTexel.value.set(1 / sw, 1 / sh);
@@ -514,12 +613,12 @@ export class Post {
       out.tBloom.value = low.texture;
       out.uBloom.value = L.bloom;
     } else {
-      out.tBloom.value = this.hdr.texture;
+      out.tBloom.value = frame;
       out.uBloom.value = 0;
     }
 
     // 5. output
-    out.tScene.value = this.hdr.texture;
+    out.tScene.value = frame;
     out.uExposure.value = exposure;
     out.uLook.value.set(L.contrast, L.saturation, L.pivot, L.toe ?? 0);
     out.uGlare.value.set(L.glareCore[0], L.glareCore[1], L.glareVeil[0], L.glareVeil[1]);
@@ -527,6 +626,7 @@ export class Post {
     out.uVignetteGrain.value.set(o.vignette ? 0.35 : 0, o.grain ? 0.06 : 0);
     out.uTime.value = this._time;
     this._pass(this._outMat, null);
+    T.end();
 
     r.setRenderTarget(prevTarget);
     r.autoClear = prevAutoClear;
@@ -575,14 +675,14 @@ export class Post {
     return list;
   }
 
-  _renderNear(scene, camera) {
+  _renderNear(scene, camera, target) {
     const r = this.renderer;
     const camMask = camera.layers.mask;
     for (const l of this._lights) { l.userData._postMask = l.layers.mask; l.layers.enable(31); }
     camera.layers.set(31);
     const autoShadow = r.shadowMap.autoUpdate;
     r.shadowMap.autoUpdate = false;           // the shadow maps of this frame are done
-    r.setRenderTarget(this.hdr);
+    r.setRenderTarget(target);
     r.render(scene, camera);
     r.shadowMap.autoUpdate = autoShadow;
     camera.layers.mask = camMask;
@@ -596,15 +696,17 @@ export class Post {
 
   /** For the test API and the bench. */
   info() {
-    return { quality: this.quality, ...this.stats, options: { ...this.options }, look: { ...this.look }, clouds: !!this.clouds };
+    const g = this.gpuTimes ? Object.fromEntries(Object.entries(this.gpuTimes).map(([k, v]) => [k, +v.toFixed(3)])) : null;
+    return { quality: this.quality, ...this.stats, options: { ...this.options }, look: { ...this.look }, clouds: !!this.clouds, gpuMs: g };
   }
 
   /** Render targets this module owns (GPU memory estimate). */
   targets() {
-    return [this.hdr, ...this._bloomDown, ...this._bloomUp, this._sunVis].filter(Boolean);
+    return [this.hdr, this._comp, ...this._bloomDown, ...this._bloomUp, this._sunVis].filter(Boolean);
   }
 
   dispose() {
+    this._timer.dispose();
     for (const t of this.targets()) t.dispose();
     this._quad.geometry.dispose();
     for (const m of [this._downMat, this._upMat, this._sunMat, this._outMat]) m.dispose();
