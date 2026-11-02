@@ -12,10 +12,12 @@
 // load into one mesh per 8 km area, positions relative to the area's middle (float32 stays exact),
 // two draws each: the structures (opaque) and the white water on the sea along the breakwaters'
 // sides that face the swell (blended over the terrain's water; shore.py works out which sides).
-// The cranes carry steady red obstruction lights at night (the buildings' light program).
+// The cranes carry steady red obstruction lights at night (the buildings' light program, on the
+// rule every point light follows: its uniforms and the lights' blend, as Buildings.js has them).
 // The Dead Sea's south basin lies outside the core whose buildings Buildings.js draws: its
 // hotels (Ein Bokek, Hamei Zohar), Neve Zohar and the Dead Sea Works at Sdom come as plain
-// blocks (shore.json "blocks") with balcony rows and windows in the shader, lit at night.
+// blocks (shore.json "blocks") with balcony rows and windows in the shader, lit at night as the
+// city's windows are (js/env/README.md "Lights at night": one schedule, one window luminance).
 // Shaders: shoreShaders.js. Every program is compiled at load (_precompile), before it shows.
 //
 // Module API (main.js addModule): update(f), setTime(h), setQuality(q), reset(), dispose().
@@ -24,6 +26,8 @@
 import * as THREE from 'three';
 import { SHORE_VERT, SHORE_FRAG, KIND } from './shoreShaders.js';
 import { LIGHT_VERT, LIGHT_FRAG } from './buildingShaders.js';
+import { LUX_PER_UNIT, artificialLightGain, pointLightThreshold, lightsOn as lightsOnAt } from '../env/Environment.js';
+import { emitterBlending } from '../env/emitters.js';
 
 // far: areas whose nearest point is further away are hidden; foam: the white water band;
 // detail: the stones' cells and stains up close
@@ -32,7 +36,7 @@ const QUALITY = {
   medium: { far: 32000, foam: true, detail: 1 },
   high: { far: 45000, foam: true, detail: 1 },
 };
-const AREA = 8000;              // m: structures are grouped into one mesh per area of this size
+const AREA = 8000;             // m: structures are grouped into one mesh per area of this size
 const BELOW = 3.0;              // m below the sea the mounds and walls reach (the water hides it)
 const FOAM_Y = 0.12;            // m: the white water band floats this much over the sea
 const FOAM_W = 9.0;             // m: its width from the foot of the mound
@@ -61,6 +65,13 @@ const BLOCK = [
   { walls: [[198, 196, 188], [182, 180, 172], [206, 200, 186]], roof: [170, 170, 166], style: 0.0 },
   { walls: [[222, 210, 186], [214, 204, 184], [230, 222, 204]], roof: [188, 180, 166], style: 0.5 },
 ];
+
+/**
+ * A lit window's luminance (cd/m^2): the city's (Buildings.js WINDOW_CD), drawn by the night rule
+ * (x env.lightGain / LUX_PER_UNIT, on by env.lightsOn), so a hotel's windows are as bright as a
+ * Tel Aviv flat's. (A fixed radiance of 0.014 was 4.6 times that at night: flat, blown-out slabs.)
+ */
+const WINDOW_CD = 20;
 
 /**
  * Share of the blocks' windows lit at local solar time h: the buildings' curve (Buildings.js
@@ -184,9 +195,18 @@ export class Shore {
     this.group = new THREE.Group();
     this.group.name = 'Shore';
     this._cam = new THREE.Vector3();
+    this._dbSize = new THREE.Vector2();
     this._disposed = false;
-    this._shore = { uShore: { value: new THREE.Vector4(0.7, 1, 0.5, 0) } };
-    this._lightU = { uLightOn: { value: new THREE.Vector3(0, 0, 1) } };
+    // uWindowL: a lit window's radiance (WINDOW_CD by the night rule; 0 by day)
+    this._shore = { uShore: { value: new THREE.Vector4(0.7, 1, 0.5, 0) }, uWindowL: { value: 0 } };
+    // the cranes' lights: on, time; and the point-light rule's uniforms (AirportLights.js
+    // POINT_LIGHT_VERT_GLSL), all of them: the program is the buildings' (the same source), and
+    // one this material lacked was read as another material had left it there
+    this._lightU = {
+      uLightOn: { value: new THREE.Vector3(0, 0, 0) },
+      uThreshold: { value: 1e-7 }, uExposure: { value: 1 }, uPxAngle: { value: 1e-3 }, uGain: { value: 1 / LUX_PER_UNIT },
+      uLightsOn: { value: 0 },
+    };
     // the stand-in environment of ?stubs=1 has no atmosphere: stay off
     if (!env?.uniforms?.uSkyViewLUT || this.forcedOff) {
       this.ready = Promise.resolve();
@@ -195,17 +215,19 @@ export class Shore {
     this.attribution = 'Shore structures: Overture Maps Foundation (ODbL), (c) OpenStreetMap contributors';
     this.material = this._material(false);
     this.foamMaterial = this._material(true);
-    this.lightMaterial = new THREE.ShaderMaterial({
+    // added light with its mark as a light in the alpha (js/env/emitters.js), as the buildings'
+    // obstruction lights: LIGHT_FRAG writes a negative alpha, which additive blending (SRC_ALPHA,
+    // ONE) turned into black holes with cyan rims at night
+    this.lightMaterial = emitterBlending(new THREE.ShaderMaterial({
       name: 'ShoreLights',
       uniforms: { ...env.uniforms, ...this._lightU },
       vertexShader: LIGHT_VERT,
       fragmentShader: LIGHT_FRAG,
       transparent: true,
-      blending: THREE.AdditiveBlending,
       depthTest: true,
       depthWrite: false,
       fog: false,
-    });
+    }));
     scene.add(this.group);
     this.ready = this._load();
   }
@@ -599,15 +621,18 @@ export class Shore {
     if (!on) return;
     f.camera.getWorldPosition(this._cam);
     const sunY = this.env.sunDirection ? this.env.sunDirection.y : 1;
-    const dark = Math.min(1, Math.max(0, (0.1 - sunY) / 0.2));
-    const kDark = dark * dark * (3 - 2 * dark);
+    // the cranes' lights and the lit windows by the one schedule of every light (js/env "Lights at
+    // night": env.lightsOn, from just before sunset), as bright as its rule makes them (lightGain)
+    const env = this.env, el = env.sunElevationDeg ?? 90;
+    const kOn = env.lightsOn ?? lightsOnAt(el);
+    const lightGain = env.lightGain ?? artificialLightGain(env.exposure, el);
     let vis = 0;
     for (let i = 0; i < this.areas.length; i++) {
       const A = this.areas[i];
       const near = this._cam.distanceTo(A.center) - A.radius < this.Q.far;
       A.mesh.visible = near;
       if (A.foam) A.foam.visible = near && this.Q.foam && sunY > -0.2;
-      if (A.lights) A.lights.visible = near && kDark > 0.01;
+      if (A.lights) A.lights.visible = near && kOn > 0.01;
       if (near) vis++;
     }
     this.stats.visible = vis;
@@ -618,9 +643,23 @@ export class Shore {
     const h = this.hours;
     const breeze = Math.min(1, Math.max(0, (h - 9) / 5)) * (1 - Math.min(1, Math.max(0, (h - 18) / 4)));
     S.z = 0.35 + 0.4 * breeze;
-    // the blocks' lit windows: the share lit for the hour times the darkness
-    S.w = kDark * litShare(h);
-    this._lightU.uLightOn.value.set(kDark, performance.now() / 1000, (this.renderer.domElement?.height || 1080) / 1080);
+    // the blocks' lit windows: the city's share lit for the hour, each as bright as a city window
+    // (Buildings.js: WINDOW_CD x kOn x lightGain / LUX_PER_UNIT; 0 by day, when none is drawn)
+    S.w = litShare(h);
+    this._shore.uWindowL.value = WINDOW_CD * kOn * lightGain / LUX_PER_UNIT;
+    // the cranes' lights: on, time; the point-light rule (the eye's adaptation and the threshold of a
+    // point light; the renderer's exposure and pixel size), as Buildings.js sets its own
+    const LU = this._lightU;
+    LU.uLightOn.value.set(kOn, performance.now() / 1000, 0);
+    LU.uThreshold.value = env.pointThreshold ?? pointLightThreshold(el);
+    LU.uExposure.value = this.renderer.toneMappingExposure || 1;
+    LU.uGain.value = lightGain / LUX_PER_UNIT;
+    LU.uLightsOn.value = kOn;
+    const cam = f.camera;
+    if (cam && cam.isPerspectiveCamera) {
+      const hPx = this.renderer.getDrawingBufferSize(this._dbSize).y || 1;
+      LU.uPxAngle.value = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) / (cam.zoom || 1) / hPx;
+    }
   }
 
   setTime(hours) {
