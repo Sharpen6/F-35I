@@ -4,6 +4,7 @@
 //
 //   {type: 'tile', id, key, url}         fetch + parse one tile (sim/tools/world/README.md),
 //                                         reply {boxes: {a, b, c, wall, roof, info, vsize, count},
+//                                         shadows: {dA, dB, count}, lights: {pos, kind, count},
 //                                         chunks: [{n, lo, hi, tall}], info}
 //   {type: 'chunk', id, key, chunk, opts} full-detail geometry of one 800 m chunk:
 //                                         reply {geo: {position, normal, facade, color, info, index,
@@ -18,11 +19,16 @@ const TILE = 6400;
 const tiles = new Map();
 
 // wall styles and roof styles (sim/tools/world/buildings.py, buildingShaders.js)
-const W = { plaster: 0, stone: 1, glass: 2, office: 3, industrial: 4, house: 5, greenhouse: 6, concrete: 7, public: 8, tower: 9, oldstone: 10 };
-const R = { flat_res: 0, flat: 1, industrial: 2, tiles: 3, metal: 4, greenhouse: 5, dome: 6, concrete: 7, solar: 8 };
+const W = { plaster: 0, stone: 1, glass: 2, office: 3, industrial: 4, house: 5, greenhouse: 6, concrete: 7, public: 8, tower: 9, oldstone: 10, stack: 11, hangar: 12, frame: 13 };
+const R = { flat_res: 0, flat: 1, industrial: 2, tiles: 3, metal: 4, greenhouse: 5, dome: 6, concrete: 7, solar: 8, gilded: 9 };
 const SHAPE = { flat: 0, gabled: 1, hipped: 2, pyramidal: 3, skillion: 4, dome: 5, round: 6 };
-// surface kinds (normal.w): what the fragment shader draws
-const K = { wall: 0, roof: 1, parapet: 2, plain: 3 };
+// surface kinds (normal.w): what the fragment shader draws; door: a hangar's door wall (u runs
+// from the wall's middle, 'floors' holds its half width)
+const K = { wall: 0, roof: 1, parapet: 2, plain: 3, door: 4 };
+// style flags: 128 the volume overlaps another (walls stepped in by INSET m, buildingShaders.js
+// INSET_M); hangars: 16 doors on the - side, 32 doors in an end wall (a) instead of a long side (b)
+const FLAG_INSET = 128, DOOR_NEG = 16, DOOR_END = 32, INSET = 0.3;
+const ROUND_FILL = Math.PI / 4;      // area / box area of a circle
 
 self.onmessage = async (e) => {
   const m = e.data;
@@ -31,9 +37,12 @@ self.onmessage = async (e) => {
       const t = await loadTile(m.url);
       tiles.set(m.key, t);
       const boxes = buildBoxes(t);
-      self.postMessage({ type: 'tile', id: m.id, key: m.key, ok: true, boxes, chunks: chunkInfo(t),
+      const shadows = buildShadows(t);
+      const lights = buildLights(t);
+      self.postMessage({ type: 'tile', id: m.id, key: m.key, ok: true, boxes, shadows, lights, chunks: chunkInfo(t),
         info: { count: t.N, maxTop: t.maxTop, minBase: t.minBase } },
-      ['a', 'b', 'c', 'wall', 'roof', 'info', 'vsize'].map((k) => boxes[k].buffer));
+      [...['a', 'b', 'c', 'wall', 'roof', 'info', 'vsize'].map((k) => boxes[k].buffer), shadows.dA.buffer, shadows.dB.buffer,
+        lights.pos.buffer, lights.kind.buffer]);
     } else if (m.type === 'chunk') {
       const t = tiles.get(m.key);
       if (!t) throw new Error(`tile ${m.key} not loaded`);
@@ -99,14 +108,41 @@ function parse(buf) {
   for (let i = 0; i < Rn; i++) t.vert0[i + 1] = t.vert0[i] + t.ringN[i];
   t.chunkOf = new Uint8Array(N);
   for (let c = 0; c < t.nch * t.nch; c++) for (let i = t.starts[c]; i < t.starts[c + 1]; i++) t.chunkOf[i] = c;
+  // tile-local vertex positions; the walls of volumes overlapping another step in a little
+  t.px = new Float32Array(V); t.pz = new Float32Array(V);
+  for (let k = 0; k < V; k++) { t.px[k] = t.vx[k] * t.q + (t.ox - t.x0); t.pz[k] = t.vz[k] * t.q + (t.oz - t.z0); }
   t.area = new Float32Array(N);
   for (let i = 0; i < N; i++) t.area[i] = polygonArea(t, i);
+  for (let i = 0; i < N; i++) if (t.style[i] & FLAG_INSET) insetRings(t, i, INSET);
   return t;
 }
 
 /** Tile-local x / z (metres from the tile's NW corner) of vertex k. */
-const lx = (t, k) => t.vx[k] * t.q + (t.ox - t.x0);
-const lz = (t, k) => t.vz[k] * t.q + (t.oz - t.z0);
+const lx = (t, k) => t.px[k];
+const lz = (t, k) => t.pz[k];
+
+/** Moves every ring of building b inwards by d (mitred corners, the miter capped at 3 d). */
+function insetRings(t, b, d) {
+  for (let r = t.ring0[b]; r < t.ring0[b + 1]; r++) {
+    const s0 = t.vert0[r], n = t.ringN[r];
+    if (n < 3) continue;
+    const ox = new Float64Array(n), oz = new Float64Array(n);
+    for (let k = 0; k < n; k++) {
+      const p = s0 + ((k + n - 1) % n), c = s0 + k, q = s0 + ((k + 1) % n);
+      let ex = t.px[c] - t.px[p], ez = t.pz[c] - t.pz[p];
+      let fx = t.px[q] - t.px[c], fz = t.pz[q] - t.pz[c];
+      const le = Math.hypot(ex, ez) || 1, lf = Math.hypot(fx, fz) || 1;
+      // inward normals of the two edges (the walls face (-dz, dx))
+      const n1x = ez / le, n1z = -ex / le, n2x = fz / lf, n2z = -fx / lf;
+      let mx = n1x + n2x, mz = n1z + n2z;
+      const lm = Math.hypot(mx, mz);
+      if (lm < 1e-6) { mx = n1x; mz = n1z; } else { mx /= lm; mz /= lm; }
+      const k1 = Math.max(mx * n1x + mz * n1z, 1 / 3);
+      ox[k] = t.px[c] + mx * d / k1; oz[k] = t.pz[c] + mz * d / k1;
+    }
+    for (let k = 0; k < n; k++) { t.px[s0 + k] = ox[k]; t.pz[s0 + k] = oz[k]; }
+  }
+}
 const vsizeOf = (code) => 2 * Math.pow(1000, code / 255);
 
 function polygonArea(t, b) {
@@ -183,6 +219,72 @@ function buildBoxes(t) {
     info[o] = t.floorh[i]; info[o + 1] = t.bay[i]; info[o + 2] = t.seed[i]; info[o + 3] = t.floors[i];
   }
   return { a, b, c, wall, roof, info, vsize, count: N };
+}
+
+// ------------------------------------------------------------------------------------ ground shadows
+// One decal per building of 3 m or more (buildingShaders.js SHADOW_VERT), sorted by ground level,
+// highest first: where shadows overlap, the first decal drawn keeps the pixel (depth test).
+//   dA: x, z (tile-local + 896 m, 0.125 m), yaw (pi / 65536), half length (0.05 m)
+//   dB: half width (0.05 m), ground level (0.1 m + 32768), height (0.1 m), visibility size (code)
+function buildShadows(t) {
+  const N = t.N;
+  const idx = [];
+  for (let i = 0; i < N; i++) if (t.top[i] >= 30) idx.push(i);
+  idx.sort((p, q) => t.base[q] - t.base[p]);
+  const n = idx.length;
+  const dA = new Uint16Array(n * 4), dB = new Uint16Array(n * 4);
+  const q8 = (v) => Math.max(0, Math.min(65535, Math.round(v)));
+  for (let k = 0; k < n; k++) {
+    const i = idx[k];
+    const ha = t.oa[i] * 0.05, hb = t.ob[i] * 0.05;
+    const s = Math.min(1, Math.max(0.72, Math.sqrt(t.area[i] / Math.max(4 * ha * hb, 1))));
+    const x = t.cx[i] * t.q + (t.ox - t.x0), z = t.cz[i] * t.q + (t.oz - t.z0);
+    const o = k * 4;
+    dA[o] = q8((x + 896) / 0.125); dA[o + 1] = q8((z + 896) / 0.125); dA[o + 2] = t.yaw[i]; dA[o + 3] = q8(ha * s / 0.05);
+    dB[o] = q8(hb * s / 0.05); dB[o + 1] = t.base[i] + 32768; dB[o + 2] = t.top[i]; dB[o + 3] = t.vs[i];
+  }
+  return { dA, dB, count: n };
+}
+
+// ------------------------------------------------------------------------------------ obstruction lights
+// Red lights on structures of 45 m or more (ICAO Annex 14): at the roof corners of large roofs,
+// round the rim of stacks, on the top of slender towers; an intermediate ring half way up
+// structures of 150 m or more. kind: 1 flashing (medium intensity: 150 m or more, and stacks) /
+// 0 steady, and a phase (s) shared by one structure's lights.
+function buildLights(t) {
+  const pos = [], kind = [];
+  for (let i = 0; i < t.N; i++) {
+    const H = t.top[i] * 0.1;
+    if (H < 45) continue;
+    const g0 = t.base[i] * 0.1;
+    const style = t.style[i] & 15;
+    const stack = style === W.stack;
+    const flash = stack || H >= 150 ? 1 : 0;
+    const phase = t.seed[i] / 255;
+    const yaw = t.yaw[i] / 65536 * Math.PI;
+    const ax = Math.cos(yaw), az = Math.sin(yaw), bx = -az, bz = ax;
+    const ha = t.oa[i] * 0.05, hb = t.ob[i] * 0.05;
+    const cx = t.cx[i] * t.q + (t.ox - t.x0), cz = t.cz[i] * t.q + (t.oz - t.z0);
+    const round = t.area[i] / Math.max(4 * ha * hb, 1) < ROUND_FILL + 0.06;
+    const pts = [];
+    if (stack || (round && ha < 20)) {
+      const r = Math.min(ha, hb) * 0.92;
+      for (let k = 0; k < 3; k++) { const th = k * 2.0944 + phase * 6.283; pts.push([Math.cos(th) * r, Math.sin(th) * r]); }
+    } else if (ha * hb * 4 > 400) {
+      const ia = Math.max(ha - 1, 0.5), ib = Math.max(hb - 1, 0.5);
+      pts.push([-ia, -ib], [ia, -ib], [ia, ib], [-ia, ib]);
+    } else {
+      pts.push([0, 0]);
+    }
+    const levels = H >= 150 ? [H + 0.5, 0.5 * H] : [H + 0.5];
+    for (const y of levels) {
+      for (const [u, w] of pts) {
+        pos.push(cx + ax * u + bx * w, g0 + y, cz + az * u + bz * w);
+        kind.push(flash, phase * 1.5);
+      }
+    }
+  }
+  return { pos: new Float32Array(pos), kind: new Float32Array(kind), count: pos.length / 3 };
 }
 
 // ------------------------------------------------------------------------------------ chunk geometry
@@ -306,6 +408,14 @@ function building(t, i, B, ccx, ccz, parapets, roofBoxes) {
   const sW = surface(t, i, false);
   const sR = surface(t, i, true);
   const bayM = Math.max(t.bay[i] * 0.05, 1);
+  // OBB frame (chunk-local)
+  const yaw = t.yaw[i] / 65536 * Math.PI;
+  const ax_ = Math.cos(yaw), az_ = Math.sin(yaw);       // long axis a
+  const bx_ = -az_, bz_ = ax_;                          // short axis b
+  // a hangar's doors: in the wall facing this way (an end wall of a vault, else a long side)
+  const hangar = style === W.hangar;
+  const dEnd = (t.style[i] & DOOR_END) !== 0, dSgn = (t.style[i] & DOOR_NEG) ? -1 : 1;
+  const dx_ = (dEnd ? ax_ : bx_) * dSgn, dz_ = (dEnd ? az_ : bz_) * dSgn;
   // ---- walls (outer ring and holes), parapet inner faces ----
   for (let r = t.ring0[i]; r < t.ring0[i + 1]; r++) {
     const s0 = t.vert0[r], n = t.ringN[r];
@@ -318,12 +428,15 @@ function building(t, i, B, ccx, ccz, parapets, roofBoxes) {
       B._grow(8, 12);
       sW.kind = K.wall;
       B.setNormal(sW, -dz, 0, dx);
-      const U = uSpan(L, bayM);
-      const v0 = B.v(ax, bottom, az, 0, bottom - g0, sW);
+      let U0 = 0, U = uSpan(L, bayM);
+      const door = hangar && r === t.ring0[i] && (-dz * dx_ + dx * dz_) / L > 0.8;
+      if (door) { sW.kind = K.door; U0 = -L / 2; U = L / 2; sW.floors = Math.min(255, Math.round(L / 2)); }
+      const v0 = B.v(ax, bottom, az, U0, bottom - g0, sW);
       const v1 = B.v(bx, bottom, bz, U, bottom - g0, sW);
       const v2 = B.v(bx, wallTop, bz, U, wallTop - g0, sW);
-      const v3 = B.v(ax, wallTop, az, 0, wallTop - g0, sW);
+      const v3 = B.v(ax, wallTop, az, U0, wallTop - g0, sW);
       B.quad(v0, v1, v2, v3);
+      if (door) { sW.kind = K.wall; sW.floors = t.floors[i]; }
       if (parapet > 0) {
         sW.kind = K.parapet;
         B.setNormal(sW, dz, 0, -dx);
@@ -336,10 +449,6 @@ function building(t, i, B, ccx, ccz, parapets, roofBoxes) {
     }
   }
   sW.kind = K.wall;
-  // OBB frame (chunk-local)
-  const yaw = t.yaw[i] / 65536 * Math.PI;
-  const ax_ = Math.cos(yaw), az_ = Math.sin(yaw);       // long axis a
-  const bx_ = -az_, bz_ = ax_;                          // short axis b
   const ocx = t.cx[i] * t.q + (t.ox - t.x0) - ccx, ocz = t.cz[i] * t.q + (t.oz - t.z0) - ccz;
   const P = (u, w) => [ocx + ax_ * u + bx_ * w, ocz + az_ * u + bz_ * w];
 
@@ -347,7 +456,7 @@ function building(t, i, B, ccx, ccz, parapets, roofBoxes) {
     // ---- flat roof (also under domes and vaults) ----
     flatRoof(t, i, B, ccx, ccz, flat ? roofY : eave, sR, ocx, ocz, ax_, az_);
     if (shape === SHAPE.dome) dome(B, sR, P, ha, hb, eave, rise, sR);
-    else if (shape === SHAPE.round) vault(B, sR, sW, P, ha, hb, eave, rise, ax_, az_, bx_, bz_, g0);
+    else if (shape === SHAPE.round) vault(B, sR, sW, P, ha, hb, eave, rise, ax_, az_, bx_, bz_, g0, hangar && dEnd ? dSgn : 0, t.floors[i]);
     else if (roofBoxes && parapet > 0 && t.area[i] > 160 && (style === W.plaster || style === W.stone || style === W.tower || style === W.office || style === W.oldstone || style === W.public)) {
       roofHouse(t, i, B, sW, P, ha, hb, roofY, ax_, az_, bx_, bz_, g0, ccx, ccz);
     }
@@ -484,8 +593,9 @@ function dome(B, sR, P, ha, hb, y, rise) {
   }
 }
 
-/** Barrel vault along the long axis (hangars): arch across b, end walls closing it. */
-function vault(B, sR, sW, P, ha, hb, y, rise, ax_, az_, bx_, bz_, g0) {
+/** Barrel vault along the long axis (hangars): arch across b, end walls closing it; the end wall
+ *  at doorSgn * a (if not 0) holds the doors. */
+function vault(B, sR, sW, P, ha, hb, y, rise, ax_, az_, bx_, bz_, g0, doorSgn = 0, floors = 0) {
   const SEG = 10;
   B._grow((SEG + 1) * 2 + (SEG + 2) * 2, SEG * 6 + SEG * 6);
   const prof = [];
@@ -504,14 +614,20 @@ function vault(B, sR, sW, P, ha, hb, y, rise, ax_, az_, bx_, bz_, g0) {
   // end walls (semi-ellipses at +-ha)
   for (const sgn of [1, -1]) {
     B.setNormal(sW, sgn * ax_, 0, sgn * az_);
+    const door = sgn === doorSgn;
+    sW.kind = door ? K.door : K.wall;
+    sW.floors = door ? Math.min(255, Math.round(hb)) : floors;
+    const u0 = door ? 0 : hb;                         // the door wall: u from its middle
     const c = P(sgn * ha, 0);
-    const ci = B.v(c[0], y, c[1], hb, 0.0 + y - g0, sW);
-    const ring = prof.map(([w, yy]) => { const p = P(sgn * ha, w); return B.v(p[0], yy, p[1], hb - sgn * w, yy - g0, sW); });
+    const ci = B.v(c[0], y, c[1], u0, 0.0 + y - g0, sW);
+    const ring = prof.map(([w, yy]) => { const p = P(sgn * ha, w); return B.v(p[0], yy, p[1], u0 - sgn * w, yy - g0, sW); });
     for (let k = 0; k < SEG; k++) {
       if (sgn > 0) B.tri(ci, ring[k + 1], ring[k]);
       else B.tri(ci, ring[k], ring[k + 1]);
     }
   }
+  sW.kind = K.wall;
+  sW.floors = floors;
 }
 
 function insideFootprint(t, i, x, z) {

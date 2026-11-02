@@ -10,18 +10,26 @@
 //           last tenth of the streaming distance `far`, so nothing pops (not even a late tile).
 //   chunks  800 m chunks within `near` (further for chunks with tall buildings) get the full
 //           geometry: walls along the real footprint, parapets, roof houses, pitched roofs, domes,
-//           vaults. The tile's boxes of those chunks are masked in the vertex shader.
+//           vaults. The switch cross-fades over FADE_S: the chunk and the tile's boxes of that
+//           chunk are both drawn with complementary dither masks (uFade per chunk), then the
+//           boxes are dropped in the vertex shader.
 // Shading (buildingShaders.js): procedural facades and roofs, lit windows at night, the
-// terrain's sun, sky and aerial perspective. Shadows: every building receives the sun's shadow
-// map; the full-detail chunks also cast into it once the shadow camera covers more than the
-// aircraft (half size >= 150 m).
+// terrain's sun, sky and aerial perspective.
+// Shadows: every building receives the sun's shadow map, and the full-detail chunks cast into it
+// once the shadow camera covers more than the aircraft (half size >= 150 m: only near the ground
+// with the lighting of js/env). At every height each building also casts a ground shadow: a
+// decal of its box's shadow (SHADOW_VERT, within Q.shadowFar), faded out where the shadow map
+// holds the buildings. Buildings are not shadowed by other buildings beyond the shadow map.
+// Obstruction lights: red lights on structures of 45 m or more at dusk and night (LIGHT_VERT).
 //
 // Module API (main.js addModule): update(f), setTime(h, doy), setQuality(q), reset(), dispose().
-// Off with ?buildings=0 or the menu's "3D buildings" option (app.settings.buildings).
+// Off with ?buildings=0 or the menu's "3D buildings" option (app.settings.buildings); ground
+// shadows off with ?bshadows=0, obstruction lights with ?blights=0.
 // ?buildingsDebug=1 tints the boxes blue and the full-detail chunks red.
+// Test hook: speckleCheck() (salt and pepper pixels in the frame last drawn on the canvas).
 
 import * as THREE from 'three';
-import { BOX_VERT, CHUNK_VERT, BUILDING_FRAG, DEPTH_FRAG } from './buildingShaders.js';
+import { BOX_VERT, CHUNK_VERT, BUILDING_FRAG, DEPTH_FRAG, LIGHT_VERT, LIGHT_FRAG, SHADOW_VERT, SHADOW_FRAG } from './buildingShaders.js';
 
 const TILE = 6400;
 const CORE_HALF = 51200;
@@ -30,15 +38,17 @@ const CHUNK = TILE / NCH;
 const MARGIN = 900;                  // buildings belong to the tile of their centre: they reach a bit over it
 
 // near: full-detail radius (m); visK: visibility distance per metre of building size; far: tiles
-// further than this are not loaded; maxChunks: full-detail chunks at most
+// further than this are not loaded; maxChunks: full-detail chunks at most; shadowFar: ground
+// shadow decals within this distance (m); shadowVisK: their visibility distance per metre of size
 const QUALITY = {
-  low: { near: 1200, visK: 300, far: 15000, maxChunks: 24, parapets: true, roofBoxes: false },
-  medium: { near: 2000, visK: 450, far: 21000, maxChunks: 44, parapets: true, roofBoxes: true },
-  high: { near: 3000, visK: 650, far: 28000, maxChunks: 72, parapets: true, roofBoxes: true },
+  low: { near: 1200, visK: 300, far: 15000, maxChunks: 24, parapets: true, roofBoxes: false, shadowFar: 4000, shadowVisK: 150 },
+  medium: { near: 2000, visK: 450, far: 21000, maxChunks: 44, parapets: true, roofBoxes: true, shadowFar: 8000, shadowVisK: 250 },
+  high: { near: 3000, visK: 650, far: 28000, maxChunks: 72, parapets: true, roofBoxes: true, shadowFar: 12000, shadowVisK: 350 },
 };
 
 const MAX_TILE_LOADS = 2;            // tiles being fetched / parsed at once
 const MAX_CHUNK_BUILDS = 2;          // chunks being built at once
+const FADE_S = 0.6;                  // cross-fade between a chunk's boxes and its full detail (s)
 
 /** Share of the windows lit at local solar time h (an evening peak, a quiet small hours). */
 function litFraction(h) {
@@ -84,6 +94,16 @@ function boxTemplate() {
   };
 }
 
+/** The shadow decal: a hexagon whose corners the vertex shader places (position.x = corner). */
+function hexTemplate() {
+  const P = new Float32Array(18);
+  for (let k = 0; k < 6; k++) P[k * 3] = k;
+  return {
+    position: new THREE.BufferAttribute(P, 3),
+    index: new THREE.BufferAttribute(new Uint16Array([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]), 1),
+  };
+}
+
 /** Distance from point (x, y, z) to the box [x0, x1] x [y0, y1] x [z0, z1]. */
 function boxDistance(x, y, z, x0, y0, z0, x1, y1, z1) {
   const dx = x < x0 ? x0 - x : x > x1 ? x - x1 : 0;
@@ -104,12 +124,15 @@ export class Buildings {
     this.attribution = 'Buildings: © OpenStreetMap contributors and Microsoft ML Building Footprints (ODbL), via the Overture Maps Foundation; air bases traced from ESA WorldCover Sentinel-2 imagery (CC BY 4.0).';
     const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
     this.forcedOff = params.get('buildings') === '0';
+    this.shadowsOn = params.get('bshadows') !== '0';
+    this.lightsOn = params.get('blights') !== '0';
     this.quality = 'high';
     this.Q = QUALITY.high;
     this.hours = 12;
     this.index = null;
     this.tiles = new Map();
-    this.stats = { tiles: 0, boxes: 0, chunks: 0, chunkVertices: 0, chunkMB: 0, boxMB: 0 };
+    this._tileList = [];                 // the same tiles, for the per-frame loops (no iterators)
+    this.stats = { tiles: 0, boxes: 0, chunks: 0, chunkVertices: 0, chunkMB: 0, boxMB: 0, shadows: 0, shadowMB: 0, lights: 0, fading: 0, off: false };
 
     this.group = new THREE.Group();
     this.group.name = 'Buildings';
@@ -124,8 +147,26 @@ export class Buildings {
       uDebug: { value: params.get('buildingsDebug') === '1' ? 1 : 0 },
     };
     this._template = boxTemplate();
+    this._hex = hexTemplate();
     this.chunkMaterial = this._material(false);
-    this.chunkDepthMaterial = this._depthMaterial(false);
+    this.chunkDepthMaterial = this._depthMaterial();
+    // ground shadow decals and obstruction lights: one material each for every tile
+    this._shadowU = {
+      uShadowSun: { value: new THREE.Vector4(0, 1, 0, 0) },
+      uShadowVis: { value: new THREE.Vector4(this.Q.shadowVisK, this.Q.shadowFar, 0, 0) },
+      uRealShadow: { value: new THREE.Vector4(0, 0, 0, 0) },
+      uShadowGamma: { value: 1 },
+      uShadowView: { value: new THREE.Vector4(0, 0, 1, 1) },
+    };
+    this.shadowMaterial = this._shadowMaterial();
+    this._lightU = { uLightOn: { value: new THREE.Vector3(0, 0, 1) } };
+    this.lightMaterial = this._lightMaterial();
+    this._fading = new Set();            // chunks cross-fading with their boxes
+    this._cand = [];                     // _streamChunks: candidates, pooled (no garbage per frame)
+    this._candPool = [];
+    this._byP = (a, b) => a.p - b.p;
+    this._frame = 0;
+    this._lastT = 0;
     this._cam = new THREE.Vector3();
     this._reqId = 0;
     this._waiting = new Map();
@@ -161,11 +202,14 @@ export class Buildings {
       for (const t of idx.tiles) {
         if (!t.count) continue;
         const key = `${t.ix}_${t.iz}`;
-        this.tiles.set(key, {
+        const tile = {
           key, ix: t.ix, iz: t.iz, file: t.file, count: t.count, maxTop: t.maxTop, minBase: t.minBase,
           x0: -CORE_HALF + t.ix * TILE, z0: -CORE_HALF + t.iz * TILE, state: 'idle', retryAt: 0,
           mesh: null, vsize: null, chunks: null, lod: new Map(), dist: Infinity,
-        });
+          fade: null, boxMat: null, boxDither: null, fadeMark: -1, shadowMesh: null, lights: null,
+        };
+        this.tiles.set(key, tile);
+        this._tileList.push(tile);
       }
       this._precompile();
     } catch (e) {
@@ -189,36 +233,84 @@ export class Buildings {
   }
 
   // ------------------------------------------------------------------------------ materials
-  _material(box) {
+  /**
+   * Box (one per tile: its uFade) or chunk material; dither: the cross-fading variant (discard
+   * costs the early depth test, so only fading meshes use it). fade: the tile's uFade to share.
+   */
+  _material(box, dither = false, fade = null) {
     const lights = THREE.UniformsUtils.clone(THREE.UniformsLib.lights);
     const uniforms = { ...lights, ...this.env.uniforms, ...this._shared };
-    if (box) uniforms.uMask = { value: new THREE.Vector2(0, 0) };
+    if (box) uniforms.uFade = fade || { value: Array.from({ length: 16 }, () => new THREE.Vector4()) };
+    else if (dither) uniforms.uFadeIn = { value: 0 };
+    const defines = box ? { BOX: 1 } : {};
+    if (dither) defines.DITHER = 1;
     return new THREE.ShaderMaterial({
-      name: box ? 'BuildingBoxes' : 'BuildingChunks',
+      name: (box ? 'BuildingBoxes' : 'BuildingChunks') + (dither ? 'Dither' : ''),
       uniforms,
       vertexShader: box ? BOX_VERT : CHUNK_VERT,
       fragmentShader: BUILDING_FRAG,
-      defines: box ? { BOX: 1 } : {},
+      defines,
       lights: true,
       fog: false,
     });
   }
 
-  _depthMaterial(box) {
-    const uniforms = { ...this.env.uniforms, ...this._shared };
-    if (box) uniforms.uMask = { value: new THREE.Vector2(0, 0) };
+  _depthMaterial() {
     return new THREE.ShaderMaterial({
-      name: box ? 'BuildingBoxesDepth' : 'BuildingChunksDepth',
-      uniforms,
-      vertexShader: box ? BOX_VERT : CHUNK_VERT,
+      name: 'BuildingChunksDepth',
+      uniforms: { ...this.env.uniforms, ...this._shared },
+      vertexShader: CHUNK_VERT,
       fragmentShader: DEPTH_FRAG,
-      defines: box ? { BOX: 1, DEPTH_PASS: 1 } : { DEPTH_PASS: 1 },
+      defines: { DEPTH_PASS: 1 },
     });
   }
 
-  /** Compiles the two building programs in the background (no hitch when the first tile shows). */
+  /** Ground shadows: multiplied into what is drawn (dst * src), depth-tested and depth-written. */
+  _shadowMaterial() {
+    return new THREE.ShaderMaterial({
+      name: 'BuildingShadows',
+      uniforms: { ...this.env.uniforms, ...this._shadowU },
+      vertexShader: SHADOW_VERT,
+      fragmentShader: SHADOW_FRAG,
+      transparent: true,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.ZeroFactor,
+      blendDst: THREE.SrcColorFactor,
+      depthTest: true,
+      depthWrite: true,
+      depthFunc: THREE.LessDepth,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+  }
+
+  _lightMaterial() {
+    return new THREE.ShaderMaterial({
+      name: 'BuildingLights',
+      uniforms: { ...this.env.uniforms, ...this._lightU },
+      vertexShader: LIGHT_VERT,
+      fragmentShader: LIGHT_FRAG,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthTest: true,
+      depthWrite: false,
+      fog: false,
+    });
+  }
+
+  /**
+   * Compiles the building programs in the background (no hitch when the first tile shows): boxes
+   * and chunks with their cross-fade variants, ground shadows, lights, and the chunks' shadow-map
+   * depth program. Program parameters depend on the render target (colour space, tone mapping):
+   * the depth program is compiled with a target bound, as the shadow pass draws it, and with
+   * parallel compilation the colour programs both for the canvas and for a post chain's target.
+   * They depend on the lights too: with the sun casting shadows (by day) and without (at night,
+   * and at start-up, before js/env switches them on), so both are compiled, the depth program
+   * only with (the shadow pass runs only then).
+   */
   _precompile() {
-    const tmp = new THREE.Scene();
+    const tmp = new THREE.Scene(), tmpD = new THREE.Scene();
     const cam = new THREE.PerspectiveCamera(60, 1, 1, 1000);
     const g = new THREE.InstancedBufferGeometry();
     g.setIndex(this._template.index.clone());
@@ -226,34 +318,69 @@ export class Buildings {
     for (const k of ['iA', 'iB', 'iC', 'iInfo']) g.setAttribute(k, new THREE.InstancedBufferAttribute(new Float32Array(4), 4));
     for (const k of ['iWall', 'iRoof']) g.setAttribute(k, new THREE.InstancedBufferAttribute(new Uint8Array(4), 4, true));
     g.instanceCount = 1;
-    const box = new THREE.Mesh(g, this._boxMaterialProto = this._material(true));
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
     cg.setAttribute('aNrm', new THREE.BufferAttribute(new Int8Array(12), 4, true));
     cg.setAttribute('aFac', new THREE.BufferAttribute(new Int16Array(6), 2));
     cg.setAttribute('aCol', new THREE.BufferAttribute(new Uint8Array(12), 4, true));
     cg.setAttribute('aInf', new THREE.BufferAttribute(new Uint8Array(12), 4));
-    const chunk = new THREE.Mesh(cg, this.chunkMaterial);
-    for (const m of [box, chunk]) { m.frustumCulled = false; m.receiveShadow = true; tmp.add(m); }
-    const done = () => { g.dispose(); cg.dispose(); };
+    const sg = new THREE.InstancedBufferGeometry();
+    sg.setIndex(this._hex.index.clone());
+    sg.setAttribute('position', this._hex.position.clone());
+    for (const k of ['dA', 'dB']) sg.setAttribute(k, new THREE.InstancedBufferAttribute(new Uint16Array(4), 4));
+    sg.instanceCount = 1;
+    const pg = new THREE.BufferGeometry();
+    pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+    pg.setAttribute('aLight', new THREE.BufferAttribute(new Float32Array(2), 2));
+    // the prototypes stay alive: a program is freed with the last material using it
+    this._boxMaterialProto = this._material(true);
+    this._boxDitherProto = this._material(true, true);
+    this._chunkDitherProto = this._material(false, true);
+    const objs = [new THREE.Mesh(g, this._boxMaterialProto), new THREE.Mesh(g, this._boxDitherProto),
+      new THREE.Mesh(cg, this.chunkMaterial), new THREE.Mesh(cg, this._chunkDitherProto),
+      new THREE.Mesh(sg, this.shadowMaterial), new THREE.Points(pg, this.lightMaterial)];
+    for (const m of objs) { m.frustumCulled = false; m.receiveShadow = true; tmp.add(m); }
+    const dm = new THREE.Mesh(cg, this.chunkDepthMaterial);
+    dm.frustumCulled = false;
+    tmpD.add(dm);
+    const rt = new THREE.WebGLRenderTarget(1, 1);
+    const done = () => { g.dispose(); cg.dispose(); sg.dispose(); pg.dispose(); rt.dispose(); };
+    const r = this.renderer;
+    const prev = r.getRenderTarget();
+    const sun = this.env?.sunLight, cast = sun ? sun.castShadow : false;
+    const states = sun && r.shadowMap.enabled ? [false, true] : [cast];
+    // in parallel where the browser can (KHR_parallel_shader_compile), else now (the menu shows)
+    const parallel = r.extensions.has('KHR_parallel_shader_compile');
+    const p = [];
     try {
-      // in parallel where the browser can (KHR_parallel_shader_compile), else now (the menu shows)
-      if (this.renderer.extensions.has('KHR_parallel_shader_compile')) {
-        this.renderer.compileAsync(tmp, cam, this.scene).then(done, (e) => { console.warn('Buildings: precompile', e); done(); });
-      } else {
-        this.renderer.compile(tmp, cam, this.scene);
-        done();
+      for (const s of states) {
+        if (sun) sun.castShadow = s;     // only for these calls: put back below, before any frame
+        if (parallel) {
+          p.push(r.compileAsync(tmp, cam, this.scene));
+          r.setRenderTarget(rt);
+          if (s || states.length === 1) p.push(r.compileAsync(tmpD, cam, this.scene));
+          p.push(r.compileAsync(tmp, cam, this.scene));
+        } else {
+          r.compile(tmp, cam, this.scene);
+          r.setRenderTarget(rt);
+          if (s || states.length === 1) r.compile(tmpD, cam, this.scene);
+        }
+        r.setRenderTarget(prev);
       }
     } catch (e) {
+      r.setRenderTarget(prev);
       console.warn('Buildings: precompile', e);
-      done();
+    } finally {
+      if (sun) sun.castShadow = cast;
     }
+    Promise.all(p).then(done, (e) => { console.warn('Buildings: precompile', e); done(); });
   }
 
   // ------------------------------------------------------------------------------ module API
   update(f) {
     const on = !this.forcedOff && !this.failed && this.app?.settings?.buildings !== false;
     if (this.group.visible !== on) this.group.visible = on;
+    this.stats.off = !on;                // for the tests: nothing will stream
     if (!on) {
       // switched off: free the video memory too (switching on streams everything in again)
       if (this._loaded) { for (const t of this.tiles.values()) this._unloadTile(t); this._loaded = false; }
@@ -272,10 +399,18 @@ export class Buildings {
 
   setQuality(q) {
     if (!QUALITY[q]) return;
+    const old = this.Q;
     this.quality = q;
     this.Q = QUALITY[q];
     this._shared.uVis.value.x = this.Q.visK;
     this._shared.uVis.value.w = this.Q.far;
+    this._shadowU.uShadowVis.value.x = this.Q.shadowVisK;
+    this._shadowU.uShadowVis.value.y = this.Q.shadowFar;
+    // chunks built with the other options (roof houses, parapets) are built again: released
+    // here, the streaming asks for them anew (tiles beyond the new `far` go by themselves)
+    if (old.parapets !== this.Q.parapets || old.roofBoxes !== this.Q.roofBoxes) {
+      for (const t of this._tileList) for (const k of [...t.lod.keys()]) this._releaseChunk(t, k, true);
+    }
   }
 
   reset() {
@@ -284,12 +419,11 @@ export class Buildings {
 
   dispose() {
     this._disposed = true;
-    for (const t of this.tiles.values()) this._unloadTile(t);
+    for (const t of this._tileList) this._unloadTile(t);
     this.worker?.terminate();
     this.scene.remove(this.group);
-    this.chunkMaterial.dispose();
-    this.chunkDepthMaterial.dispose();
-    this._boxMaterialProto?.dispose();
+    for (const m of [this.chunkMaterial, this.chunkDepthMaterial, this.shadowMaterial, this.lightMaterial,
+      this._boxMaterialProto, this._boxDitherProto, this._chunkDitherProto]) m?.dispose();
   }
 
   // ------------------------------------------------------------------------------ tiles (boxes)
@@ -297,7 +431,8 @@ export class Buildings {
     const c = this._cam, far = this.Q.far;
     let want = null, wantD = Infinity;
     const now = performance.now();
-    for (const t of this.tiles.values()) {
+    for (let i = 0; i < this._tileList.length; i++) {
+      const t = this._tileList[i];
       const d = boxDistance(c.x, c.y, c.z, t.x0 - MARGIN, t.minBase, t.z0 - MARGIN, t.x0 + TILE + MARGIN, t.maxTop, t.z0 + TILE + MARGIN);
       t.dist = d;
       if (t.state === 'ready' && d > far + 3000) this._unloadTile(t);
@@ -318,6 +453,8 @@ export class Buildings {
       if (t.token !== token) return;     // superseded: the newer request owns the worker's copy
       if (t.state !== 'loading') { this.worker.postMessage({ type: 'drop', key: t.key }); return; }
       this._buildTileMesh(t, m.boxes);
+      this._buildShadowMesh(t, m.shadows);
+      this._buildLights(t, m.lights);
       t.chunks = m.chunks;
       t.state = 'ready';
     } catch (e) {
@@ -347,6 +484,9 @@ export class Buildings {
       Math.hypot(TILE / 2 + MARGIN, TILE / 2 + MARGIN, h / 2) + 20);
     const material = this._boxMaterialProto && !this._boxMaterialProto.userData.used ? this._boxMaterialProto : this._material(true);
     material.userData.used = true;
+    material.uniforms.uFade.value.forEach((v) => v.set(0, 0, 0, 0));
+    t.boxMat = material;
+    t.fade = material.uniforms.uFade;
     const mesh = new THREE.Mesh(g, material);
     mesh.name = `buildings_${t.key}`;
     mesh.position.set(t.x0, 0, t.z0);
@@ -360,18 +500,82 @@ export class Buildings {
     mesh.updateMatrixWorld(true);
     t.mesh = mesh;
     t.vsize = b.vsize;
-    t.mask = [0, 0];
     t.boxBytes = b.a.byteLength * 3 + b.wall.byteLength * 3;
   }
 
+  /** The tile's ground shadow decals (sorted by ground level in the worker). */
+  _buildShadowMesh(t, sh) {
+    if (!sh || !sh.count || !this.shadowsOn) return;     // ?bshadows=0: not built at all
+    const g = new THREE.InstancedBufferGeometry();
+    g.setIndex(this._hex.index.clone());
+    g.setAttribute('position', this._hex.position.clone());
+    g.setAttribute('dA', new THREE.InstancedBufferAttribute(sh.dA, 4));
+    g.setAttribute('dB', new THREE.InstancedBufferAttribute(sh.dB, 4));
+    g.instanceCount = sh.count;
+    g.boundingSphere = t.mesh.geometry.boundingSphere.clone();
+    g.boundingSphere.radius += 300;                    // shadows reach beyond the buildings
+    const mesh = new THREE.Mesh(g, this.shadowMaterial);
+    mesh.name = `buildingShadows_${t.key}`;
+    mesh.position.set(t.x0, 0, t.z0);
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    // first among the transparent things: after the opaque world (terrain, buildings, trees),
+    // before clouds and effects, which must not be darkened (draped layers that should be
+    // shadowed draw before this)
+    mesh.renderOrder = -50;
+    mesh.visible = false;
+    mesh.onBeforeRender = this._shadowHook || (this._shadowHook = (renderer) => {
+      // a target holds radiance (a post chain); the canvas holds display values
+      const U = this._shadowU;
+      U.uShadowGamma.value = renderer.getRenderTarget() ? 1 : 1 / 2.2;
+      // the viewport (pixels) the fragment shader turns gl_FragCoord into view rays with
+      const v = renderer.getCurrentViewport(this._vp || (this._vp = new THREE.Vector4()));
+      U.uShadowView.value.set(v.x, v.y, 1 / Math.max(v.z, 1), 1 / Math.max(v.w, 1));
+    });
+    this.group.add(mesh);
+    mesh.updateMatrixWorld(true);
+    t.shadowMesh = mesh;
+    t.shadowBytes = sh.dA.byteLength * 2;
+  }
+
+  /** The tile's obstruction lights (one Points object). */
+  _buildLights(t, li) {
+    if (!li || !li.count || !this.lightsOn) return;       // ?blights=0: not built at all
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(li.pos, 3));
+    g.setAttribute('aLight', new THREE.BufferAttribute(li.kind, 2));
+    g.computeBoundingSphere();
+    const pts = new THREE.Points(g, this.lightMaterial);
+    pts.name = `buildingLights_${t.key}`;
+    pts.position.set(t.x0, 0, t.z0);
+    pts.matrixAutoUpdate = false;
+    pts.updateMatrix();
+    pts.renderOrder = 20;
+    pts.visible = false;
+    this.group.add(pts);
+    pts.updateMatrixWorld(true);
+    t.lights = pts;
+    t.lightCount = li.count;
+  }
+
   _unloadTile(t) {
-    for (const c of [...t.lod.keys()]) this._releaseChunk(t, c);
+    for (const c of [...t.lod.keys()]) this._releaseChunk(t, c, true);
     if (t.mesh) {
       this.group.remove(t.mesh);
       t.mesh.geometry.dispose();
-      if (t.mesh.material === this._boxMaterialProto) this._boxMaterialProto = null;
-      t.mesh.material.dispose();
+      if (t.boxMat === this._boxMaterialProto) this._boxMaterialProto = null;
+      t.boxMat.dispose();
+      t.boxDither?.dispose();
       t.mesh = null;
+      t.boxMat = null;
+      t.boxDither = null;
+      t.fade = null;
+    }
+    for (const k of ['shadowMesh', 'lights']) {
+      if (!t[k]) continue;
+      this.group.remove(t[k]);
+      t[k].geometry.dispose();
+      t[k] = null;
     }
     if (t.state === 'ready') this.worker.postMessage({ type: 'drop', key: t.key });
     t.vsize = null;
@@ -388,8 +592,10 @@ export class Buildings {
   _streamChunks() {
     const c = this._cam, Q = this.Q;
     const maxRange = Q.near * 2.2 + CHUNK;
-    const cand = [];
-    for (const t of this.tiles.values()) {
+    const cand = this._cand, pool = this._candPool;
+    let n = 0;
+    for (let ti = 0; ti < this._tileList.length; ti++) {
+      const t = this._tileList[ti];
       if (t.state !== 'ready') continue;
       if (t.dist > maxRange && !t.lod.size) continue;
       for (let k = 0; k < NCH * NCH; k++) {
@@ -399,19 +605,25 @@ export class Buildings {
         const d = boxDistance(c.x, c.y, c.z, x0, info.lo, z0, x0 + CHUNK, info.hi, z0 + CHUNK);
         const r = this._chunkRange(info);
         const L = t.lod.get(k);
-        if (d < r) cand.push({ t, k, p: d / r, L });
-        else if (L && L.state !== 'building' && d > r * 1.1) this._releaseChunk(t, k);
+        if (d < r) {
+          const o = pool[n] || (pool[n] = { t: null, k: 0, p: 0, L: null });
+          o.t = t; o.k = k; o.p = d / r; o.L = L || null;
+          cand[n++] = o;
+        } else if (L && L.state !== 'building' && d > r * 1.1) this._releaseChunk(t, k);
       }
     }
-    cand.sort((a, b) => a.p - b.p);
-    for (let i = 0; i < cand.length; i++) {
+    cand.length = n;
+    cand.sort(this._byP);
+    for (let i = 0; i < n; i++) {
       const { t, k, L } = cand[i];
       if (i >= Q.maxChunks) {
         if (L && L.state === 'ready' && i >= Q.maxChunks + 6) this._releaseChunk(t, k);
         continue;
       }
+      if (L && L.target === 0 && L.mesh) this._startFade(t, k, L, 1);     // wanted again while fading out
       if (!L && this._chunkBuilds < MAX_CHUNK_BUILDS) this._buildChunk(t, k);
     }
+    for (let i = 0; i < n; i++) cand[i].t = cand[i].L = null;           // no references kept
   }
 
   async _buildChunk(t, k) {
@@ -447,7 +659,8 @@ export class Buildings {
       L.state = 'ready';
       L.vertices = geo.vertices;
       L.bytes = g.attributes.position.array.byteLength * 7 / 3 + geo.index.byteLength;
-      this._setMask(t, k, true);
+      L.fade = 0;
+      this._startFade(t, k, L, 1);
     } catch (e) {
       console.warn(`Buildings: chunk ${t.key}/${k}: ${e.message}`);
       if (t.lod.get(k) === L) L.state = 'failed';
@@ -456,33 +669,92 @@ export class Buildings {
     }
   }
 
-  _releaseChunk(t, k) {
+  /** Releases a chunk: cross-fading back to its boxes first, unless `now`. */
+  _releaseChunk(t, k, now = false) {
     const L = t.lod.get(k);
     if (!L) return;
+    if (!now && L.state === 'ready' && L.mesh) {
+      if (L.target !== 0) this._startFade(t, k, L, 0);
+      return;
+    }
     t.lod.delete(k);
-    this._setMask(t, k, false);
+    this._fading.delete(L);
+    this._setFade(t, k, 0);
     if (L.mesh) {
       this.group.remove(L.mesh);
       L.mesh.geometry.dispose();
       L.mesh = null;
     }
+    if (L.dither) { L.dither.dispose(); L.dither = null; }
   }
 
-  _setMask(t, k, on) {
-    if (!t.mask) return;
-    const w = k >> 5, bit = 1 << (k & 31);
-    t.mask[w] = on ? (t.mask[w] | bit) >>> 0 : (t.mask[w] & ~bit) >>> 0;
-    if (t.mesh) t.mesh.material.uniforms.uMask.value.set(t.mask[0], t.mask[1]);
+  /** Starts a cross-fade of chunk k towards full detail (target 1) or back to its boxes (0). */
+  _startFade(t, k, L, target) {
+    L.t = t; L.k = k; L.target = target;
+    if (!L.dither) L.dither = this._material(false, true);
+    L.dither.uniforms.uFadeIn.value = L.fade;
+    L.mesh.material = L.dither;
+    this._fading.add(L);
+    this._setFade(t, k, L.fade);
+  }
+
+  _setFade(t, k, v) {
+    if (t.fade) t.fade.value[k >> 2].setComponent(k & 3, v);
+  }
+
+  /** Advances the cross-fades; a tile's boxes use the dithered material while one of its chunks fades. */
+  _updateFades(dt) {
+    const step = dt / FADE_S;
+    for (const L of this._fading) {
+      L.fade = L.target > L.fade ? Math.min(L.target, L.fade + step) : Math.max(L.target, L.fade - step);
+      L.dither.uniforms.uFadeIn.value = L.fade;
+      this._setFade(L.t, L.k, L.fade);
+      if (L.fade !== L.target) { L.t.fadeMark = this._frame; continue; }
+      if (L.target === 0) { this._releaseChunk(L.t, L.k, true); continue; }
+      L.mesh.material = this.chunkMaterial;
+      L.dither.dispose();
+      L.dither = null;
+      this._fading.delete(L);
+    }
   }
 
   // ------------------------------------------------------------------------------ per drawn frame
   _prepareDraw() {
     const visK = this.Q.visK, far = this.Q.far;
-    let boxes = 0, tiles = 0, chunks = 0, verts = 0, chunkBytes = 0, boxBytes = 0;
-    for (const t of this.tiles.values()) {
+    const now = performance.now();
+    // wall time since the last drawn frame: a fade runs its FADE_S whatever the frame rate (after
+    // a long gap between frames, a test's settle or a stall, it is simply done)
+    const dt = this._lastT ? Math.min((now - this._lastT) / 1000, 1) : 0;
+    this._lastT = now;
+    this._frame++;
+    this._updateFades(dt);
+    // the sun: ground shadows by day, obstruction lights at dusk and night
+    const sunY = this.env.sunDirection ? this.env.sunDirection.y : 1;
+    const dark = Math.min(1, Math.max(0, (0.1 - sunY) / 0.2));
+    const kDark = dark * dark * (3 - 2 * dark);
+    const shadowK = this.shadowsOn ? Math.min(1, Math.max(0, (sunY - 0.02) / 0.1)) : 0;
+    const shadowFar = this.Q.shadowFar;
+    const lightsOn = this.lightsOn && kDark > 0.01;
+    let boxes = 0, tiles = 0, chunks = 0, verts = 0, chunkBytes = 0, boxBytes = 0, shadows = 0, shadowBytes = 0, lights = 0;
+    for (let ti = 0; ti < this._tileList.length; ti++) {
+      const t = this._tileList[ti];
       if (t.state !== 'ready' || !t.mesh) continue;
       tiles++;
       boxBytes += t.boxBytes;
+      // dithered boxes only while one of the tile's chunks cross-fades
+      const mat = t.fadeMark === this._frame ? (t.boxDither || (t.boxDither = this._material(true, true, t.fade))) : t.boxMat;
+      if (t.mesh.material !== mat) t.mesh.material = mat;
+      if (t.shadowMesh) {
+        const on = shadowK > 0 && t.dist < shadowFar;
+        t.shadowMesh.visible = on;
+        shadowBytes += t.shadowBytes;
+        if (on) shadows += t.shadowMesh.geometry.instanceCount;
+      }
+      if (t.lights) {
+        const on = lightsOn && t.dist < far;
+        t.lights.visible = on;
+        if (on) lights += t.lightCount;
+      }
       // instances are sorted by size: draw those visible from the tile's nearest point
       let n = 0;
       if (t.dist < far) {
@@ -502,22 +774,77 @@ export class Buildings {
       }
     }
     // the shadow camera only covers the aircraft unless the lighting makes it bigger
-    const sc = this.env.sunLight?.shadow?.camera;
-    const cast = !!(this.env.sunLight?.castShadow && sc && sc.right - sc.left >= 300);
+    const sl = this.env.sunLight, sc = sl?.shadow?.camera;
+    const cast = !!(sl?.castShadow && sc && sc.right - sc.left >= 300);
     if (cast !== this._castShadow) {
       this._castShadow = cast;
-      for (const t of this.tiles.values()) for (const L of t.lod.values()) if (L.mesh) L.mesh.castShadow = cast;
+      for (const t of this._tileList) for (const L of t.lod.values()) if (L.mesh) L.mesh.castShadow = cast;
     }
+    // ground shadows: the sun's direction and strength; faded out inside the shadow map's box
+    // when the buildings cast into it (its target is the box's centre on the ground)
+    const SU = this._shadowU;
+    if (this.env.sunDirection) SU.uShadowSun.value.set(this.env.sunDirection.x, this.env.sunDirection.y, this.env.sunDirection.z, shadowK);
+    else SU.uShadowSun.value.w = 0;
+    if (cast && sl.target) {
+      sl.target.getWorldPosition(this._tmpV || (this._tmpV = new THREE.Vector3()));
+      SU.uRealShadow.value.set(this._tmpV.x, this._tmpV.z, 0.5 * (sc.right - sc.left), 1);
+    } else SU.uRealShadow.value.set(0, 0, 0, 0);
+    // obstruction lights: darkness, time (flashing), pixel scale
+    const LU = this._lightU.uLightOn.value;
+    LU.set(kDark, now / 1000, (this.renderer.domElement?.height || 1080) / 1080);
+    // the terrain's albedo gain (it may change at run time): roofs match the ground under them
+    this._shared.uAlbedo.value.y = this.terrain?.albedoGain ?? this._shared.uAlbedo.value.y;
     // night: lit windows and street light; the sun's elevation sets how much they show
-    const sunY = this.env.sunDirection ? this.env.sunDirection.y : 1;
-    const dark = Math.min(1, Math.max(0, (0.1 - sunY) / 0.2));
-    const k = dark * dark * (3 - 2 * dark);
     const U = this._shared.uLight.value;
     const h = this.hours;
-    U.set(litFraction(h), 0.014 * k, 0.008 * k, h > 22.5 || h < 6 ? 0.25 : 0.85);
+    U.set(litFraction(h), 0.014 * kDark, 0.008 * kDark, h > 22.5 || h < 6 ? 0.25 : 0.85);
     const S = this.stats;
     S.tiles = tiles; S.boxes = boxes; S.chunks = chunks; S.chunkVertices = verts;
     S.chunkMB = +(chunkBytes / 1048576).toFixed(1); S.boxMB = +(boxBytes / 1048576).toFixed(1);
+    S.shadows = shadows; S.shadowMB = +(shadowBytes / 1048576).toFixed(1); S.lights = lights;
+    S.fading = this._fading.size;
     S.loading = this._tileLoads + this._chunkBuilds;
+  }
+
+  /**
+   * Test hook: speckle in the frame last drawn on the canvas, as shown (tone mapped, sRGB; with
+   * ?test=1 the canvas keeps its drawing buffer): pixels at least 0.1 darker or brighter than the
+   * median of their eight neighbours while six of those agree with that median. The salt and
+   * pepper that style ids compared bit-exact after interpolation left on facades (a share of their
+   * pixels took another style's colour) counts tens of thousands per million; a clean view of the
+   * towers a few hundred (window corners, edges). Returns {pixels, speckles, perMillion}.
+   */
+  speckleCheck() {
+    const r = this.renderer, gl = r.getContext();
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    if (!w || !h || w * h > 1 << 23) return null;
+    const buf = new Uint8Array(w * h * 4);
+    const prev = r.getRenderTarget();
+    r.setRenderTarget(null);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    r.setRenderTarget(prev);
+    const L = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < w * h; i++, j += 4) L[i] = (0.2126 * buf[j] + 0.7152 * buf[j + 1] + 0.0722 * buf[j + 2]) / 255;
+    const off = [-w - 1, -w, -w + 1, -1, 1, w - 1, w, w + 1];
+    const n = new Float32Array(8);
+    let speckles = 0;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        for (let k = 0; k < 8; k++) {                     // the neighbours, sorted
+          const v = L[i + off[k]];
+          let m = k;
+          while (m > 0 && n[m - 1] > v) { n[m] = n[m - 1]; m--; }
+          n[m] = v;
+        }
+        const med = 0.5 * (n[3] + n[4]);
+        if (Math.abs(L[i] - med) < 0.1) continue;
+        let agree = 0;
+        for (let k = 0; k < 8; k++) if (Math.abs(n[k] - med) < 0.04) agree++;
+        if (agree >= 6) speckles++;
+      }
+    }
+    const pixels = (w - 2) * (h - 2);
+    return { pixels, speckles, perMillion: Math.round(speckles / pixels * 1e6) };
   }
 }

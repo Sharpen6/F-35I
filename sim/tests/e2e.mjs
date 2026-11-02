@@ -17,6 +17,9 @@
 //   3. telnof_final: 3 deg glide slope at ~145 kt, flare, touchdown below 3 m/s, brakes to a stop
 //      on the runway; screenshots on short final (cockpit) and after the stop; canopy opens.
 //   4. jerusalem_sunset: screenshots chase + cockpit at the spawn's sunset time.
+//   5. buildings: the Azrieli towers from a free camera (the jet hidden) once the tiles have
+//      streamed: no speckle on the facades (Buildings.speckleCheck), ground shadows by day,
+//      obstruction lights at night, no cross-fade left running; screenshots day and night.
 // Fails on any console error, page error, failed request or failed check. Screenshots and
 // report.json go to /home/claude/simdata/shots/e2e/ (or --out).
 
@@ -296,6 +299,67 @@ async function main() {
     await shot('10_jerusalem_sunset_cockpit', 1500);
     const s4 = await S(() => window.__sim.summary());
     check('sunset flight trimmed (hands off for 1 s)', !s4.crashed && Math.abs(s4.vs) < 3, `${s4.ias_kt} kt, vs ${s4.vs} m/s`);
+
+    // =============================================================== 5. Buildings over Tel Aviv
+    log('--- buildings over Tel Aviv');
+    const bstats = () => S(() => window.__sim.app.modules?.find((m) => m.name === 'Buildings')?.stats || null);
+    /** A free camera (lon, lat, metres above sea level) with the jet hidden, then the tiles stream. */
+    async function viewFrom(cam, time) {
+      await S(async ({ cam, time }) => {
+        const sim = window.__sim, app = sim.app;
+        const { lonLatToXZ } = await import('/js/world/coords.js');
+        const p = lonLatToXZ(cam.pos[0], cam.pos[1] - 0.03);
+        app.terrain.spawns._e2e = {
+          label: 'e2e', x: p.x, z: p.z, y: Math.max(cam.pos[2], 400) + 600, ground_y: app.terrain.heightAt(p.x, p.z),
+          heading_deg: 0, on_ground: false, speed_ms: 160, gear: 0,
+        };
+        sim.start('_e2e', { time, camera: 'chase' });
+        sim.time(time);
+        sim.step(60);
+        const a = lonLatToXZ(cam.pos[0], cam.pos[1]), b = lonLatToXZ(cam.look[0], cam.look[1]);
+        const c = app.camera;
+        app._e2eCamUpdate = app._e2eCamUpdate || app.cams.update.bind(app.cams);
+        app.cams.update = () => {
+          c.position.set(a.x, cam.pos[2], a.z);
+          c.up.set(0, 1, 0);
+          c.lookAt(b.x, cam.look[2], b.z);
+          c.fov = cam.fov;
+          c.updateProjectionMatrix();
+          c.updateMatrixWorld(true);
+        };
+        app.visual.object3d.visible = false;
+      }, { cam, time });
+      let st = null;
+      for (let quiet = 0, i = 0; quiet < 2 && i < 80; i++) {
+        await S(() => window.__sim.settle(1500));
+        st = await bstats();
+        quiet = st && st.loading === 0 && st.tiles > 0 && !st.fading ? quiet + 1 : 0;
+      }
+      return st;
+    }
+    const AZRIELI = { pos: [34.7870, 32.0715, 150], look: [34.79159, 32.07462, 110], fov: 40 };
+    const bd = await viewFrom(AZRIELI, 10);
+    check('buildings streamed around the Azrieli towers', bd && bd.tiles > 0 && bd.chunks > 0 && bd.loading === 0,
+      bd ? `${bd.tiles} tiles, ${bd.boxes} boxes, ${bd.chunks} full-detail chunks` : 'no Buildings module');
+    check('no chunk left cross-fading', bd && bd.fading === 0, `${bd?.fading} fading`);
+    check('ground shadows of the buildings by day', bd && bd.shadows > 0, `${bd?.shadows} decals`);
+    // the round tower's glass and its neighbours' facades fill most of this view: style ids
+    // compared bit-exact after interpolation salted them with pixels of another style (that
+    // shader: ~52,000 per million here; rounded ids: ~1,600, window corners and edges)
+    const sp = await S(() => window.__sim.app.modules.find((m) => m.name === 'Buildings').speckleCheck());
+    check('no speckle on the facades', sp && sp.perMillion < 10000, sp ? `${sp.speckles} speckle pixels of ${sp.pixels} (${sp.perMillion} per million)` : 'no result');
+    await shot('11_tlv_azrieli_buildings', 800);
+    await S(() => window.__sim.time(21.5));
+    await S(() => window.__sim.settle(1500));
+    const bn = await bstats();
+    check('obstruction lights on the towers at night, no ground shadows', bn && bn.lights > 0 && bn.shadows === 0,
+      `${bn?.lights} lights, ${bn?.shadows} shadow decals`);
+    await shot('12_tlv_azrieli_night', 800);
+    await S(() => {
+      const app = window.__sim.app;
+      app.cams.update = app._e2eCamUpdate;
+      app.visual.object3d.visible = true;
+    });
 
     const timing = await S(() => window.__sim.timing());
     const mem = await S(() => window.__sim.gpuMemory());

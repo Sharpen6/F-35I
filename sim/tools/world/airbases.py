@@ -10,7 +10,10 @@ towers). Approximate by nature (10 m imagery: small buildings merge, dark roofs 
 boxes stand exactly on the roofs the imagery shows, so the ground texture and the 3D agree.
 
 Nothing is placed on runways (with overruns, +25 m), taxiways and aprons (from the airfield data of
-sim/tools/world/airfields.py when present, +8 m) or where a footprint already exists.
+sim/tools/world/airfields.py when present, +8 m) or where a footprint already exists. The boxes
+traced from the imagery are then held clear of the paved areas exactly (Paved): 75 m from a runway
+centre line (the graded strip), 7.5 m beyond a taxiway's shoulders, off the aprons; a box reaching
+in is cut back from that side, or dropped. buildings.py asserts that none is left.
 
     python3 sim/tools/world/airbases.py --plot DIR     # review: the boxes over the imagery
 """
@@ -34,6 +37,155 @@ DATASET = 'ESA WorldCover Sentinel-2 imagery (air base roofs traced by sim/tools
 LICENSE = 'CC-BY-4.0'
 # wall colours of base buildings: sand and cream plaster, off-white, concrete grey (sRGB hex)
 WALLS = ['#d6c8aa', '#e2d6bc', '#e8e4da', '#beb9ae', '#cfc6b2', '#d9d2c2']
+
+
+RUNWAY_STRIP = 75.0         # m from a runway centre line (with overruns): no buildings
+TAXI_CLEAR = 7.5            # m beyond the outer edge of a taxiway's shoulders
+APRON_CLEAR = 1.0           # m: hangars and shelters front onto their aprons
+
+
+def load_airfields(path):
+    if path and os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return None
+
+
+def _seg_dist(px, pz, s):
+    """Distance from points (k) to segments (n, [ax, az, bx, bz, ...]): (k, n)."""
+    ax, az, bx, bz = s[:, 0], s[:, 1], s[:, 2], s[:, 3]
+    dx, dz = bx - ax, bz - az
+    L2 = np.maximum(dx * dx + dz * dz, 1e-9)
+    t = np.clip(((px[:, None] - ax) * dx + (pz[:, None] - az) * dz) / L2, 0, 1)
+    ex, ez = ax + t * dx - px[:, None], az + t * dz - pz[:, None]
+    return np.sqrt(ex * ex + ez * ez)
+
+
+def _inside_convex(px, pz, poly):
+    """Points (k) inside a convex polygon (either orientation): bool (k)."""
+    e = np.roll(poly, -1, 0) - poly
+    c = e[:, 0][None, :] * (pz[:, None] - poly[:, 1]) - e[:, 1][None, :] * (px[:, None] - poly[:, 0])
+    return np.all(c >= 0, 1) | np.all(c <= 0, 1)
+
+
+def _cross(a, b, c, d):
+    """Segments a-b (k, 2) and c-d (n, 2) properly crossing: (k, n)."""
+    def orient(p, q, r):
+        return (q[..., 0] - p[..., 0]) * (r[..., 1] - p[..., 1]) - (q[..., 1] - p[..., 1]) * (r[..., 0] - p[..., 0])
+    A, B = a[:, None, :], b[:, None, :]
+    C, D = c[None, :, :], d[None, :, :]
+    return (orient(A, B, C) * orient(A, B, D) < 0) & (orient(C, D, A) * orient(C, D, B) < 0)
+
+
+def poly_seg_dist(poly, segs):
+    """Distance (m) from a convex polygon to each segment; 0 where they touch or cross."""
+    if not len(segs):
+        return np.zeros(0)
+    d = _seg_dist(poly[:, 0], poly[:, 1], segs).min(0)
+    e = np.stack([poly[:, 0], poly[:, 1], np.roll(poly[:, 0], -1), np.roll(poly[:, 1], -1)], 1)
+    ends = np.vstack([segs[:, 0:2], segs[:, 2:4]])
+    d2 = _seg_dist(ends[:, 0], ends[:, 1], e).min(1).reshape(2, -1).min(0)
+    d = np.minimum(d, d2)
+    inside = _inside_convex(segs[:, 0], segs[:, 1], poly) | _inside_convex(segs[:, 2], segs[:, 3], poly)
+    crosses = _cross(e[:, 0:2], e[:, 2:4], segs[:, 0:2], segs[:, 2:4]).any(0)
+    return np.where(inside | crosses, 0.0, d)
+
+
+class Paved:
+    """Runway strips, taxiways and aprons as segments and triangles with their clearances."""
+
+    def __init__(self, airports, airfields):
+        segs = []                                   # ax, az, bx, bz, clearance
+        for ap in airports:
+            for rw in ap['runways']:
+                a, b = rw['ends']
+                dx, dz = b['x'] - a['x'], b['z'] - a['z']
+                L = math.hypot(dx, dz)
+                ux, uz = dx / L, dz / L
+                # the strip runs 60 m past the overruns (ICAO Annex 14)
+                o0, o1 = (a.get('overrun_m') or 0) + 60, (b.get('overrun_m') or 0) + 60
+                segs.append((a['x'] - ux * o0, a['z'] - uz * o0, b['x'] + ux * o1, b['z'] + uz * o1, RUNWAY_STRIP))
+        tris = []
+        if airfields:
+            O = -grid.CORE_HALF
+            for key, t in airfields.get('tiles', {}).items():
+                tx, tz = (int(v) for v in key.split(','))
+                bx, bz = O + tx * grid.TILE_SIZE, O + tz * grid.TILE_SIZE
+                for tw in t.get('taxiways', []):
+                    p = np.asarray(tw['pts'], np.float64).reshape(-1, 2) + (bx, bz)
+                    c = tw.get('cw', 20) / 2 + max(tw.get('left', 0), tw.get('right', 0)) + TAXI_CLEAR
+                    for q0, q1 in zip(p[:-1], p[1:]):
+                        segs.append((q0[0], q0[1], q1[0], q1[1], c))
+                for apn in t.get('aprons', []):
+                    p = np.asarray(apn['tris'], np.float64).reshape(-1, 3, 2) + (bx, bz)
+                    tris.append(p)
+        self.segs = np.asarray(segs, np.float64).reshape(-1, 5)
+        self.tris = np.concatenate(tris) if tris else np.zeros((0, 3, 2))
+        self.tri_edges = np.concatenate([np.concatenate([self.tris[:, k], self.tris[:, (k + 1) % 3]], 1)
+                                         for k in range(3)]) if len(self.tris) else np.zeros((0, 4))
+        self.tri_of_edge = np.tile(np.arange(len(self.tris)), 3)
+
+    def depth(self, poly):
+        """How far (m) a convex polygon reaches into the clearances (<= 0: clear) and what it hits."""
+        poly = np.asarray(poly, np.float64)
+        (x0, z0), (x1, z1) = poly.min(0), poly.max(0)
+        worst, what = -1e9, ''
+        s = self.segs
+        m = ((np.minimum(s[:, 0], s[:, 2]) - s[:, 4] < x1) & (np.maximum(s[:, 0], s[:, 2]) + s[:, 4] > x0)
+             & (np.minimum(s[:, 1], s[:, 3]) - s[:, 4] < z1) & (np.maximum(s[:, 1], s[:, 3]) + s[:, 4] > z0))
+        if m.any():
+            d = s[m, 4] - poly_seg_dist(poly, s[m])
+            k = int(np.argmax(d))
+            worst, what = float(d[k]), ('runway strip' if s[m][k, 4] == RUNWAY_STRIP else 'taxiway')
+        if len(self.tris):
+            t = self.tris
+            mt = ((t[:, :, 0].min(1) - APRON_CLEAR < x1) & (t[:, :, 0].max(1) + APRON_CLEAR > x0)
+                  & (t[:, :, 1].min(1) - APRON_CLEAR < z1) & (t[:, :, 1].max(1) + APRON_CLEAR > z0))
+            if mt.any():
+                em = mt[self.tri_of_edge]
+                d = APRON_CLEAR - poly_seg_dist(poly, self.tri_edges[em]).min()
+                # a box wholly inside a triangle touches no edge: test its corners too
+                for tri in t[mt]:
+                    if _inside_convex(poly[:, 0], poly[:, 1], tri).any():
+                        d = max(d, APRON_CLEAR + 1.0)
+                if d > worst:
+                    worst, what = float(d), 'apron'
+        return worst, what
+
+
+def _clear_box(b, paved):
+    """The largest box (one side cut back, or all shrunk) clear of the paved areas, or None."""
+    def corners(x, z, ha, hb, yaw):
+        return np.asarray(_rect(x, z, ha, hb, yaw))
+    if paved.depth(corners(b['x'], b['z'], b['ha'], b['hb'], b['yaw']))[0] <= 0:
+        return b
+    ua = (math.cos(b['yaw']), math.sin(b['yaw']))
+    ub = (-math.sin(b['yaw']), math.cos(b['yaw']))
+    best = None
+    for f in np.arange(0.05, 0.75, 0.05):
+        for axis, sign in (('a', 1), ('a', -1), ('b', 1), ('b', -1), ('ab', 0)):
+            ha, hb, x, z = b['ha'], b['hb'], b['x'], b['z']
+            if axis == 'ab':
+                ha, hb = ha * (1 - f) ** 0.5, hb * (1 - f) ** 0.5
+            elif axis == 'a':
+                cut = f * 2 * ha
+                ha -= cut / 2
+                x, z = x - sign * ua[0] * cut / 2, z - sign * ua[1] * cut / 2
+            else:
+                cut = f * 2 * hb
+                hb -= cut / 2
+                x, z = x - sign * ub[0] * cut / 2, z - sign * ub[1] * cut / 2
+            if paved.depth(corners(x, z, ha, hb, b['yaw']))[0] > 0:
+                continue
+            area = 4 * ha * hb
+            if best is None or area > best['area']:
+                best = dict(b, x=x, z=z, ha=max(ha, hb), hb=min(ha, hb), area=area,
+                            yaw=b['yaw'] if ha >= hb else (b['yaw'] + math.pi / 2) % math.pi)
+        if best is not None:
+            break
+    if best is None or best['area'] < 110 or best['hb'] < 3.5:
+        return None
+    return best
 
 
 def _u(*v):
@@ -179,6 +331,12 @@ def detect(base, terrain, recs, airports, airfields, thr=0.06):
         # the imagery blurs edges: the box is the component's moments, shrunk a little
         boxes.append(dict(x=mx, z=mz, ha=ha * 0.94, hb=hb * 0.94, yaw=yaw, area=4 * ha * hb * 0.94 ** 2, fill=fill))
 
+    # exactly clear of the runway strips, taxiways and aprons (the raster above is a first pass)
+    paved = Paved(airports, airfields)
+    cleared = [_clear_box(b, paved) for b in boxes]
+    n_cut = sum(1 for b, c in zip(boxes, cleared) if c is not b)
+    boxes = [c for c in cleared if c is not None]
+
     out = []
     keep = []
     for s in base.get('structures', []):
@@ -203,7 +361,7 @@ def detect(base, terrain, recs, airports, airfields, thr=0.06):
         if A >= 1800 and b['fill'] > 0.6 and elong < 2.6 and u < 0.6:
             cls, h, shape, wall = 'hangar', 11.0 + 5.0 * u2, 'round', None      # vaulted hangar (hangar palette)
         elif A >= 1800:
-            cls, h = 'industrial', 8.0 + 4.0 * u2                               # hall
+            cls, h, wall = 'hangar', 9.0 + 5.0 * u2, None                       # hall: maintenance hangar
         elif A >= 700:
             cls, h = 'military', 6.5 + 4.0 * u2                                 # 2-3 floors
         elif A >= 150:
@@ -212,7 +370,7 @@ def detect(base, terrain, recs, airports, airfields, thr=0.06):
             cls, h = 'military', 3.2 + 1.2 * u2                                 # huts, guard posts
         out.append(_record(f"airbase:{base['icao']}:{i}", None, _rect(b['x'], b['z'], b['ha'], b['hb'], b['yaw']),
                            cls, h, wall, roof_shape=shape))
-    dbg = dict(crop=crop, gx0=gx0, gz0=gz0, inside=inside, excl=excl, boxes=boxes)
+    dbg = dict(crop=crop, gx0=gx0, gz0=gz0, inside=inside, excl=excl, boxes=boxes, cut=n_cut)
     return out, dbg
 
 
@@ -230,10 +388,63 @@ def structures(terrain, recs, airfields_path=None, config=None, log=print):
         log(f'airbases: no airfield data ({airfields_path}): taxiways are not kept clear')
     out = []
     for base in cfg['bases']:
-        rs, _ = detect(base, terrain, recs, airports, airfields)
-        log(f"airbases: {base['name']}: {len(rs)} structures")
+        rs, d = detect(base, terrain, recs, airports, airfields)
+        log(f"airbases: {base['name']}: {len(rs)} structures ({d['cut']} cut back or dropped clear of paving)")
         out += rs
     return out
+
+
+_PAVED = {}
+
+
+def _paved(terrain, airfields_path):
+    k = (terrain, airfields_path)
+    if k not in _PAVED:
+        with open(os.path.join(terrain, 'airports.json')) as f:
+            airports = json.load(f)
+        _PAVED[k] = Paved(airports, load_airfields(airfields_path))
+    return _PAVED[k]
+
+
+def intrusions(recs, terrain, airfields_path):
+    """(id, depth m, what) of every record reaching into a runway strip, taxiway or apron."""
+    paved = _paved(terrain, airfields_path)
+    out = []
+    for r in recs:
+        d, what = paved.depth(r['rings'][0])
+        if d > 0.05:
+            out.append((r['id'], round(d, 1), what))
+    return out
+
+
+HANGAR = 12                  # buildings.WALL['hangar']
+ROUND = 6                    # buildings.SHAPE['round']: a vault, its doors in an end wall
+DOOR_NEG, DOOR_END = 16, 32  # hangar style flags: door on the - side; door in an end (a) wall, not a long (b) side
+
+
+def hangar_doors(recs, terrain, airfields_path, log=print):
+    """Which wall of each hangar holds the doors: the one facing the nearest apron or taxiway
+    (style flags DOOR_NEG / DOOR_END, read by the facade shader)."""
+    paved = _paved(terrain, airfields_path)
+    segs = paved.segs[paved.segs[:, 4] != RUNWAY_STRIP]
+    pts = np.vstack([segs[:, 0:2], segs[:, 2:4], 0.5 * (segs[:, 0:2] + segs[:, 2:4]),
+                     paved.tris.mean(1) if len(paved.tris) else np.zeros((0, 2))])
+    n = 0
+    for r in recs:
+        if (r['style'] & 15) != HANGAR:
+            continue
+        cx, cz, ha, hb, yaw = r['obb']
+        end = r['shape'] == ROUND
+        ax = (math.cos(yaw), math.sin(yaw)) if end else (-math.sin(yaw), math.cos(yaw))
+        sign = 1.0
+        if len(pts):
+            d2 = (pts[:, 0] - cx) ** 2 + (pts[:, 1] - cz) ** 2
+            k = int(np.argmin(d2))
+            if d2[k] < 400.0 ** 2:
+                sign = 1.0 if (pts[k, 0] - cx) * ax[0] + (pts[k, 1] - cz) * ax[1] >= 0 else -1.0
+                n += 1
+        r['style'] = (r['style'] & ~(DOOR_NEG | DOOR_END)) | (DOOR_END if end else 0) | (DOOR_NEG if sign < 0 else 0)
+    log(f'hangars: doors of {n} turned towards their apron or taxiway')
 
 
 def main():

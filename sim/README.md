@@ -207,6 +207,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `buildingsDebug=1` | buildings tinted by level of detail: boxes blue, full detail red |
 | `acfx=0` | none of the aircraft's effects (vapour, contrail, tyre smoke, landing-light pool); `vapour=0`, `tyresmoke=0`, `landingpool=0` one each |
 | `roads=0` / `airportlights=0` / `traffic=0` | no roads, railways and airfield surfaces / no airfield lights / no night traffic (see Roads) |
+| `bshadows=0` / `blights=0` | no ground shadows of the buildings / no obstruction lights |
 
 ## Files (the app shell)
 
@@ -351,7 +352,7 @@ then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
 
 ## Buildings (`js/world/Buildings.js`)
 
-The 839,000 buildings of the core: Overture Maps (OpenStreetMap and Microsoft ML footprints) and
+The 836,000 buildings of the core: Overture Maps (OpenStreetMap and Microsoft ML footprints) and
 the air bases traced in the imagery, made into `data/world/buildings/` (222 tiles, 32 MB) by
 `sim/tools/world/buildings.py` with heights, roof shapes, styles and colours estimated from tags,
 neighbours and region (`sim/tools/world/README.md`).
@@ -360,13 +361,26 @@ neighbours and region (`sim/tools/world/README.md`).
   builds two levels of detail. Every building is an instanced box with its roof shape (one draw
   call per tile) that grows out of the ground at its visibility distance (no popping); near the
   camera, 800 m chunks get the real footprints (walls, roofs, parapets, roof houses, pitched
-  roofs, domes, vaults) and mask their boxes. Start-up does not wait for buildings.
+  roofs, domes, vaults). The switch cross-fades over 0.6 s (the chunk and its boxes drawn with
+  complementary dither masks), so nothing pops. Start-up does not wait for buildings.
 * **Shading** (`buildingShaders.js`): procedural, filtered facades per style (White City plaster
   with balconies and pilotis, Jerusalem limestone, glass curtain walls, offices, towers,
-  industrial halls, houses, greenhouses, old stone), windows that reflect the sky and show rooms
-  behind them, lit windows and shop fronts at night (fewer after midnight), roofs with tiles, metal,
-  solar water heaters and clutter. Lit like the terrain (sun, sky, aerial perspective, logarithmic
-  depth); they receive the sun's shadows, and the full-detail chunks cast them.
+  industrial halls, houses, greenhouses, old stone, the power stations' banded stacks, the air
+  bases' steel-clad halls and hangars with their doors, the Azrieli Spiral's bare concrete frame),
+  windows that reflect the sky and show rooms behind them, lit windows and shop fronts at night
+  (fewer after midnight), roofs with tiles, metal, solar water heaters and clutter, the Dome of the
+  Rock's gilding. Lit like the terrain (sun, sky, aerial perspective, logarithmic depth).
+* **Shadows**: every building receives the sun's shadow map, and the full-detail chunks cast into
+  it when the shadow camera covers more than the aircraft (300 m or more across; js/env sizes it to
+  the jet, so in this tree they do not). At every height each building casts a ground shadow: a
+  decal of its box's shadow (one instanced draw per tile, within 4 / 8 / 12 km at low / medium /
+  high) that takes the sun's share of the ground's light away (less through haze), faded out where
+  the shadow map holds the buildings. Overlapping shadows darken once. Buildings are not shadowed
+  by other buildings beyond the shadow map, and on a slope the decal lies on the building's lowest
+  ground level (cut off uphill, displaced downhill).
+* **Obstruction lights**: red lights on the structures of 45 m or more at dusk and night; the
+  stacks and the structures of 150 m or more flash, and the latter carry a second ring at half
+  height.
 
 | quality | full detail within | boxes up to | full-detail chunks |
 | --- | --- | --- | --- |
@@ -374,9 +388,14 @@ neighbours and region (`sim/tools/world/README.md`).
 | medium | 2 km | 21 km (a house to ~3.5 km) | 44 |
 | high | 3 km (towers further) | 28 km (a house to ~5 km) | 72 |
 
-Cost over Tel Aviv at 300 m (`sim/tools/world/shots.mjs`): high +55 draw calls, +2.2 M triangles,
-+54 MB geometry; medium +34, +1.7 M, +35 MB; low +26, +1.2 M, +23 MB. The building shaders
-use 4 texture units (3 atmosphere tables and the sun's shadow map).
+Cost over Tel Aviv at 300 m (scene `tlv300` of `sim/tools/world/shots.mjs` against
+`?buildings=0`): high +72 draw calls, +2.9 M triangles, +61 MB geometry; medium +52, +2.2 M,
++44 MB; low +29, +1.3 M, +26 MB. The ground shadows are part of it: a draw call per tile within
+their distance, 4 triangles (0.8 M at high, most of them collapsed in the vertex shader: small
+buildings far off) and 16 bytes per building. Low over the Azrieli towers, the view with the most
+full detail, the geometry comes to +77 MB at high. The building shaders use 4 texture units
+(3 atmosphere tables and the sun's shadow map), the ground shadows 3, the lights none.
+
 ## The jet up close
 `js/aircraft` (see its README): the skin calibrated against photos of IAF F-35Is (satin, no clear
 coat: the exported Cycles values read as chrome plastic in three.js), a heat-stained nozzle whose

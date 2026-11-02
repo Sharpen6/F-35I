@@ -18,6 +18,7 @@ The binary format is documented in README.md and read by sim/js/world/BuildingsW
 """
 import argparse
 import collections
+import colorsys
 import gzip
 import json
 import math
@@ -38,6 +39,7 @@ import grid  # noqa: E402
 import geom  # noqa: E402
 import overture  # noqa: E402
 import airbases  # noqa: E402
+import volumes  # noqa: E402
 
 COLUMNS = ['id', 'geometry', 'bbox', 'names', 'sources', 'level', 'height', 'min_height', 'is_underground',
            'num_floors', 'num_floors_underground', 'min_floor', 'subtype', 'class', 'facade_color',
@@ -57,11 +59,37 @@ VERSION = 1
 
 # ---- styles shared with sim/js/world (buildingShaders.js) ----------------------------------------
 WALL = dict(plaster=0, stone=1, glass=2, office=3, industrial=4, house=5, greenhouse=6, concrete=7,
-            public=8, tower=9, oldstone=10)
+            public=8, tower=9, oldstone=10, stack=11, hangar=12, frame=13)
 WALL_FLAG_PILOTIS = 16                 # ground floor on columns (open, in shadow)
 WALL_FLAG_SHOPS = 32                   # shop windows on the ground floor
 WALL_FLAG_BALCONY = 64                 # balconies on the upper floors
-ROOF = dict(flat_res=0, flat=1, industrial=2, tiles=3, metal=4, greenhouse=5, dome=6, concrete=7, solar=8)
+WALL_FLAG_INSET = volumes.STYLE_FLAG_INSET   # 128: overlaps another volume, walls inset a little
+ROOF = dict(flat_res=0, flat=1, industrial=2, tiles=3, metal=4, greenhouse=5, dome=6, concrete=7, solar=8,
+            gilded=9)
+
+# Structures whose data does not say what stands today, or whose tagged colours are a symbol
+# rather than a colour (by Overture id; check them when the release changes).
+OVERRIDES = {
+    # Azrieli Spiral: tagged finished (350 m, 91 floors); CTBUH lists it under construction
+    # (completion 2028), so it is a bare concrete frame at about two thirds of its height
+    '71bf9763-695e-48ed-af50-179b9b89710c': dict(name='Spiral Tower', height=235.0, floors=60, style='frame',
+                                                 wall=(178, 176, 170)),
+    # Dome of the Rock: faience-tiled octagon and drum (tagged pure #0000FF), gilded dome
+    '43ed5830-761a-4860-b518-99de8d83c613': dict(name='Dome of the Rock', wall=(68, 108, 146), style='public'),
+    '28f89ab5-8f5f-348a-89b5-7d8b30902dd7': dict(name='Dome of the Rock, drum and dome', wall=(68, 108, 146),
+                                                 roof=(222, 176, 70), rstyle='gilded', style='public'),
+}
+# landmarks, where they stand (lon, lat) and their expected heights (m, +-12 %; the List of tallest
+# buildings in Israel on Wikipedia, 2026): a check printed after every build (sanity_table)
+EXPECTED_TALL = {
+    'Azrieli Sarona': (34.78887, 32.07217, 238),
+    'Moshe Aviv (City Gate)': (34.80375, 32.08340, 235),
+    'Azrieli Center round tower': (34.79159, 32.07462, 187),
+    'ToHa 2': (34.79533, 32.07314, 302),
+    'Beyond office tower (topped out)': (34.79876, 32.08017, 308),
+    'Azrieli Spiral (under construction: the frame of OVERRIDES)': (34.79248, 32.07582, 235),
+    'Rutenberg power station stacks': (34.52000, 31.63100, 250),
+}
 SHAPE = dict(flat=0, gabled=1, hipped=2, pyramidal=3, skillion=4, dome=5, round=6)
 SHAPE_TAGS = {'flat': 'flat', 'gabled': 'gabled', 'hipped': 'hipped', 'pyramidal': 'pyramidal',
               'skillion': 'skillion', 'dome': 'dome', 'onion': 'dome', 'round': 'round', 'saltbox': 'gabled',
@@ -139,6 +167,17 @@ def hex_rgb(s):
         return ((v >> 16) & 255, (v >> 8) & 255, v & 255)
     except (ValueError, AttributeError):
         return None
+
+
+def tame_rgb(rgb, base, smax=0.45, vmax=0.85, vmax_grey=0.93, mix=0.4):
+    """A tagged colour as it could look on a wall or roof: saturation <= smax, value <= vmax
+    (paler greys and whites up to vmax_grey, the brightest plaster of the palettes), then mixed
+    `mix` of the way towards the style's own colour `base` (sRGB 0..255 in and out)."""
+    h, s, v = colorsys.rgb_to_hsv(*(c / 255.0 for c in rgb))
+    s = min(s, smax)
+    v = min(v, vmax if s > 0.15 else vmax_grey)
+    t = np.array(colorsys.hsv_to_rgb(h, s, v)) * 255.0
+    return (1 - mix) * t + mix * np.asarray(base, np.float64)
 
 
 # ---- terrain data (read only) -------------------------------------------------------------------
@@ -404,26 +443,37 @@ def estimate(recs):
     A = np.array([r['area'] for r in recs])
     cx = np.array([r['cx'] for r in recs]); cz = np.array([r['cz'] for r in recs])
     ha = np.array([r['obb'][2] for r in recs]); hb = np.array([r['obb'][3] for r in recs])
-    seed = np.array([zlib.crc32(r['id'].encode()) for r in recs], np.uint64)
+    # the parts of one building draw the same random numbers (palette, flags), so they match
+    seed = np.array([zlib.crc32((r.get('building_id') or r['id']).encode()) for r in recs], np.uint64)
     R = lambda k: rand01(seed, k)  # noqa: E731
     kind = np.array([KIND.get(r['cls'] or '', '') for r in recs], object)
     sub = np.array([r['subtype'] or '' for r in recs], object)
     ml = np.array([r['dataset'].startswith('Microsoft') for r in recs])
+    part = np.array([bool(r.get('part')) for r in recs])
     lon, lat = grid.xz_to_lonlat(cx, cz)
     lon, lat = np.asarray(lon), np.asarray(lat)
     img = np.array([r['img'] for r in recs]) / 255.0
     lc = np.array([r['lc'] for r in recs])
     gmin = np.array([r['gmin'] for r in recs]); gmax = np.array([r['gmax'] for r in recs])
+    tagged_h = np.array([r['height'] if (r['height'] or 0) > 1.5 else np.nan for r in recs])
+    tagged_f = np.array([r['floors'] if (r['floors'] or 0) >= 1 else np.nan for r in recs], np.float64)
+    ov = [OVERRIDES.get(r['id'], {}) for r in recs]
+    tagged_h = np.where([('height' in o) for o in ov], [o.get('height', 0.0) for o in ov], tagged_h)
+    tagged_f = np.where([('floors' in o) for o in ov], [o.get('floors', 0.0) for o in ov], tagged_f)
+    # a tall building whatever its footprint: never one of the big low halls below
+    tall_tag = (np.nan_to_num(tagged_h) > 25) | (np.nan_to_num(tagged_f) > 6)
 
-    # coverage: building footprint share of the land in 100 m cells, averaged over ~300 m
+    # coverage: building footprint share of the land in 100 m cells, averaged over ~300 m (the parts
+    # of a building are counted with its outline only)
     cell = 100.0
+    wgt = (~part).astype(np.float64)
     nC = int(2 * grid.CORE_HALF / cell)
     ci = np.clip(((cx + grid.CORE_HALF) / cell).astype(int), 0, nC - 1)
     cj = np.clip(((cz + grid.CORE_HALF) / cell).astype(int), 0, nC - 1)
-    cov = np.zeros((nC, nC)); np.add.at(cov, (cj, ci), A)
+    cov = np.zeros((nC, nC)); np.add.at(cov, (cj, ci), A * wgt)
     cov = box_blur(cov / (cell * cell), 1)
     c = np.clip(cov[cj, ci], 0, 0.8)
-    cnt = np.zeros((nC, nC)); np.add.at(cnt, (cj, ci), 1)
+    cnt = np.zeros((nC, nC)); np.add.at(cnt, (cj, ci), wgt)
     cnt = box_blur(cnt, 2)
     dens = cnt[cj, ci]                       # buildings per hectare (~500 m window)
 
@@ -473,11 +523,27 @@ def estimate(recs):
     reddish = (img[:, 0] - img[:, 2] > 0.10) & (img[:, 0] > img[:, 1] * 1.08)
     elong = ha / np.maximum(hb, 0.5)
     rural = c < 0.10
+    # stacks: power station chimneys (Rutenberg's three 250 m stacks carry only a height tag) and
+    # other tall, slender, round structures standing on the ground with no floors tagged
+    nverts = np.array([len(r['rings'][0]) for r in recs])
+    fill = A / np.maximum(4 * ha * hb, 1e-6)
+    h_t = np.nan_to_num(tagged_h)
+    raised_tag = np.array([(r['min_height'] or 0) > 1 or (r['min_floor'] or 0) > 0 for r in recs])
+    stack = (h_t > 40) & np.isnan(tagged_f) & (h_t / np.maximum(2 * hb, 1) > 6) & (2 * hb < 35) & (elong < 1.35) \
+        & (fill > 0.70) & (fill < 0.86) & (nverts >= 8) & ~raised_tag & np.isin(kind, ['', 'industrial', 'tower', 'tank'])
+    kind = np.where(stack, 'stack', kind)
+    # a mast or spire on a roof (a part a few metres across): plain, no floors
+    spire = part & raised_tag & (2 * hb < 6) & (h_t > 30)
     green_house = (kind == '') & rural & (A > 250) & (bright > 0.60) & (sat < 0.16) & np.isin(lc, [40, 30, 60, 20, 50]) \
-        & ((elong > 1.6) | (A > 1500))
+        & ((elong > 1.6) | (A > 1500)) & ~tall_tag
     kind = np.where(green_house, 'greenhouse', kind)
-    big_low = (kind == '') & ((A > 2500) | ((A > 700) & rural))
+    # tagged greenhouses with a tower's height are mis-tagged halls
+    kind = np.where((kind == 'greenhouse') & (h_t > 15), 'industrial', kind)
+    # big plain footprints are halls, but only low ones: a tagged tower with a large plate (ToHa 2)
+    # is an office tower, not a warehouse
+    big_low = (kind == '') & ((A > 2500) | ((A > 700) & rural)) & ~tall_tag
     kind = np.where(big_low, 'industrial', kind)
+    kind = np.where((kind == '') & tall_tag & (A > 1500), 'office', kind)
     small = (kind == '') & (A < 30)
     kind = np.where(small, 'shed', kind)
     houses = (kind == '') & (A < 260) & (c < 0.20) & (floors <= 2)
@@ -497,15 +563,20 @@ def estimate(recs):
                        [2.8 + 0.6 * R(2), 4.5, 4.2 + 0.8 * R(2), 7.5 + 5 * R(2), 11 + 4 * R(2), 5.5 + 2 * R(2),
                         8 + 6 * R(2), 2.6, 4.2, 9 + 5 * R(2), 14 + 6 * R(2), np.minimum(est, 3.1 * np.clip(floors, 1, 2) + 0.6),
                         4 + 3 * R(2)], est)
-    tagged_h = np.array([r['height'] if (r['height'] or 0) > 1.5 else np.nan for r in recs])
-    tagged_f = np.array([r['floors'] if (r['floors'] or 0) >= 1 else np.nan for r in recs], np.float64)
     roof_h_tag = np.array([r['roof_height'] if (r['roof_height'] or 0) > 0 else np.nan for r in recs], np.float64)
     height = np.where(np.isfinite(tagged_h), tagged_h,
                       np.where(np.isfinite(tagged_f), tagged_f * floor_h + 1.0 + np.nan_to_num(roof_h_tag), kind_h))
     height = np.clip(height, 2.2, 420.0)
     floors_out = np.where(np.isfinite(tagged_f), tagged_f, np.maximum(1, np.round((height - 1.0) / floor_h)))
-    min_h = np.array([max(0.0, r['min_height'] or 0.0) if r['min_height'] else
-                      (max(0.0, (r['min_floor'] or 0) * 3.05) if (r['min_floor'] or 0) > 0 else 0.0) for r in recs])
+    floors_out = np.where((kind == 'stack') | spire, 0, floors_out)
+    # floor height of the facade: from the tags when both are there, else by kind
+    fh_out = np.where(np.isfinite(tagged_f) & (tagged_f > 0) & np.isfinite(tagged_h),
+                      np.clip((tagged_h - 1.0) / np.maximum(tagged_f, 1), 2.6, 6.0), floor_h)
+    # bottom of a raised part: min_height, else min_level floors of this part's own floor height
+    # (the same floors that make its top, so a tower part meets the podium part it stands on)
+    mh_tag = np.array([r['min_height'] if (r['min_height'] or 0) > 0 else np.nan for r in recs], np.float64)
+    mf_tag = np.array([r['min_floor'] if (r['min_floor'] or 0) > 0 else np.nan for r in recs], np.float64)
+    min_h = np.where(np.isfinite(mh_tag), mh_tag, np.where(np.isfinite(mf_tag), mf_tag * fh_out, 0.0))
     min_h = np.where(kind == 'roof', np.maximum(min_h, height - 0.6), min_h)
     min_h = np.minimum(min_h, height - 0.4)
 
@@ -535,17 +606,26 @@ def estimate(recs):
     glass_p = glass_p * (1 - 0.7 * W['jerusalem'])
     st_glass = (fm == 'glass') | (tall & (R(6) < glass_p))
     is_stone = (fm == 'stone') | ((fm == '') & (R(7) < stone_p))
+    # a tall building is a tower whatever its class or footprint says ('tall' comes before the
+    # industrial and hall styles); stacks, spires and hangars have no window grid at all
     style = np.select([
-        kind == 'greenhouse', kind == 'hangar', np.isin(kind, ['shed', 'tank', 'shelter', 'roof', 'military']),
-        st_glass, (W['jaffa_old'] + W['jlm_old_city'] > 0.5),
+        kind == 'stack', spire, kind == 'hangar', (kind == 'greenhouse') & ~tall,
+        np.isin(kind, ['shed', 'tank', 'shelter', 'roof', 'military']) & ~tall,
+        st_glass, (W['jaffa_old'] + W['jlm_old_city'] > 0.5) & ~tall,
+        tall & (kind != 'office'),
         kind == 'industrial', kind == 'farm', kind == 'house',
         np.isin(kind, ['school', 'hospital', 'public', 'religious', 'stadium', 'kindergarten']),
-        kind == 'office', tall, is_stone],
-        [WALL['greenhouse'], WALL['concrete'], WALL['concrete'],
+        kind == 'office', is_stone],
+        [WALL['stack'], WALL['concrete'], WALL['hangar'], WALL['greenhouse'],
+         WALL['concrete'],
          WALL['glass'], WALL['oldstone'],
+         WALL['tower'],
          WALL['industrial'], WALL['industrial'], WALL['house'],
          WALL['public'],
-         WALL['office'], WALL['tower'], WALL['stone']], WALL['plaster'])
+         WALL['office'], WALL['stone']], WALL['plaster'])
+    for i, o in enumerate(ov):
+        if 'style' in o:
+            style[i] = WALL[o['style']]
     # stone-clad houses and public buildings keep their style but take the stone palette below
     flags = np.zeros(N, np.int64)
     resid = np.isin(style, [WALL['plaster'], WALL['stone'], WALL['tower']])
@@ -566,7 +646,8 @@ def estimate(recs):
         'industrial': [(212, 214, 214), (226, 226, 222), (190, 194, 198), (176, 182, 188), (160, 168, 178), (200, 196, 186)],
         'glass': [(96, 124, 136), (78, 94, 110), (118, 126, 128), (104, 126, 118), (88, 104, 124), (130, 140, 146)],
         'greenhouse': [(226, 231, 228), (218, 224, 222), (232, 234, 230)],
-        'hangar': [(176, 168, 150), (164, 158, 142), (186, 180, 166)],
+        'hangar': [(176, 168, 150), (164, 158, 142), (186, 180, 166), (158, 160, 152), (190, 188, 178)],
+        'stack': [(196, 192, 184), (184, 181, 174), (206, 202, 194)],     # weathered light concrete
         'brick': [(178, 96, 70), (166, 88, 66)],
     }
 
@@ -583,15 +664,21 @@ def estimate(recs):
     wall = np.where((style == WALL['stone'])[:, None] | (is_stone & np.isin(style, [WALL['house'], WALL['public'], WALL['tower']]))[:, None],
                     pick('stone', 19), wall)
     wall = np.where((style == WALL['oldstone'])[:, None], pick('oldstone', 20), wall)
-    wall = np.where((style == WALL['concrete'])[:, None], np.where((kind == 'hangar')[:, None], pick('hangar', 21), pick('concrete', 21)), wall)
+    wall = np.where((style == WALL['concrete'])[:, None], pick('concrete', 21), wall)
+    wall = np.where((style == WALL['hangar'])[:, None], pick('hangar', 21), wall)
+    wall = np.where((style == WALL['stack'])[:, None], pick('stack', 21), wall)
     wall = np.where((style == WALL['industrial'])[:, None], pick('industrial', 22), wall)
     wall = np.where((style == WALL['glass'])[:, None], pick('glass', 23), wall)
     wall = np.where((style == WALL['greenhouse'])[:, None], pick('greenhouse', 24), wall)
     wall = np.where((style == WALL['office'])[:, None] & (R(25) < 0.5)[:, None], pick('grey', 26), wall)
-    fcol = [hex_rgb(r['facade_color']) if r['facade_color'] else None for r in recs]
-    for i, v in enumerate(fcol):
-        if v is not None:
-            wall[i] = v
+    # tagged facade colours are a mapper's pick from a short list (#FF0000, #0000FF, #008080...):
+    # tamed to what paint and stone look like from the air, then pulled towards the style's own
+    for i, r in enumerate(recs):
+        v = hex_rgb(r['facade_color']) if r['facade_color'] else None
+        if v is not None and r.get('synthetic'):
+            wall[i] = v                                    # air base walls: chosen in airbases.py
+        elif v is not None:
+            wall[i] = tame_rgb(v, wall[i])
 
     # ---- roof colours: the imagery under the footprint, made plausible ----
     lin = img ** 2.2
@@ -607,11 +694,17 @@ def estimate(recs):
     terracotta = np.array([0.66, 0.33, 0.24]) * (0.85 + 0.3 * R(27))[:, None]
     tiles = np.isin(shape, ['gabled', 'hipped', 'pyramidal']) & (reddish | tiles_mat | (R(28) < 0.7))
     roof = np.where(tiles[:, None], 0.35 * roof + 0.65 * terracotta, roof)
-    rcol = [hex_rgb(r['roof_color']) if r['roof_color'] else None for r in recs]
     roof = roof * 255
-    for i, v in enumerate(rcol):
+    for i, r in enumerate(recs):
+        v = hex_rgb(r['roof_color']) if r['roof_color'] else None
         if v is not None:
-            roof[i] = v
+            roof[i] = tame_rgb(v, roof[i])
+    # landmarks whose tags are a symbol rather than a colour (OVERRIDES): their own colours
+    for i, o in enumerate(ov):
+        if 'wall' in o:
+            wall[i] = o['wall']
+        if 'roof' in o:
+            roof[i] = o['roof']
 
     roof_style = np.select([
         kind == 'greenhouse', shape == 'dome', tiles, np.isin(shape, ['gabled', 'hipped', 'pyramidal', 'skillion', 'round']),
@@ -620,14 +713,22 @@ def estimate(recs):
         np.isin(kind, ['apartments', 'house']) | (style == WALL['plaster']) | (style == WALL['stone'])],
         [ROOF['greenhouse'], ROOF['dome'], ROOF['tiles'], ROOF['metal'], ROOF['concrete'], ROOF['solar'],
          ROOF['industrial'], ROOF['flat_res']], ROOF['flat'])
+    roof_style = np.where((kind == 'stack') | spire, ROOF['concrete'], roof_style)
+    for i, o in enumerate(ov):
+        if 'rstyle' in o:
+            roof_style[i] = ROOF[o['rstyle']]
 
     # window bay width and floor height for the facade shader
+    # (hangars: the width of a door leaf; a bare frame: the column spacing)
     bay = np.select([style == WALL['glass'], style == WALL['office'], style == WALL['industrial'], style == WALL['house'],
-                     style == WALL['public'], style == WALL['oldstone']],
+                     style == WALL['public'], style == WALL['oldstone'], style == WALL['hangar'], style == WALL['frame']],
                     [1.5 + 0.3 * R(30), 2.7 + 0.8 * R(30), 6 + 3 * R(30), 3.2 + 1.2 * R(30), 3.6 + 1.0 * R(30),
-                     2.6 + 1.0 * R(30)], 3.0 + 1.0 * R(30))
-    fh_out = np.where(np.isfinite(tagged_f) & (tagged_f > 0) & np.isfinite(tagged_h),
-                      np.clip((tagged_h - 1.0) / np.maximum(tagged_f, 1), 2.6, 6.0), floor_h)
+                     2.6 + 1.0 * R(30), 4.5 + 1.5 * R(30), 7.2 + 0.8 * R(30)], 3.0 + 1.0 * R(30))
+    # stacks: 'floors' holds the height in 2 m steps (the shader bands the top 12 %); hangars:
+    # 'floor height' holds the door height (the shader draws the doors on one wall, airbases.py)
+    floors_out = np.where(kind == 'stack', np.round(height / 2.0), floors_out)
+    hang = style == WALL['hangar']
+    fh_out = np.where(hang, np.clip(0.8 * np.where(shape == 'round', height, height - rise), 4.0, 12.5), fh_out)
     # visibility size (m): what a viewer far away sees of the building
     vsize = np.maximum(np.sqrt(A) * 0.7, height * 1.2)
 
@@ -646,11 +747,35 @@ def estimate(recs):
         r['bay'] = float(bay[i])
         r['vsize'] = float(vsize[i])
         r['seed'] = int(seed[i] & 255)
+        r['height_est'] = float(kind_h[i] + (rise[i] if shape[i] != 'flat' and kind[i] != 'hangar' else 0.0))
         r['tagged'] = bool(np.isfinite(tagged_h[i]) or np.isfinite(tagged_f[i])) and not r.get('synthetic')
         r['cov'] = float(c[i])
         r['dens'] = float(dens[i])
     return dict(kinds=collections.Counter(kind.tolist()), styles=collections.Counter(style.tolist()),
                 shapes=collections.Counter(shape.tolist()))
+
+
+def sanity_table(recs, log):
+    """The 30 tallest volumes (one line per building) and the landmarks of EXPECTED_TALL."""
+    names = {v: k for k, v in WALL.items()}
+    best = {}
+    for r in recs:
+        b = r.get('building_id') or r['id']
+        top = 0.5 * (r['gmin'] + r['gmax']) + r['height_m'] - r['gmin']
+        if b not in best or top > best[b][0]:
+            best[b] = (top, r)
+    rows = sorted(best.values(), key=lambda t: -t[0])[:30]
+    lines = []
+    for top, r in rows:
+        lon, lat = grid.xz_to_lonlat(r['cx'], r['cz'])
+        lines.append(f"{top:6.1f} m  {names.get(r['style'] & 15, '?'):9s} {r['kind']:11s} {int(r['floors_out']):3d} fl "
+                     f"{float(lon):.5f} {float(lat):.5f}  {r['name'] or ''}")
+    log('tallest:\n    ' + '\n    '.join(lines))
+    for name, (lon, lat, h) in EXPECTED_TALL.items():
+        x, z = grid.lonlat_to_xz(lon, lat)
+        got = [t for t, r in best.values() if math.hypot(r['cx'] - x, r['cz'] - z) < 150.0]
+        ok = bool(got) and abs(max(got) - h) <= 0.12 * h
+        log(f"expected {name} ~{h} m: {'ok' if ok else 'CHECK'} (tallest within 150 m: {round(max(got)) if got else '-'} m)")
 
 
 # ---- writing ------------------------------------------------------------------------------------
@@ -697,16 +822,28 @@ def write_tile(path, ix, iz, recs):
         top = max(top, (r['gmax'] - r['gmin']) + min(r['height_m'], 2.5))
         tops.append(top)
     top = np.clip(np.round(np.array(tops) / 0.1), 1, 65535).astype('<u2')
-    minh = np.clip(np.round([r['min_h'] / 0.1 for r in recs]), 0, 65535).astype('<u2')
+    # bottom of a raised volume, like the top: above floor 0, counted from the middle of the slope
+    minh = np.clip(np.round([(0.5 * (r['gmax'] - r['gmin']) + r['min_h']) / 0.1 if r['min_h'] > 0 else 0
+                             for r in recs]), 0, 65535).astype('<u2')
     rise = np.clip(np.round([r['rise'] / 0.2 for r in recs]), 0, 255).astype('u1')
     shape = np.array([r['shape'] for r in recs], 'u1')
-    style = np.array([r['style'] for r in recs], 'u1')
+    style = np.array([r['style'] | (WALL_FLAG_INSET if r.get('inset') else 0) for r in recs], 'u1')
     rstyle = np.array([r['roof_style'] for r in recs], 'u1')
     floorh = np.clip(np.round([r['floor_h'] / 0.05 for r in recs]), 1, 255).astype('u1')
     bay = np.clip(np.round([r['bay'] / 0.05 for r in recs]), 1, 255).astype('u1')
     vs = np.array([vsize_code(r['vsize']) for r in recs], 'u1')
     seed = np.array([r['seed'] for r in recs], 'u1')
-    floors = np.clip(np.round([r['floors_out'] for r in recs]), 0, 255).astype('u1')
+    # the facade's floors count from floor 0 (the lowest ground) up to the eaves: on uneven ground
+    # the walls stand (mid - gmin) higher than the tagged floors reach, and the windows must go on
+    # to the top (else a blank band runs round the top of every tower on a slope: Azrieli Sarona).
+    # Not for stacks and hangars, whose 'floors' and floor height mean other things.
+    def facade_floors(r, top):
+        f = r['floors_out']
+        if (r['style'] & 15) in (WALL['stack'], WALL['hangar']):
+            return f
+        eave = top - (r['rise'] if r['shape'] != SHAPE['flat'] else 0.0)
+        return max(f, round(eave / max(r['floor_h'], 2.0)))
+    floors = np.clip([facade_floors(r, t) for r, t in zip(recs, tops)], 0, 255).astype('u1')
     wall = np.array([r['wall_rgb'] for r in recs], 'u1').reshape(-1)
     roof = np.array([r['roof_rgb'] for r in recs], 'u1').reshape(-1)
     nrings = np.array([len(r['rings']) for r in recs], 'u1')
@@ -755,9 +892,12 @@ def stage_tiles(cache, out, terrain, release, only=None, airfields=None):
     recs = load_footprints(tb)
     parts = load_footprints(overture.read_cached(fp, PART_COLUMNS), is_part=True) if os.path.isdir(fp) else []
     log(f'{tb.num_rows} buildings ({len(recs)} polygons), {len(parts)} building parts; {time.time() - t0:.0f} s')
-    # building parts replace the outline of their building (OpenStreetMap's 3D convention)
+    # building parts and the outline of their building: both kept until the heights are known,
+    # then volumes.merge_parts draws the parts and fills from the outline what they leave out
     with_parts = {p['building_id'] for p in parts}
     parent = {r['id']: r for r in recs if r['id'] in with_parts}
+    for r in parent.values():
+        r['outline_of_parts'] = True
     for p in parts:
         b = parent.get(p['building_id'])
         if b:
@@ -766,8 +906,7 @@ def stage_tiles(cache, out, terrain, release, only=None, airfields=None):
                     p[k] = b.get(k)
             p['dataset'], p['license'] = b['dataset'], b['license']
     drop = collections.Counter()
-    recs = [r for r in recs if not (r['id'] in with_parts and r['id'] in parent)]
-    drop['outline replaced by its parts'] = sum(1 for _ in parent)
+    drop['parts without their building'] = sum(1 for p in parts if p['building_id'] not in parent)
     recs += [p for p in parts if p['building_id'] in parent]
     project(recs)
     log(f'projected; {time.time() - t0:.0f} s')
@@ -823,6 +962,22 @@ def stage_tiles(cache, out, terrain, release, only=None, airfields=None):
     recs = keep
     stats = estimate(recs)
     log(f'estimated; kinds {dict(stats["kinds"].most_common(12))}; {time.time() - t0:.0f} s')
+    # volumes: parts with their outline, nothing left floating, no duplicates (volumes.py)
+    # (duplicates first: dropping one can leave a raised part with nothing under it)
+    recs = volumes.merge_parts(recs, clean, log)
+    recs, dd = volumes.dedup(recs, log)
+    recs = volumes.support(recs, log)
+    gaps = volumes.floating(recs, tol=5.0)
+    log(f'floating volumes (gap > 5 m): {len(gaps)}' + (f'; worst {gaps[:5]}' if gaps else ''))
+    if gaps:
+        raise SystemExit('buildings: volumes floating more than 5 m above what is under them')
+    airbases.hangar_doors(recs, terrain, airfields, log=log)
+    bad = airbases.intrusions([r for r in recs if r.get('synthetic')], terrain, airfields)
+    log(f'air base structures on runway strips, taxiways or aprons: {len(bad)}')
+    if bad:
+        raise SystemExit(f'buildings: air base structures intrude on paved areas: {bad[:5]}')
+    sanity_table(recs, log)
+    log(f'volumes done; {len(recs)} records; {time.time() - t0:.0f} s')
 
     os.makedirs(out, exist_ok=True)
     by_tile = collections.defaultdict(list)
@@ -863,7 +1018,7 @@ def stage_tiles(cache, out, terrain, release, only=None, airfields=None):
         terrain=dict(generated_utc=tman.get('generated_utc')),
         tile_m=TILE, tiles_per_side=NT, chunks=CHUNKS, quantum_m=QUANT, margin_m=MARGIN,
         count=total, vertices=sum(t['vertices'] for t in tiles), bytes=sum(t['bytes'] for t in tiles),
-        dropped=dict(drop), kinds=dict(stats['kinds']), styles={k: int(v) for k, v in stats['styles'].items()},
+        dropped=dict(drop), dedup=dd, kinds=dict(stats['kinds']), styles={k: int(v) for k, v in stats['styles'].items()},
         shapes=dict(stats['shapes']),
         tagged=dict(height_or_floors=int(sum(r['tagged'] for r in recs))),
         tallest=[dict(name=r['name'], height_m=round(r['height_m'], 1), x=round(r['cx']), z=round(r['cz']))
