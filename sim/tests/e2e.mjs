@@ -20,7 +20,13 @@
 //   5. buildings: the Azrieli towers from a free camera (the jet hidden) once the tiles have
 //      streamed: no speckle on the facades (Buildings.speckleCheck), ground shadows by day,
 //      obstruction lights at night, no cross-fade left running; the gain of artificial lights
-//      (env.lightGain: 1 by day, 1400 / exposure at night); screenshots day and night.
+//      (env.lightGain: 1 by day, 1400 / exposure at night); screenshots day and night; the red
+//      lights in the night frame stay red (CIE x).
+//   6. lights at night, read off the drawn frame (tests/night_probe.mjs): the PAPI of Ben Gurion 26
+//      from the 3 deg path (two red, two white), the landing light's pool on short final and in
+//      the flare (x1.5 at least), the burner
+//      with night vision on (an orange body, yellow-white diamonds, a red-orange tail; not pink),
+//      the tail light in the blue hour (a point as at night, not a ball).
 // Fails on any console error, page error, failed request or failed check. Screenshots and
 // report.json go to /home/claude/simdata/shots/e2e/ (or --out).
 
@@ -29,6 +35,7 @@ import { createRequire } from 'node:module';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { NIGHT_PROBE } from './night_probe.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -101,6 +108,7 @@ async function main() {
     const err = await page.evaluate(() => window.__sim.error);
     if (err) throw new Error(`app did not load: ${err}`);
     log('loaded; spawns:', (await page.evaluate(() => window.__sim.spawns())).join(', '));
+    await page.evaluate(NIGHT_PROBE);                // window.__np: the lights in the drawn frame
 
     const S = (fn, a) => page.evaluate(fn, a);
     const step = (n) => S((k) => window.__sim.step(k), n);
@@ -415,11 +423,88 @@ async function main() {
     check('obstruction lights on the towers at night, no ground shadows', bn && bn.lights > 0 && bn.shadows === 0,
       `${bn?.lights} lights, ${bn?.shadows} shadow decals`);
     await shot('12_tlv_azrieli_night', 800);
+    // the red lights in that frame (the towers' obstruction lights, the cars' tail lights) keep their
+    // hue: AgX alone turned them white or salmon (median CIE x ~0.42, red's primary is 0.64)
+    const redsTlv = await S(() => window.__np.reds());
+    check('red lights at night stay red (median CIE x >= 0.55)', redsTlv.n >= 3 && redsTlv.medianX >= 0.55,
+      `${redsTlv.n} red lights, CIE x ${redsTlv.medianX} (quartiles ${redsTlv.p25}-${redsTlv.p75})`);
     await S(() => {
       const app = window.__sim.app;
       app.cams.update = app._e2eCamUpdate;
       app.visual.object3d.visible = true;
     });
+
+    // =============================================================== 6. lights at night: the pixels
+    // (js/env/README.md "Lights at night"; tests/night_probe.mjs reads the drawn frame)
+    log('--- lights at night');
+    // the PAPI of Ben Gurion 26 from the 3 deg path, 1.5 km out (a 12 deg field of view): the two
+    // units set above 3 deg red, the two below white
+    await S(() => window.__sim.start('bengurion_26', { time: 21.5, camera: 'chase' }));
+    await step(60);
+    const pc = await S(() => window.__np.papiCam([-12912, -24024], 259.8, 1500, 12));
+    for (let i = 0; i < 3; i++) await S(() => window.__sim.settle(1500));
+    await shot('13_bgn26_papi_night', 1500);
+    const papi = pc ? await S(() => window.__np.papi()) : [];
+    const pRed = papi.filter((u) => u.ang > 3), pWhite = papi.filter((u) => u.ang < 3);
+    check('PAPI on the slope at night: two red (r >= 3 g), two white (r ~ g)',
+      pRed.length === 2 && pWhite.length === 2 && pRed.every((u) => u.rgb && u.rgb[0] >= 200 && u.rgb[0] >= 3 * u.rgb[1])
+        && pWhite.every((u) => u.rgb && u.rgb[1] >= 200 && u.rg <= 1.15),
+      papi.map((u) => `${u.ang} deg (${u.seen} seen): ${u.rgb} r/g ${u.rg}`).join('; ') || 'no PAPI');
+    await S(() => window.__np.restore());
+    // the landing light's pool on the runway on short final (~65 m up: the beam meets the runway
+    // ~370 m ahead, its ~0.5 lux tens of times the real moonlit ground's) and in the flare (~15 m)
+    // (night, telnof_final flown down by the autopilot)
+    await S(() => { window.__sim.start('telnof_final', { time: 21.5, camera: 'chase' }); window.__sim.autopilot('land', { approachKt: 145 }); });
+    let sF = null, sFinal = null, poolFinal = null;
+    for (let i = 0; i < 300; i++) {
+      sF = await step(12);
+      if (!sFinal && sF.agl_m < 65) { sFinal = sF; poolFinal = await S(() => window.__np.pool()); }
+      if (sF.crashed || sF.onGround || sF.agl_m < 15) break;
+    }
+    const poolText = (p, s) => (p ? `${f2(s.agl_m, 1)} m up: the ground ${p.lamp} m ahead of the lamp x${p.ratio} (${p.off} -> ${p.on}; `
+      + `its light ${p.ground} lux as drawn, ${p.real} without the night's boosts)` : 'beam does not reach the ground');
+    check('landing light: its pool lights the runway on short final (x1.5 at least)', poolFinal && poolFinal.ratio >= 1.5, poolText(poolFinal, sFinal));
+    await shot('14_telnof_flare_night_chase', 1200);
+    const pool = await S(() => window.__np.pool());
+    check('landing light: its pool lights the runway in the flare, brighter than on final', pool && pool.ratio >= 1.5
+      && (!poolFinal || pool.ratio > poolFinal.ratio), poolText(pool, sF));
+    // the burner at night with night vision on (the default): an orange flame, not pink
+    await S(() => { window.__sim.start('telnof_36', { time: 21.5, camera: 'chase' }); window.__sim.autopilot('takeoff'); });
+    for (let i = 0; i < 300; i++) { const s = await step(12); if (s.ab > 0.95 && s.ias_kt > 40) break; }
+    await S(() => {
+      const app = window.__sim.app, q = app.fdm.state.quaternion;
+      // orbit 28 deg off the tail, 6 deg up, 18 m (the burner seen from behind and aside)
+      const { x, y, z, w } = q, tx = 2 * y, ty = -2 * x, tz = 0;   // body +Z (aft) rotated: q * (0, 0, 1)
+      const aft = [tx * w + (y * tz - z * ty), ty * w + (z * tx - x * tz), 1 + tz * w + (x * ty - y * tx)];
+      app.cams.setMode('orbit');
+      app.settings.camera = 'orbit';
+      const O = app.cams.orbit;
+      O.yaw = Math.atan2(aft[0], aft[2]) + 28 * Math.PI / 180; O.pitch = 6 * Math.PI / 180; O.dist = 18;
+      O.init = true; O.auto = 0;
+      app.cams.fov.orbit = 40;
+    });
+    await shot('15_telnof_burner_night', 1500);
+    const nv = await S(() => window.__sim.app.env.nightVision);
+    const ab = await S(() => window.__np.burner());
+    check('burner at night (night vision on): orange (r > g > b, g / r 0.4-0.6)',
+      ab && nv > 0.9 && ab.rgb[0] > ab.rgb[1] && ab.rgb[1] > ab.rgb[2] && ab.gr >= 0.4 && ab.gr <= 0.6,
+      ab ? `body ${ab.rgb}, g/r ${ab.gr}, CIE xy ${ab.xy}; night vision ${f2(nv, 2)}` : 'no plume');
+    // its shock diamonds yellow-white over the body (soft peach blobs were barely brighter than it),
+    // its tail a deeper red-orange that still glows (not a dim brown)
+    check('burner at night: yellow-white diamonds (r >= 225, g / r 0.15 over the body), a red-orange tail (r >= 150)',
+      ab && ab.dia && ab.tail && ab.dia.rgb[0] >= 225 && ab.dia.gr >= ab.gr + 0.15
+        && ab.tail.rgb[0] >= 150 && ab.tail.rgb[0] > ab.tail.rgb[1] && ab.tail.rgb[1] > ab.tail.rgb[2] && ab.tail.gr <= ab.gr,
+      ab && ab.dia && ab.tail ? `diamonds ${ab.dia.rgb} g/r ${ab.dia.gr}; tail (${ab.tailAt} of the core) ${ab.tail.rgb} g/r ${ab.tail.gr}` : 'no plume');
+    // the blue hour (sun 5 deg down): the tail light a point, as at night, not a ball
+    await S(() => window.__sim.start('jerusalem_sunset', { time: 19.5, camera: 'chase' }));
+    await step(120);
+    await shot('16_jerusalem_1930_chase', 2500);
+    const tail = await S(() => window.__np.tail());
+    // as at night: a white core no wider than 6 px, the size of any point light at the cap (the ball it
+    // grew into was 21 px, then a grown 8 px core) and a soft skirt: its steps between neighbours shrink
+    // outwards (the ball's sprite cut it off, a drop of ~40 in luma after steps of ~20: a kink of ~15)
+    check('blue hour: the tail light a point as at night (white core <= 6 px, a soft skirt)', tail && tail.core <= 6 && tail.kink <= 8,
+      tail ? `white core ${tail.core} px, half width ${tail.width} px, kink in its skirt ${tail.kink} (steepest step under luma 100: ${tail.step})` : 'not found');
 
     const timing = await S(() => window.__sim.timing());
     const mem = await S(() => window.__sim.gpuMemory());

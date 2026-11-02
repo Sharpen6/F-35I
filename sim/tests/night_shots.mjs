@@ -13,7 +13,7 @@
 //   --frames  frames drawn before each shot (the clouds' temporal filter and the exposure settle)
 //   --pre     JavaScript run in the page before every scene (try a setting); --post after its setup
 //   --probe   after each shot, run the steps one after another and shoot after each (which layer
-//             makes a pixel)
+//             makes a pixel); a step may leave a measurement in window.__npOut, which is logged
 //   --params  extra URL parameters of the page
 //   --root    the sim folder served (an exported older commit: before / after on the same scenes)
 //   --tag     suffix of the file names (before / after side by side)
@@ -27,6 +27,7 @@ import { createRequire } from 'node:module';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { NIGHT_PROBE } from './night_probe.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -89,6 +90,18 @@ window.__nt = {
     app.cams.fov.orbit = fov;
     return true;
   },
+  /** A free camera right / up / ahead (m) of the jet, level with its heading, looking at it (night_probe free). */
+  relCam(rel, fov) {
+    const app = window.__sim.app, p = app.fdm.state.position, q = app.fdm.state.quaternion;
+    // body frame: +X right, -Z forward; levelled
+    const aft = this.rot(q, [0, 0, 1]), right = this.rot(q, [1, 0, 0]);
+    const la = Math.hypot(aft[0], aft[2]) || 1, lr = Math.hypot(right[0], right[2]) || 1;
+    const fx = -aft[0] / la, fz = -aft[2] / la, rx = right[0] / lr, rz = right[2] / lr;
+    const pos = [p.x + rx * rel[0] + fx * rel[2], p.y + rel[1], p.z + rz * rel[0] + fz * rel[2]];
+    window.__np.free(pos, [p.x, p.y + 1, p.z], fov);
+    window.__sim.app.visual.object3d.visible = true;
+    return pos;
+  },
   /** Fly the scripted landing until the height above the ground is under agl m (short final). */
   approachTo(agl, seconds = 150) {
     const S = window.__sim;
@@ -135,8 +148,12 @@ true;
 `;
 
 // ---------------------------------------------------------------------------------------- scenes
-// setup: page function source (may be async); shots: [{name, cam}], cam 'chase' | 'cockpit' |
-// 'flyby' | 'tower' | [rel, pitch, dist, fov] (orbit).
+// setup: page function source (may be async); shots: [{name, cam, measure}], cam 'chase' |
+// 'cockpit' | 'flyby' | 'tower' | [rel, pitch, dist, fov] (orbit) | {papi: D, fov, near, heading}
+// (a free camera on the 3 deg path D m before the PAPI next to `near`, the jet hidden) |
+// {rel: [right, up, ahead], fov} (a free camera that far from the jet, looking at it: a clear
+// tower's view). measure: names of window.__np measurements (night_probe.mjs) logged with the shot:
+// 'papi', 'reds', 'tail', 'burner', 'pool'.
 /** A 4 km final to Ben Gurion 26 (threshold -11936, -24251; heading 259.8), flown down to `agl` m. */
 const BGN_FINAL = (time, agl) => `async () => { const nt = window.__nt, S = window.__sim;
   const h = 259.8 * Math.PI / 180, d = 4000;
@@ -144,6 +161,10 @@ const BGN_FINAL = (time, agl) => `async () => { const nt = window.__nt, S = wind
     y: 39.3 + d * Math.tan(3 * Math.PI / 180) + 15, heading_deg: 259.8, airport: 'LLBG', runway: '26' });
   S.start('nt_bgn_final', { time: ${time}, camera: 'chase' });
   S.autopilot('land', { runway: '26', icao: 'LLBG' });
+  return nt.approachTo(${agl}); }`;
+/** Tel Nof's final (telnof_final) flown down by the autopilot to `agl` m, as e2e.mjs does. */
+const TN_FINAL = (time, agl) => `async () => { const nt = window.__nt, S = window.__sim;
+  S.start('telnof_final', { time: ${time}, camera: 'chase' }); S.autopilot('land', { approachKt: 145 });
   return nt.approachTo(${agl}); }`;
 /** Take-off roll in full burner until the burner is lit and `kt` knots. */
 const AB_ROLL = (spawn, time, kt) => `async () => {
@@ -153,24 +174,35 @@ const AB_ROLL = (spawn, time, kt) => `async () => {
 const START = (spawn, time, steps = 60) => `async () => { const S = window.__sim;
   S.start('${spawn}', { ${time != null ? `time: ${time}, ` : ''}camera: 'chase' }); S.step(${steps}); return S.summary(); }`;
 
+// the PAPI of Ben Gurion 26 (left of the runway, ~400 m past the threshold), seen on the 3 deg path
+const PAPI26 = (D, fov) => ({ papi: D, fov, near: [-12912, -24024], heading: 259.8 });
+
 const SCENES = [
   // Ben Gurion 26: short final (~1.2 km out) at blue hour and at night, then on the runway
   { name: 'bgn_final_1925', setup: BGN_FINAL(19.25, 65), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' }] },
-  { name: 'bgn_final_2130', setup: BGN_FINAL(21.5, 65), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' }] },
-  { name: 'bgn_flare_2130', setup: BGN_FINAL(21.5, 12), shots: [{ name: 'cockpit', cam: 'cockpit' }, { name: 'side', cam: [100, 6, 40, 45] }] },
+  { name: 'bgn_final_2130', setup: BGN_FINAL(21.5, 65), shots: [{ name: 'chase', cam: 'chase', measure: ['pool'] }, { name: 'cockpit', cam: 'cockpit' }] },
+  { name: 'bgn_flare_2130', setup: BGN_FINAL(21.5, 12), shots: [{ name: 'cockpit', cam: 'cockpit' }, { name: 'side', cam: [100, 6, 40, 45] },
+    { name: 'chase', cam: 'chase', measure: ['pool'] }] },
+  // Tel Nof's final at night (e2e.mjs's pool checks): short final and the flare
+  { name: 'telnof_final_2130', setup: TN_FINAL(21.5, 65), shots: [{ name: 'chase', cam: 'chase', measure: ['pool'] }, { name: 'cockpit', cam: 'cockpit' }] },
+  { name: 'telnof_flare_2130', setup: TN_FINAL(21.5, 15), shots: [{ name: 'chase', cam: 'chase', measure: ['pool'] }, { name: 'cockpit', cam: 'cockpit' }] },
   { name: 'bgn_rwy_1925', setup: START('bengurion_26', 19.25), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' }] },
-  { name: 'bgn_rwy_2130', setup: START('bengurion_26', 21.5), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' },
+  { name: 'bgn_rwy_2130', setup: START('bengurion_26', 21.5), shots: [{ name: 'chase', cam: 'chase', measure: ['reds'] }, { name: 'cockpit', cam: 'cockpit' },
     { name: 'front', cam: [-150, 8, 30, 45] }] },
+  // the PAPI of runway 26 on the slope (2 white, 2 red) at night and in the blue hour
+  { name: 'bgn_papi_2130', setup: START('bengurion_26', 21.5), shots: [{ name: 'd1500_fov12', cam: PAPI26(1500, 12), measure: ['papi', 'reds'] },
+    { name: 'd800_fov60', cam: PAPI26(800, 60), measure: ['papi'] }, { name: 'd3000_fov60', cam: PAPI26(3000, 60), measure: ['reds'] }] },
+  { name: 'bgn_papi_1925', setup: START('bengurion_26', 19.25), shots: [{ name: 'd1500_fov12', cam: PAPI26(1500, 12), measure: ['papi'] }] },
   // Tel Nof 36 at night, full burner on the take-off roll
   { name: 'telnof_ab_2130', setup: AB_ROLL('telnof_36', 21.5, 40), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' },
-    { name: 'tower', cam: 'tower' }, { name: 'rear34', cam: [28, 6, 18, 40] }] },
+    { name: 'tower', cam: { rel: [-260, 22, 60], fov: 30 } }, { name: 'rear34', cam: [28, 6, 18, 40], measure: ['burner'] }] },
   { name: 'telnof_idle_2130', setup: START('telnof_36', 21.5), shots: [{ name: 'rear', cam: [8, 4, 14, 40] }] },
   // over Tel Aviv at night: the city, buildings, street lamps, traffic
-  { name: 'tlv_2130', setup: START('tlv_3000', 21.5, 120), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' },
+  { name: 'tlv_2130', setup: START('tlv_3000', 21.5, 120), shots: [{ name: 'chase', cam: 'chase', measure: ['reds', 'tail'] }, { name: 'cockpit', cam: 'cockpit' },
     { name: 'side', cam: [95, 4, 26, 40] }] },
   // Jerusalem at sunset (its own time) and in the blue hour
-  { name: 'jer_1875', setup: START('jerusalem_sunset', null, 120), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' }] },
-  { name: 'jer_1950', setup: START('jerusalem_sunset', 19.5, 120), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' }] },
+  { name: 'jer_1875', setup: START('jerusalem_sunset', null, 120), shots: [{ name: 'chase', cam: 'chase', measure: ['tail'] }, { name: 'cockpit', cam: 'cockpit' }] },
+  { name: 'jer_1950', setup: START('jerusalem_sunset', 19.5, 120), shots: [{ name: 'chase', cam: 'chase', measure: ['tail'] }, { name: 'cockpit', cam: 'cockpit' }] },
   // noon: nothing of this may change (the burner's day look neither)
   { name: 'telnof_noon', setup: START('telnof_36', 12.5), shots: [{ name: 'chase', cam: 'chase' }, { name: 'cockpit', cam: 'cockpit' }] },
   { name: 'telnof_ab_noon', setup: AB_ROLL('telnof_36', 12.5, 40), shots: [{ name: 'chase', cam: 'chase' }, { name: 'rear34', cam: [28, 6, 18, 40] }] },
@@ -223,18 +255,27 @@ async function main() {
     const err = await page.evaluate(() => window.__sim.error);
     if (err) throw new Error(`app did not load: ${err}`);
     await page.evaluate(PAGE_HELPERS);
+    await page.evaluate(NIGHT_PROBE);
     await page.addStyleTag({ content: '#toast { display: none !important; }' });
     log('loaded');
     for (const sc of SCENES) {
       if (!selected(sc)) continue;
       if (PRE) await page.evaluate(PRE);
+      await page.evaluate(() => window.__np.restore());
       const sum = await page.evaluate(`(${sc.setup})()`);
       if (POST) await page.evaluate(POST);
       log(`${sc.name}: ${sum.ias_kt} kt, alt ${sum.alt_m} m, agl ${sum.agl_m} m, ab ${sum.ab}, gear ${sum.gear}, t ${sum.time} h, phase ${sum.phase}`);
       for (const sh of sc.shots) {
         if (SHOTS && !SHOTS.includes(sh.name)) continue;
+        await page.evaluate(() => window.__np.restore());
         if (Array.isArray(sh.cam)) await page.evaluate((c) => window.__nt.orbit(...c), sh.cam);
+        else if (sh.cam && sh.cam.papi) {
+          const r = await page.evaluate((c) => window.__np.papiCam(c.near, c.heading, c.papi, c.fov), sh.cam);
+          if (!r) log('  no PAPI found near', sh.cam.near);
+        } else if (sh.cam && sh.cam.rel) await page.evaluate((c) => window.__nt.relCam(c.rel, c.fov), sh.cam);
         else await page.evaluate((c) => window.__sim.camera(c), sh.cam);
+        // a free camera somewhere new: the terrain and the buildings stream in round it first
+        if (sh.cam && (sh.cam.papi || sh.cam.rel)) for (let i = 0; i < 3; i++) await page.evaluate(() => window.__sim.settle(1500));
         await page.evaluate(() => window.__sim.settle(1500));
         let ri = null;
         for (let i = 0; i < FRAMES; i++) ri = await page.evaluate(() => window.__sim.render());
@@ -244,16 +285,22 @@ async function main() {
         const env = await page.evaluate(() => window.__nt.env());
         await page.screenshot({ path: file });
         const mem = await page.evaluate(() => window.__sim.gpuMemory());
+        // the lights measured in this frame (night_probe.mjs; 'pool' draws two more frames)
+        const measured = {};
+        for (const m of sh.measure || []) measured[m] = await page.evaluate((k) => window.__np[k](), m);
         report.shots.push({ file, scene: sc.name, shot: sh.name, calls: ri.calls, triangles: ri.triangles, ms: ri.ms,
-          programs: ri.programs, gpuMB: mem.totalMB, env, stats, summary: sum });
+          programs: ri.programs, gpuMB: mem.totalMB, env, stats, measured, summary: sum });
         log(`  ${name}  ${ri.calls} calls, ${(ri.triangles / 1e6).toFixed(2)} M tris, ${ri.ms} ms, GPU ~${mem.totalMB} MB`);
         log(`    env ${JSON.stringify(env)}  frame ${JSON.stringify(stats)}`);
+        for (const [k, v] of Object.entries(measured)) log(`    ${k} ${JSON.stringify(v)}`);
         for (let p = 0; p < PROBE.length; p++) {
           await page.evaluate(PROBE[p].js);
           for (let i = 0; i < FRAMES; i++) await page.evaluate(() => window.__sim.render());
           const pf = join(OUT, `${sc.name}_${sh.name}${TAG ? '_' + TAG : ''}_p${p + 1}_${PROBE[p].label}.png`);
           await page.screenshot({ path: pf });
-          log(`    probe ${p + 1} ${PROBE[p].label}: ${JSON.stringify(await page.evaluate(() => window.__nt.stats()))}`);
+          // a probe step may leave a measurement in window.__npOut (e.g. window.__np.burner())
+          const out = await page.evaluate(() => { const v = window.__npOut; window.__npOut = undefined; return v; });
+          log(`    probe ${p + 1} ${PROBE[p].label}: ${JSON.stringify(await page.evaluate(() => window.__nt.stats()))}${out !== undefined ? '  ' + JSON.stringify(out) : ''}`);
         }
       }
     }
