@@ -191,9 +191,10 @@ compiled once by the first render after the analysis, normally behind the menu. 
 3070 at 1080p: about 0.3-0.5 ms a frame in the cockpit view (the canopy pass over most of the
 screen from inside, the five shadow taps and the detail on the cockpit, the canvas upload a few
 times a second), and when the shadow map is redrawn 0.1-0.3 ms of GPU and 0.3-0.6 ms of CPU for its
-~100 draws. Measured there (PC trial 3, tlv_3000, 1080p high, uncapped): 4.2 ms a frame on average
-in the cockpit, 4.4 ms with the cockpit module off; with the canvas still an sRGB texture it was
-5.3 ms, with ten frames a second of 55-65 ms (each canvas upload).
+~100 draws. Measured there (PC trial 3, tlv_3000 at 3,000 m, 1080p high, uncapped, 5 s): 4.4 ms a
+frame on average in the cockpit, worst 13.5 ms, the same as with the module off (4.4 ms, worst
+11 ms); with the canvas still an sRGB texture it was 5.3 ms, with ten frames a second of 55-65 ms
+(each canvas upload).
 
 ## How it was checked
 
