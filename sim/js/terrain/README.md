@@ -109,10 +109,15 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   ripples, Dead Sea salt crust with shoreline bands and mud cracks, built-up ground, and
   stone terraces on the Judean hills (risers and benches following the contours, wall
   shadows). Every pattern is built around the imagery colour of its texel (mean-preserving
-  mixes), so from altitude the ground keeps the imagery's tone; the relief (slopes) lights
-  with the sun. Patterns use exact camera-relative coordinates (`uCamMod`), box filters or
-  mip-mapped layers, so they do not shimmer. The imagery itself is magnified with a B-spline
-  bicubic filter within ~1 km (no 6 m blocks).
+  mixes: shrubs, crowns and the soil between them are reference colours scaled to the
+  imagery's mean, so they keep a natural hue), so from altitude the ground keeps the
+  imagery's tone; the relief (slopes) lights with the sun. Patterns use exact camera-relative
+  coordinates (`uCamMod`), box filters or mip-mapped layers, so they do not shimmer. The
+  generated layers tile every 2-64 m, so their content coarser than 1/16 - 1/4 of a tile is
+  taken out when they are made (their coarse mips are flat): seen from a distance, a tile's
+  repetition would otherwise show as a grid of light lines. `/dev/terrain.compile.html`
+  checks that, and that every layer wraps without a seam. The imagery itself is magnified
+  with a B-spline bicubic filter within ~1 km (no 6 m blocks).
 * **Terrain shadows** (`horizonMap.js`): two horizon maps toward the sun (near: 51.2 km at
   25 m, far: 204.8 km at 100 m on high quality; 512 / 1024 / 2048 texels a side on low /
   medium / high) in one R8 texture array, computed in a worker with a convex-hull sweep along
@@ -258,6 +263,10 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   (runways, water, surface types, airports.json consistency).
 * `node sim/dev/terrain.analysis.test.mjs`: horizon maps against brute force (with earth
   curvature), field analysis on synthetic fields, the overrun corrections.
+* `/dev/terrain.compile.html` (served `sim/`, any GPU): compiles the four terrain programs
+  and lists their sampler units (at most 16 on ANGLE / D3D11), then builds the generated
+  ground textures and checks every material layer for seams at its tile edges and for coarse
+  content that would show the tile's repetition. `window.__terrainCheck` has the result.
 * `node sim/dev/terrain.shots.mjs [--port 8146] [--out DIR] [--scenes a,b] [--view 1,5]`:
   look-development screenshots of the terrain brief's scenes (Tel Nof 36, fields at 120 m and
   40 m, Judean hills at sunset, Jerusalem from 1.5 km, the coast at 300 m, 3,000 m cruise, the

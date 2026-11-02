@@ -3,8 +3,10 @@
 // the old "macro" detail, the water wave map and the runway designation glyphs. Every layer
 // is made on the GPU at startup from periodic noise (nothing is downloaded).
 //
-// Material layers ("relief" layers) are made in two passes: the first writes a height field
-// (metres), an albedo pattern and a mask; the second turns the heights into slopes. Texel:
+// Material layers ("relief" layers) are made in three passes: the first writes a height field
+// (metres), an albedo pattern and a mask; the second takes out the content coarser than a
+// sixteenth to a quarter of the tile (or its repetition shows from a distance as a grid);
+// the third turns the heights into slopes. Texel:
 //   R, G  slope dh/dx, dh/dz (m / m) as 0.5 + slope * SLOPE_SCALE
 //   B     albedo pattern, 0.5 = the material's mean colour (the shader keeps the mean)
 //   A     mask (what the layer's comment says: tufts, shrubs, cracks, crowns ...)
@@ -16,21 +18,25 @@ import * as THREE from 'three';
 export const DETAIL_SIZE = 512;
 export const SLOPE_SCALE = 0.25;
 
-/** Layer index -> tile size (m). Indices are #defined in the terrain shader (DL_*). */
+/**
+ * Layer index -> tile size (m). Indices are #defined in the terrain shader (DL_*).
+ * flat (relief layers): the layer's content coarser than flat x flat texels is taken out
+ * (pass 1b, FLAT_FRAG), several times the size of its biggest feature.
+ */
 export const DETAIL_LAYERS = {
   MACRO: { index: 0, tile: 256 },   // R grass / crops, G canopy, B rock, A built-up (luminance)
   WATER: { index: 1, tile: 64 },    // RG wave slope, B crest
   GLYPHS: { index: 2, tile: 0 },    // runway digits and letters, 4 x 4 cells
-  SOIL: { index: 3, tile: 4 },      // ploughed / bare soil: clods, crust, pebbles (A = pebbles)
-  GRASS: { index: 4, tile: 4 },     // dry grass tufts on soil (A = tufts)
-  SHRUB: { index: 5, tile: 16 },    // garrigue cushions among stones (A = shrubs)
-  ROCK: { index: 6, tile: 16 },     // limestone karst: blocks, cracks, pits (A = cracks)
-  SAND: { index: 7, tile: 8 },      // wind ripples (A = crest)
-  SALT: { index: 8, tile: 16 },     // salt crust polygons with ridges (A = mud cracks)
-  URBAN: { index: 9, tile: 16 },    // slabs, asphalt patches, stains, cracks (A = seams)
-  CANOPY: { index: 10, tile: 64 },  // tree crowns ~5 m with gaps (A = crown cover)
-  LEAF: { index: 11, tile: 2 },     // leafy crop plants (A = leaf cover)
-  STRAW: { index: 12, tile: 2 },    // stubble and loose straw (A = straw)
+  SOIL: { index: 3, tile: 4, flat: 32 },      // ploughed / bare soil: clods, crust, pebbles (A = pebbles)
+  GRASS: { index: 4, tile: 4, flat: 32 },     // dry grass tufts on soil (A = tufts)
+  SHRUB: { index: 5, tile: 16, flat: 32 },    // garrigue cushions among stones (A = shrubs)
+  ROCK: { index: 6, tile: 16, flat: 64 },     // limestone karst: blocks, cracks, pits (A = cracks)
+  SAND: { index: 7, tile: 8, flat: 32 },      // wind ripples (A = crest)
+  SALT: { index: 8, tile: 16, flat: 128 },    // salt crust polygons with ridges (A = mud cracks)
+  URBAN: { index: 9, tile: 16, flat: 32 },    // slabs, asphalt patches, stains, cracks (A = seams)
+  CANOPY: { index: 10, tile: 64, flat: 64 },  // tree crowns ~5 m with gaps (A = crown cover)
+  LEAF: { index: 11, tile: 2, flat: 128 },    // leafy crop plants (A = leaf cover)
+  STRAW: { index: 12, tile: 2, flat: 64 },    // stubble and loose straw (A = straw)
 };
 export const DETAIL_LAYER_COUNT = 13;
 
@@ -294,6 +300,52 @@ void main() {
 }
 `;
 
+// Pass 1b: takes out the layer's content coarser than the texels of mip level uLod (its local
+// means at that scale become the layer's mean), so that the coarse mips are flat. A tile is
+// small (2 - 64 m): seen from a distance, its coarse mips repeat as a grid of light and dark
+// lines (a row of cells without shrubs, say, becomes a line across the ground). The coarse
+// field is sharpened once (2M - SM, S = the box average of its own bilinear upsampling, so the
+// result's coarse mip is near flat) and then upsampled bilinearly, wrapping like the tile.
+// In: (height m, albedo, mask) of pass 1 with mipmaps.
+const FLAT_FRAG = /* glsl */ `
+uniform sampler2D uSrc;
+uniform int uLod;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 c = texelFetch(uSrc, p, 0);
+  if (uLod > 0) {
+    int n = ${DETAIL_SIZE} >> uLod;
+    vec4 mean = texelFetch(uSrc, ivec2(0), ${Math.log2(DETAIL_SIZE)});
+    vec2 x = (vec2(p) + 0.5) / float(1 << uLod) - 0.5;
+    vec2 i = floor(x), f = x - i;
+    ivec2 i0 = ivec2(i);
+    vec4 M[16];
+    for (int y = 0; y < 4; y++) {
+      for (int xx = 0; xx < 4; xx++) {
+        ivec2 q = (i0 + ivec2(xx - 1, y - 1) + n) % n;     // (operands >= 0: i0 >= -1)
+        M[y * 4 + xx] = texelFetch(uSrc, q, uLod) - mean;
+      }
+    }
+    vec4 C[4];
+    for (int cy = 0; cy < 2; cy++) {
+      for (int cx = 0; cx < 2; cx++) {
+        vec4 s = vec4(0.0);
+        for (int dy = -1; dy <= 1; dy++) {
+          for (int dx = -1; dx <= 1; dx++) {
+            float w = (dx == 0 ? 0.75 : 0.125) * (dy == 0 ? 0.75 : 0.125);
+            s += w * M[(cy + 1 + dy) * 4 + cx + 1 + dx];
+          }
+        }
+        C[cy * 2 + cx] = 2.0 * M[(cy + 1) * 4 + cx + 1] - s;
+      }
+    }
+    c -= mix(mix(C[0], C[1], f.x), mix(C[2], C[3], f.x), f.y);
+    c.b = clamp(c.b, 0.0, 1.0);
+  }
+  gl_FragColor = vec4(c.rgb, 1.0);
+}
+`;
+
 // Pass 2: slopes from the height pass (wrapping central differences).
 const SLOPE_FRAG = /* glsl */ `
 uniform sampler2D uSrc;
@@ -429,17 +481,23 @@ export function makeDetailArray(renderer, anisotropy) {
   rt.texture.colorSpace = THREE.NoColorSpace;
   rt.texture.name = 'TerrainDetailArray';
   const float = renderer.extensions.has('EXT_color_buffer_float');
-  const tmp = new THREE.WebGLRenderTarget(N, N, {
+  const tmpOpts = {
     type: float ? THREE.HalfFloatType : THREE.UnsignedByteType, format: THREE.RGBAFormat,
     depthBuffer: false, stencilBuffer: false, generateMipmaps: false,
     minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-  });
+  };
+  // pass 1 writes tmp with mipmaps (its local means for the flattening), pass 1b tmp2
+  const tmp = new THREE.WebGLRenderTarget(N, N, { ...tmpOpts, generateMipmaps: true, minFilter: THREE.NearestMipmapNearestFilter });
+  const tmp2 = new THREE.WebGLRenderTarget(N, N, tmpOpts);
   const common = { vertexShader: PASS_VERT, depthTest: false, depthWrite: false };
   const relief = new THREE.ShaderMaterial({
     ...common, fragmentShader: RELIEF_FRAG, uniforms: { uLayer: { value: 0 }, uTile: { value: 1 } },
   });
+  const flatten = new THREE.ShaderMaterial({
+    ...common, fragmentShader: FLAT_FRAG, uniforms: { uSrc: { value: tmp.texture }, uLod: { value: 0 } },
+  });
   const slope = new THREE.ShaderMaterial({
-    ...common, fragmentShader: SLOPE_FRAG, uniforms: { uSrc: { value: tmp.texture }, uTexelM: { value: 1 } },
+    ...common, fragmentShader: SLOPE_FRAG, uniforms: { uSrc: { value: tmp2.texture }, uTexelM: { value: 1 } },
   });
   const macro = new THREE.ShaderMaterial({ ...common, fragmentShader: MACRO_FRAG });
   const water = new THREE.ShaderMaterial({ ...common, fragmentShader: WATER_FRAG });
@@ -458,7 +516,7 @@ export function makeDetailArray(renderer, anisotropy) {
   order.forEach((name, k) => {
     // mipmaps once, after the last layer (three regenerates them after every render)
     rt.texture.generateMipmaps = k === order.length - 1;
-    const { index, tile } = L[name];
+    const { index, tile, flat = 0 } = L[name];
     if (name === 'MACRO') runLayerPass(renderer, macro, rt, index);
     else if (name === 'WATER') runLayerPass(renderer, water, rt, index);
     else if (name === 'GLYPHS') runLayerPass(renderer, glyph, rt, index);
@@ -466,12 +524,15 @@ export function makeDetailArray(renderer, anisotropy) {
       relief.uniforms.uLayer.value = index;
       relief.uniforms.uTile.value = tile;
       runLayerPass(renderer, relief, tmp, 0);
+      flatten.uniforms.uLod.value = flat > 1 ? Math.round(Math.log2(flat)) : 0;
+      runLayerPass(renderer, flatten, tmp2, 0);
       slope.uniforms.uTexelM.value = tile / N;
       runLayerPass(renderer, slope, rt, index);
     }
   });
-  for (const m of [relief, slope, macro, water, glyph]) m.dispose();
+  for (const m of [relief, flatten, slope, macro, water, glyph]) m.dispose();
   glyphTex?.dispose();
   tmp.dispose();
+  tmp2.dispose();
   return rt;
 }

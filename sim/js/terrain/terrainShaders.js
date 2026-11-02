@@ -262,6 +262,23 @@ vec3 meanMix(vec3 C, vec3 Ca, float m, float f) {
   vec3 Cb = clamp((C - (1.0 - f) * Ca) / max(f, 0.05), 0.0, 1.0);
   return mix(Ca, Cb, m);
 }
+// the same from two reference colours: Ta where m = 0, Tb where m = 1 (covering the fraction f),
+// both scaled per channel so that the mean is C. They keep their contrast and hue difference
+// (dark olive shrubs on pale soil) and take the tint from the imagery; solving for one of them
+// (meanMix) can give odd hues, such as red shrubs with no blue on a pink ground.
+vec3 mixMean(vec3 C, vec3 Ta, vec3 Tb, float m, float f) {
+  return min(mix(Ta, Tb, m) * C / mix(Ta, Tb, f), vec3(1.0));
+}
+// reference albedos (linear; only their ratios matter): limestone soil of the hills, browner
+// soil of the plain, dry grass, garrigue cushions, forest floor and crowns, orchard soil and crowns
+const vec3 REF_SOIL_HILL = vec3(0.52, 0.48, 0.42);
+const vec3 REF_SOIL_LOW = vec3(0.52, 0.43, 0.32);
+const vec3 REF_DRY_GRASS = vec3(0.50, 0.44, 0.30);
+const vec3 REF_SHRUB = vec3(0.13, 0.145, 0.085);
+const vec3 REF_FOREST_FLOOR = vec3(0.40, 0.34, 0.26);
+const vec3 REF_CROWN = vec3(0.07, 0.10, 0.05);
+const vec3 REF_ORCHARD_SOIL = vec3(0.45, 0.37, 0.27);
+const vec3 REF_ORCHARD_CROWN = vec3(0.08, 0.11, 0.05);
 
 // Ground materials near the camera. C: imagery colour (raw albedo); Cm: the same at 25 m;
 // wA / wB: class weights; dir: row direction; rnd: region random (0..1); h: height (m);
@@ -391,6 +408,7 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
   if (wA.y > 0.01) {
     float orchard = step(h, 320.0) * step(0.3, fract(rnd * 11.7));
     vec3 c = vec3(0.0);
+    vec3 ground = vec3(0.0);                          // the soil between the crowns
     vec2 s2 = vec2(0.0);
     float sh = 0.0;
     if (orchard > 0.5) {
@@ -414,10 +432,9 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
       float f = 3.1416 * r * r / (sp.x * sp.y);
       float vis = clamp(1.5 - gPx / 1.5, 0.0, 1.0);    // crowns resolved?
       float m = mix(f, crown, vis);
-      vec3 ground = soilOf(C) * 1.25;
       vec4 lf = dl(DL_LEAF, 2.0);
-      vec3 cc3 = meanMix(C, ground, m, f) * (1.0 + 0.6 * (lf.b - 0.5) * m);
-      c = cc3;
+      c = mixMean(C, REF_ORCHARD_SOIL, REF_ORCHARD_CROWN, m, f) * (1.0 + 0.6 * (lf.b - 0.5) * m);
+      ground = mixMean(C, REF_ORCHARD_SOIL, REF_ORCHARD_CROWN, 0.0, f);
       // dome normals
       float k = clamp(d / max(r, 0.1), 0.0, 0.95);
       vec2 dome = (dv / max(d, 1e-3)) * k / sqrt(1.0 - k * k) * 0.8 * crown * vis;
@@ -428,8 +445,8 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
       vec4 t = dl(DL_CANOPY, 64.0);
       vec4 tM = dlMean(DL_CANOPY);
       float m = t.a;
-      vec3 ground = soilOf(C) * 1.3;
-      c = meanMix(C, ground, m, tM.a) * (1.0 + 0.8 * (t.b - tM.b) * m);
+      c = mixMean(C, REF_FOREST_FLOOR, REF_CROWN, m, tM.a) * (1.0 + 0.8 * (t.b - tM.b) * m);
+      ground = mixMean(C, REF_FOREST_FLOOR, REF_CROWN, 0.0, tM.a);
       s2 = dlSlope(t, 64.0, 64.0) * 0.6;
       float ts = dlAt(DL_CANOPY, 64.0, sunH * cotE * 6.0).a;
       sh = ts * (1.0 - m);
@@ -437,7 +454,7 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
     }
     // where another module draws 3D trees: the ground between them, no painted crowns
     float k3d = uTreeCover.x > 0.0 ? 1.0 - smoothstep(uTreeCover.x, uTreeCover.x + uTreeCover.y, length(vRel)) : 0.0;
-    c = mix(c, soilOf(C) * 1.2, k3d);
+    c = mix(c, ground, k3d);
     col += wA.y * c;
     sl += wA.y * s2 * (1.0 - k3d);
     shade += wA.y * sh * (1.0 - k3d);
@@ -451,8 +468,9 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
     float hill = smoothstep(120.0, 400.0, h);
     if (wA.z > 0.01) {
       float m = sb.a;
-      vec3 ground = mix(soilOf(C) * 1.35, vec3(lumC * 1.45), 0.4 * hill);
-      vec3 c = meanMix(C, ground, m, sbM.a) * (1.0 + 0.5 * (sb.b - sbM.b) + patches);
+      // dark olive cushions on pale limestone soil (hills) or browner soil (plain)
+      vec3 soilRef = mix(REF_SOIL_LOW, REF_SOIL_HILL, hill);
+      vec3 c = mixMean(C, soilRef, REF_SHRUB, m, sbM.a) * (1.0 + 0.5 * (sb.b - sbM.b) + patches);
       float ts = dlAt(DL_SHRUB, 16.0, sunH * cotE * 0.7).a;
       col += wA.z * c;
       sl += wA.z * dlSlope(sb, 16.0, 16.0);
@@ -468,7 +486,7 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec2 dir, float rnd, floa
       // scattered cushions and stones on the hills, wetter darker patches in wetlands
       float sparse = sb.a * hill * 0.6;
       vec3 c = C * (1.0 + 0.6 * (gt.b - gM.b) + 0.45 * (g16.b - gM.b) + patches);
-      c = mix(c, meanMix(c, vec3(lumC * 1.2), sparse, sbM.a * hill * 0.6), hill);
+      c = mixMean(c, REF_DRY_GRASS, REF_SHRUB, sparse, sbM.a * hill * 0.6);
       c *= 1.0 - 0.25 * (wB.w / max(wg, 1e-3)) * (gt.a - gM.a);
       col += wg * c;
       sl += wg * (dlSlope(gt, 4.0, 4.0) + dlSlope(sb, 16.0, 16.0) * hill * 0.5);

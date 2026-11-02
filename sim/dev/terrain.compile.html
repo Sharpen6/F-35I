@@ -7,7 +7,10 @@
   Compiles the terrain's programs (base and L0 tile material, with and without the sun's
   shadow map) on the GPU this page runs on, without any terrain data, and lists per program:
   compile / link status with the driver's log, and the sampler units it uses (vertex +
-  fragment; ANGLE on D3D11 allows 16). Open it from the local server: /dev/terrain.compile.html
+  fragment; ANGLE on D3D11 allows 16). Then builds the generated ground textures
+  (detailTextures.js) and checks each material layer: it wraps without a seam, and its coarse
+  mips are flat (a tile whose coarse mips vary shows its repetition as a grid from a distance).
+  Open it from the local server: /dev/terrain.compile.html
   The result is also in window.__terrainCheck (for scripts).
 -->
 <script type="importmap">{ "imports": { "three": "../vendor/three/build/three.module.js" } }</script>
@@ -22,6 +25,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { TERRAIN_VERT, TERRAIN_FRAG, MAX_RWY } from '../js/terrain/terrainShaders.js';
+import { makeDetailArray, DETAIL_LAYERS, DETAIL_SIZE } from '../js/terrain/detailTextures.js';
 
 const out = document.getElementById('out');
 const lines = [];
@@ -94,9 +98,72 @@ for (const p of renderer.info.programs || []) {
   if (p.diagnostics) say(JSON.stringify(p.diagnostics, null, 1).slice(0, 4000), 'bad');
 }
 if (!result.programs.length) { result.ok = false; say('no terrain program was built', 'bad'); }
+
+// ---- the generated ground textures ----
+say('\nground texture layers (std of the albedo pattern B and mask A in 8-bit steps: of the texels, of the'
+  + ' means over the layer\'s flattening blocks and over blocks twice that size; seam = step across the tile edge / largest step inside):');
+console.error = (...a) => { errors.push(a.join(' ')); origError(...a); };
+let detail = null;
+const t1 = performance.now();
+try { detail = makeDetailArray(renderer, 1); } catch (e) { errors.push(String(e)); }
+console.error = origError;
+if (detail) {
+  say(`built in ${(performance.now() - t1).toFixed(0)} ms`);
+  const N = DETAIL_SIZE;
+  const px = new Uint8Array(N * N * 4);
+  // std over the box means of k x k texel blocks (k = 1: the texels themselves), channel ch
+  const blockStd = (ch, k) => {
+    const n = N / k, m = new Float64Array(n * n);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) m[(y / k | 0) * n + (x / k | 0)] += px[(y * N + x) * 4 + ch];
+    let s = 0, s2 = 0;
+    for (const v of m) { s += v / (k * k); s2 += (v / (k * k)) ** 2; }
+    return Math.sqrt(Math.max(0, s2 / m.length - (s / m.length) ** 2));
+  };
+  // seams: the mean |step| between neighbouring columns (rows) across the wrap, over the largest
+  // such step between any two neighbouring columns (rows) inside the tile, channel ch
+  const seam = (ch) => {
+    let worst = 0;
+    for (const [sx, sy] of [[4, N * 4], [N * 4, 4]]) {          // columns, then rows
+      const step = new Float64Array(N);                        // step[j]: between j - 1 and j (0: the wrap)
+      for (let j = 0; j < N; j++) {
+        const jm = (j + N - 1) % N;
+        for (let i = 0; i < N; i++) step[j] += Math.abs(px[j * sx + i * sy + ch] - px[jm * sx + i * sy + ch]);
+      }
+      let inner = 1e-6;
+      for (let j = 1; j < N; j++) inner = Math.max(inner, step[j]);
+      worst = Math.max(worst, step[0] / inner);
+    }
+    return worst;
+  };
+  result.layers = [];
+  for (const [name, L] of Object.entries(DETAIL_LAYERS)) {
+    if (!L.flat) continue;
+    renderer.setRenderTarget(detail, L.index);
+    gl.readPixels(0, 0, N, N, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    renderer.setRenderTarget(null);
+    const r = { name, seam: Math.max(seam(0), seam(1), seam(2), seam(3)) };
+    for (const ch of [2, 3]) {
+      const c = ch === 2 ? 'B' : 'A';
+      r[c] = [blockStd(ch, 1), blockStd(ch, L.flat), blockStd(ch, 2 * L.flat)];
+    }
+    // flat: over blocks twice the flattening size both patterns vary by less than 2 steps or
+    // a tenth of their own variation (the mask is clamped to 0..1, so it keeps a little)
+    r.ok = r.seam < 1.1 && ['B', 'A'].every((c) => r[c][2] < Math.max(2, 0.1 * r[c][0]));
+    result.ok &&= r.ok;
+    result.layers.push(r);
+    const f = (v) => v.map((x) => x.toFixed(1).padStart(5)).join(' ');
+    say(`${r.ok ? 'OK ' : 'BAD'} ${name.padEnd(7)} B ${f(r.B)}   A ${f(r.A)}   seam ${r.seam.toFixed(2)}`, r.ok ? 'ok' : 'bad');
+  }
+  detail.dispose();
+} else {
+  result.ok = false;
+  say('the ground textures were not built', 'bad');
+}
+
 for (const e of errors) say(e.slice(0, 4000), 'bad');
 result.errors = errors;
-say(result.ok ? '\nall terrain programs compile and fit the sampler budget' : '\nPROBLEMS above', result.ok ? 'ok' : 'bad');
+result.ok &&= errors.length === 0;
+say(result.ok ? '\nall terrain programs compile and fit the sampler budget; the ground textures tile cleanly' : '\nPROBLEMS above', result.ok ? 'ok' : 'bad');
 window.__terrainCheck = result;
 </script>
 </body>
