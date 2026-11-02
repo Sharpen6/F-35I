@@ -259,9 +259,16 @@ export class AircraftLights {
     geo.setAttribute('aHalo', new THREE.BufferAttribute(this._halo, 4).setUsage(THREE.DynamicDrawUsage));
     this.glowUniforms = { ...fogUniforms(), uPixelRatio: { value: 1 }, uExposure: { value: 1 },
       uShoulder: { value: new THREE.Vector4().fromArray(SHOULDER) }, uDepthBias: { value: DEPTH_BIAS } };
+    // On the canvas the glows are display values already under their shoulder: two of them added up
+    // (the wing-tip and the fuselage light of one side, seen from abeam) or one added to the lit skin
+    // by day would clip towards white, so there the brighter of glow and frame wins, channel by
+    // channel (MaxEquation: the hue survives, over a dark sky it is the same as adding). On the HDR
+    // chain's float target the glows are radiance and add up (its tone curve follows).
     this.glowMaterial = new THREE.ShaderMaterial({
       name: 'F35_LightGlow', uniforms: this.glowUniforms, vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG,
-      transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, toneMapped: true, fog: true,
+      transparent: true, depthWrite: false, depthTest: true, toneMapped: true, fog: true,
+      blending: THREE.CustomBlending, blendEquation: THREE.MaxEquation,
+      blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
     });
     this.points = new THREE.Points(geo, this.glowMaterial);
     this.points.name = 'F35_LightGlows';
@@ -272,6 +279,8 @@ export class AircraftLights {
       this.exposure = fxExposure.get(renderer);
       this._bloom = fxEnv.bloomOn(renderer);
       this._linear = fxEnv.linearTarget(renderer);
+      // a blend state, not a program: switching it rebuilds nothing
+      this.glowMaterial.blendEquation = this._linear ? THREE.AddEquation : THREE.MaxEquation;
       const u = this.glowUniforms;
       u.uPixelRatio.value = renderer.getPixelRatio();
       u.uExposure.value = Math.max(0.05, this.exposure);
