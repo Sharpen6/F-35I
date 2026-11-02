@@ -25,7 +25,7 @@ uniform vec3 uMie;               // mie scattering, mie extinction (1/m), mie g
 uniform vec3 uOzone;             // ozone absorption (1/m) at the peak
 uniform vec3 uGroundRadiance;    // radiance of the mean ground (for the sky below the horizon)
 uniform float uGroundDatum;      // height of the sky-view LUT's ground sphere, m MSL (<= 0: Dead Sea)
-uniform float uNight;            // 0 day .. 1 full night
+uniform float uNight;            // lights tuned at exposure 40: env.lightsOn x env.nightLightGain (0 by day)
 uniform sampler2D uTransmittanceLUT;
 uniform sampler2D uMultiScatLUT;
 

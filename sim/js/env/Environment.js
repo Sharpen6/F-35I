@@ -81,9 +81,10 @@ export function meteredLight(e) {
   return e <= e1 ? Math.pow(e / METER.key, -1 / METER.p) : METER.k1 * Math.pow(e / e1, -1 / METER.p2);
 }
 /**
- * The night exposure that the artificial lights of the other modules (the terrain's city lights)
- * were tuned for. Above it, uNight falls as NIGHT_LIGHTS_EXPOSURE / exposure, so those lights keep
- * the brightness on screen they were tuned to while the eye adapts further to the dark.
+ * The night exposure that the city lights drawn into the terrain and the clouds' city glow were
+ * tuned for (uNight, below): at night uNight x exposure is NIGHT_LIGHTS_EXPOSURE, the brightness on
+ * screen they were tuned to, and from sunset it follows the rule for lights at night like
+ * everything else.
  */
 export const NIGHT_LIGHTS_EXPOSURE = 40;
 
@@ -100,7 +101,10 @@ export const NIGHT_LIGHTS_EXPOSURE = 40;
 // Point lights seen from afar (airfield lights, street lamps, cars, obstruction lights, the jet's
 // position lights) also get the threshold of a point source on the ground's luminance
 // (pointLightThreshold): a light many times over it stays a visible dot even when its energy
-// spread over a pixel would be too faint (js/world/AirportLights.js POINT_LIGHT_GLSL).
+// spread over a pixel would be too faint (js/world/AirportLights.js POINT_LIGHT_VERT_GLSL).
+// They switch on by one schedule (lightsOn: street lamps, windows, the airfield, the city's glow,
+// from just before sunset to the sun at -2.5 deg) and write their mark into the HDR frame
+// (js/env/emitters.js), so Post.js tone-maps them by their hue and night vision leaves them alone.
 // Displays (the PCD, the switch LEDs, the tablet) are a picture level instead (display
 // brightness / exposure, js/env/displayLevels.js): a pilot sets their brightness by eye.
 
@@ -125,6 +129,18 @@ export function skyIlluminance(el) {
  */
 export function lightNight(el) {
   const t = Math.min(1, Math.max(0, (1.5 - Math.log10(skyIlluminance(el))) / 2));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * The one switch-on schedule (0..1) of everything that lights up at dusk: street lamps
+ * (photocells and astronomical clocks), lit windows, the airfield's lights (ICAO: on from sunset),
+ * the cities' glow. From ~1000 lux on the ground (the sun ~+0.7 deg) to ~100 lux (-2.5 deg), the
+ * spread of many lamps switching at slightly different light levels. How bright a light is once
+ * on is the rule's (lightGain): the same physical value at dusk and at night.
+ */
+export function lightsOn(el) {
+  const t = Math.min(1, Math.max(0, 3 - Math.log10(skyIlluminance(el))));
   return t * t * (3 - 2 * t);
 }
 
@@ -213,18 +229,21 @@ export class Environment {
     /** 0 photopic .. 1 dark-adapted (Post.js shifts colours towards rod vision). */
     this.nightVision = 0;
     /**
-     * Gain for artificial night lights tuned for a night exposure of NIGHT_LIGHTS_EXPOSURE (40):
-     * min(1, 40 / exposure). Lights given in physical units use lightGain instead.
-     */
-    this.nightLightGain = 1;
-    /**
      * Lights at night (artificialLightGain): physical light (cd/m^2, lux x albedo / pi) /
      * LUX_PER_UNIT x lightGain is its scene radiance; lightNight 0 (day, dusk) .. 1 (night);
-     * pointThreshold: lux at the eye at which a point light is just seen (pointLightThreshold).
+     * lightsOn 0 (day) .. 1: the one switch-on schedule (lightsOn()); pointThreshold: lux at the
+     * eye at which a point light is just seen (pointLightThreshold).
      */
     this.lightGain = 1;
     this.lightNight = 0;
+    this.lightsOn = 0;
     this.pointThreshold = pointLightThreshold(30);
+    /**
+     * The rule for lights tuned at a night exposure of NIGHT_LIGHTS_EXPOSURE (40) rather than in
+     * physical units: lightGain x 40 / NIGHT_ADAPTED_EXPOSURE (40 / exposure at night). uNight is
+     * lightsOn x this. New code reads lightGain and lightsOn.
+     */
+    this.nightLightGain = NIGHT_LIGHTS_EXPOSURE / NIGHT_ADAPTED_EXPOSURE;
     /** Albedo of the ground around the camera (from the terrain's land cover, see setTerrain). */
     this.groundAlbedo = 0.2;
     /** Height of the atmosphere's ground sphere (m MSL, <= 0): the lowest terrain near the camera. */
@@ -411,14 +430,11 @@ export class Environment {
     this.sunDirection.set(s.x, s.y, s.z).normalize();
     this.sunElevationDeg = s.elevationDeg;
     this.sunAzimuthDeg = s.azimuthDeg;
-    // night: the artificial lights come on as the sun goes from -1 to -9 deg (uNight, see update()),
+    // night: the artificial lights come on by the one schedule (lightsOn, _updateLightLevels: uNight),
     // the night sky's glow fades in from -2 to -10 deg (NIGHT), the stars come out from -3 deg
     // (the brightest) to -11 deg (all of them: the sky shader fades each one in by its brightness)
     const e = s.elevationDeg;
     const U = this.uniforms;
-    const night = Math.min(1, Math.max(0, (-1 - e) / 8));
-    this.nightFade = night;
-    U.uNight.value = night * this.nightLightGain;
     U.uStarVis.value = Math.min(1, Math.max(0, (-3 - e) / 8));
     const glow = Math.min(1, Math.max(0, (NIGHT.fadeFrom - e) / (NIGHT.fadeFrom - NIGHT.fadeTo)));
     // the moon's boost comes in as the twilight goes (else a quarter moon outshone the dusk sky)
@@ -454,12 +470,19 @@ export class Environment {
     this._updateLightLevels();
   }
 
-  /** lightNight, lightGain and pointThreshold (the rule "Lights at night") for the sun and the exposure. */
+  /**
+   * lightNight, lightGain, lightsOn and pointThreshold (the rule "Lights at night") for the sun and
+   * the exposure, and uNight: the same rule for the lights tuned at exposure 40 (the terrain's city
+   * lights, the clouds' city glow).
+   */
   _updateLightLevels() {
     const el = Number.isFinite(this.sunElevationDeg) ? this.sunElevationDeg : 90;
     this.lightNight = lightNight(el);
     this.lightGain = artificialLightGain(this.exposure, el);
+    this.lightsOn = lightsOn(el);
     this.pointThreshold = pointLightThreshold(el);
+    this.nightLightGain = this.lightGain * NIGHT_LIGHTS_EXPOSURE / NIGHT_ADAPTED_EXPOSURE;
+    this.uniforms.uNight.value = this.lightsOn * this.nightLightGain;
   }
 
   /** Moonlight on the scene (scene units, normal incidence), boosted at night, before the atmosphere. */
@@ -836,9 +859,6 @@ export class Environment {
     const nv = Math.min(1, Math.max(0, Math.log(MESOPIC[0] / Math.exp(this._logKp)) / Math.log(MESOPIC[0] / MESOPIC[1])));
     this.nightVision = nv * nv * (3 - 2 * nv);
     this.renderer.toneMappingExposure = this.exposure * this.exposureBias;
-    // the artificial lights tuned for the old night exposure keep their brightness on screen
-    this.nightLightGain = Math.min(1, NIGHT_LIGHTS_EXPOSURE / Math.max(this.exposure, 1e-3));
-    U.uNight.value = (this.nightFade ?? 0) * this.nightLightGain;
     // lights at night (the rule above): the eye's adaptation to lit streets, not the meter's
     this._updateLightLevels();
     // the cumulus layer for the cloud shadows on three's materials (js/env/cloudShadowChunk.js)
