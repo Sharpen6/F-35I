@@ -20,10 +20,12 @@
 //                  in full sun after exposure (the sun, glints, lights at night, the burner)
 //                  spills over its neighbours; a 13-tap downsample chain with a Karis average on
 //                  the first level and a tent-filtered upsample chain (Jimenez, SIGGRAPH 2014)
-//   4. output      exposure (Environment.exposure), sun glare and faint lens ghosts when looking
-//                  near the sun, AgX with a look (contrast, saturation, a lifted toe), night vision
-//                  (rod vision's Purkinje shift: blues hold, reds fade, and a partial desaturation,
-//                  when the eye is dark adapted), optional vignette and grain, dither, sRGB
+//   4. output      exposure (Environment.exposure), sun glare when looking near the sun, and in the
+//                  outside views faint lens ghosts (VIEW_OPTICS: the cockpit view is an eye, the
+//                  others a camera), AgX with a look (contrast, saturation, a lifted toe), night
+//                  vision (rod vision's Purkinje shift: blues hold, reds fade, and a partial
+//                  desaturation, when the eye is dark adapted), optional vignette and grain, dither,
+//                  sRGB
 //
 // The GPU time of the scene, the clouds and the post passes is measured with timer queries when
 // the browser has EXT_disjoint_timer_query_webgl2 (gpuTimes, ms, smoothed; the bench shows them).
@@ -41,6 +43,48 @@ export const POST_TIERS = {
   medium: { samples: 4, bloomLevels: 6, ghosts: true },
   high: { samples: 4, bloomLevels: 7, ghosts: true },
 };
+
+/**
+ * The sun's glare and lens ghosts by the kind of view (post.view: the camera mode, set by main.js
+ * every frame). Glare lobes: [fraction of the sun's irradiance scattered, width (rad)], see lobe()
+ * in the output pass.
+ *
+ * eye     the cockpit view is the pilot's own eye behind the canopy: no lens, so no ghosts, ever.
+ *         The sun is a blinding disc in the eye's own scatter, the CIE 135 disability glare
+ *         (L_veil / E = 10 / th^3 + 5 / th^2 + ..., th in degrees: ~15 / sr at 1 deg, 0.07 at 10):
+ *         here a third of it out to ~10 deg and less beyond (the full veil, added to a picture on
+ *         a screen, reads as a washed-out scene round the sun rather than as dazzle). The canopy's
+ *         haze and scratches add their own glow (js/aircraft/pcd/canopy.js).
+ * camera  the outside views (chase, orbit, fly-by, tower) are a camera with a modern multicoated
+ *         lens: its glare (diffraction and the glass' veiling glare: half to two thirds of the
+ *         eye's, the glare as it was for every view) and a few small, faint ghosts (GHOSTS).
+ */
+export const VIEW_OPTICS = {
+  eye: { core: [0.03, 0.0075], veil: [0.006, 0.1], ghosts: false },
+  camera: { core: [0.015, 0.0087], veil: [0.004, 0.09], ghosts: true },
+};
+/** The view modes that are the pilot's eye (the rest are VIEW_OPTICS.camera). */
+const EYE_VIEWS = new Set(['cockpit']);
+
+/**
+ * Lens ghosts of the camera views: each is the sun's light reflected twice inside the lens (off
+ * two glass surfaces), so it carries at most ~R^2 of it, R ~ 0.2-0.3 % per multicoated surface: a
+ * few millionths, less for the ghosts that also pass the aperture's edge. That light is spread over
+ * the ghost's disc (the defocused image of the aperture), so the scene radiance it adds is
+ * E f / solid angle (here 0.004-0.007 E / sr): a faint disc over dark ground at sunset, nothing
+ * against the sky round the sun. t: where it lies on the line from the sun (0) through the centre
+ * of the frame (1) to the mirror point (2); r: radius in image heights (fixed on the sensor: its
+ * angle follows the field of view); f: share of the sun's irradiance; tint: the coatings' residual
+ * reflection (green and magenta-amber).
+ * (They were 0.012 E / sr whatever their size, up to a tenth of the frame wide: orange discs over
+ * the picture at sunset, in the cockpit too.)
+ */
+export const GHOSTS = [
+  { t: 0.58, r: 0.009, f: 2e-6, tint: [0.55, 1.0, 0.7] },
+  { t: 1.32, r: 0.024, f: 8e-6, tint: [1.0, 0.62, 0.8] },
+  { t: 1.78, r: 0.014, f: 4e-6, tint: [0.7, 0.8, 1.0] },
+  { t: 2.04, r: 0.005, f: 5e-7, tint: [0.6, 1.0, 0.55] },
+];
 
 const FULLSCREEN_VERT = /* glsl */`
   out vec2 vUv;
@@ -160,7 +204,9 @@ const OUTPUT_FRAG = /* glsl */`
   uniform vec4 uSun;            // xy: sun uv, z: 1 in front of the camera, w: glare strength
   uniform vec3 uSunColor;       // sun irradiance at the camera x exposure (scene units)
   uniform vec2 uRadPerUv;       // radians per uv unit (x, y), for the glare's angular falloff
-  uniform float uGhosts;        // lens ghosts strength (0: off)
+  uniform float uGhosts;        // lens ghosts strength (0: off; the eye has none)
+  uniform vec4 uGhost[${GHOSTS.length}];       // t (along the line sun -> centre), radius (image heights), radiance per irradiance (1 / sr)
+  uniform vec3 uGhostTint[${GHOSTS.length}];
   uniform vec4 uGlare;          // scattered fractions and widths (rad) of the core and the veil
   uniform vec4 uLook;           // contrast (power about the pivot), saturation, pivot, toe lift
   uniform float uNightVision;   // 0 photopic .. 1 fully scotopic (dark-adapted eye)
@@ -242,18 +288,17 @@ const OUTPUT_FRAG = /* glsl */`
       vec3 sunE = uSunColor * vis * uSun.w;
       c += sunE * (uGlare.x * lobe(th, uGlare.y) + uGlare.z * lobe(th, uGlare.w));
       if (uGhosts > 0.0) {
-        // ghosts on the line through the screen centre, mirrored about it (as a lens shows them)
+        // ghosts on the line from the sun through the frame's centre (as a lens shows them), each
+        // a soft disc a little brighter at its rim (the defocused aperture); they fade as the sun
+        // leaves the frame. uGhost.z is the share of the irradiance over the disc's solid angle
         vec2 axis = vec2(0.5) - uSun.xy;
         float edge = smoothstep(1.2, 0.3, length(axis));
-        for (int i = 0; i < 4; i++) {
-          float t = float(i) == 0.0 ? 0.55 : float(i) == 1.0 ? 1.25 : float(i) == 2.0 ? 1.6 : 2.15;
-          float r = float(i) == 0.0 ? 0.03 : float(i) == 1.0 ? 0.06 : float(i) == 2.0 ? 0.018 : 0.09;
-          vec3 tint = float(i) == 0.0 ? vec3(0.6, 0.8, 1.0) : float(i) == 1.0 ? vec3(1.0, 0.7, 0.45)
-            : float(i) == 2.0 ? vec3(0.7, 1.0, 0.75) : vec3(0.75, 0.6, 1.0);
-          vec2 p = uSun.xy + axis * t;
-          float dist = length((vUv - p) * vec2(uRadPerUv.x / uRadPerUv.y, 1.0));
-          float disc = smoothstep(r, r * 0.7, dist) * (0.6 + 0.4 * smoothstep(r * 0.4, r, dist));
-          c += sunE * tint * disc * uGhosts * edge * 0.012;
+        vec2 asp = vec2(uRadPerUv.x / uRadPerUv.y, 1.0);
+        for (int i = 0; i < ${GHOSTS.length}; i++) {
+          vec4 g = uGhost[i];
+          float dist = length((vUv - (uSun.xy + axis * g.x)) * asp);
+          float disc = smoothstep(g.y, g.y * 0.82, dist) * (0.78 + 0.22 * smoothstep(g.y * 0.45, g.y, dist));
+          c += sunE * uGhostTint[i] * (disc * g.z * uGhosts * edge);
         }
       }
     }
@@ -378,8 +423,13 @@ export class Post {
     this.look = {
       contrast: 1.04, saturation: 1.04, pivot: 0.42, toe: 0.25,  // AgX look
       bloom: 0.08, threshold: 2.0, knee: 1.0, clamp: 64, scatter: 0.72,
-      glare: 1.0, glareCore: [0.015, 0.0087], glareVeil: [0.004, 0.09],  // [fraction, width rad]
+      glare: 1.0,                        // x the glare lobes of VIEW_OPTICS
     };
+    /**
+     * The kind of view (the camera mode: 'cockpit' is the pilot's eye, the rest a camera, see
+     * VIEW_OPTICS); main.js sets it before every frame.
+     */
+    this.view = 'chase';
     this.clouds = null;                  // a module with render(renderer, ctx) (env/Clouds.js)
     this.tier = POST_TIERS[quality] || POST_TIERS.high;
     this.quality = quality;
@@ -414,6 +464,8 @@ export class Post {
       tScene: { value: null }, tBloom: { value: null }, tSunVis: { value: null },
       uExposure: { value: 1 }, uBloom: { value: 0 }, uSun: { value: new THREE.Vector4() },
       uSunColor: { value: new THREE.Color() }, uRadPerUv: { value: new THREE.Vector2(1, 1) },
+      uGhost: { value: GHOSTS.map(() => new THREE.Vector4()) },
+      uGhostTint: { value: GHOSTS.map((g) => new THREE.Vector3(...g.tint)) },
       uGhosts: { value: 0 }, uGlare: { value: new THREE.Vector4() }, uLook: { value: new THREE.Vector4(1, 1, 0.5, 0) },
       uNightVision: { value: 0 },
       uVignetteGrain: { value: new THREE.Vector2() }, uTime: { value: 0 },
@@ -555,8 +607,9 @@ export class Post {
     const exposure = (env.exposure ?? 1) * (env.exposureBias ?? 1);
     const o = this.options, L = this.look;
 
-    // 3. sun visibility and glare parameters
+    // 3. sun visibility and glare parameters: an eye or a camera (VIEW_OPTICS)
     const out = this._outMat.uniforms;
+    const optics = EYE_VIEWS.has(this.view) ? VIEW_OPTICS.eye : VIEW_OPTICS.camera;
     const sunDir = env.sunDirection;
     let glare = 0;
     if (o.glare && sunDir && sunDir.y > -0.03) {
@@ -568,6 +621,12 @@ export class Post {
       const tanY = Math.tan(THREE.MathUtils.degToRad(camera.fov || 60) / 2);
       const radY = 2 * tanY, radX = radY * camera.aspect;
       out.uRadPerUv.value.set(radX, radY);
+      // the ghosts' radiance per unit of the sun's irradiance: their share over their disc's
+      // solid angle (the disc's profile holds ~0.8 of a flat disc's light)
+      for (let i = 0; i < GHOSTS.length; i++) {
+        const g = GHOSTS[i], a = g.r * radY;
+        out.uGhost.value[i].set(g.t, g.r, g.f / (0.8 * Math.PI * a * a), 0);
+      }
       out.uSun.value.set(su, sv, inFront ? 1 : 0, 0);
       if (inFront && su > -0.6 && su < 1.6 && sv > -0.6 && sv < 1.6) {
         const S = this._sunMat.uniforms;
@@ -586,7 +645,7 @@ export class Post {
       }
     }
     out.uSun.value.w = glare;
-    out.uGhosts.value = o.ghosts && this.tier.ghosts ? 1 : 0;
+    out.uGhosts.value = o.ghosts && this.tier.ghosts && optics.ghosts ? 1 : 0;
 
     // 4. bloom
     const levels = this._bloomDown.length;
@@ -625,7 +684,7 @@ export class Post {
     out.tScene.value = frame;
     out.uExposure.value = exposure;
     out.uLook.value.set(L.contrast, L.saturation, L.pivot, L.toe ?? 0);
-    out.uGlare.value.set(L.glareCore[0], L.glareCore[1], L.glareVeil[0], L.glareVeil[1]);
+    out.uGlare.value.set(optics.core[0], optics.core[1], optics.veil[0], optics.veil[1]);
     out.uNightVision.value = o.nightVision ? (env.nightVision ?? 0) : 0;
     out.uVignetteGrain.value.set(o.vignette ? 0.35 : 0, o.grain ? 0.06 : 0);
     out.uTime.value = this._time;
@@ -701,7 +760,7 @@ export class Post {
   /** For the test API and the bench. */
   info() {
     const g = this.gpuTimes ? Object.fromEntries(Object.entries(this.gpuTimes).map(([k, v]) => [k, +v.toFixed(3)])) : null;
-    return { quality: this.quality, ...this.stats, options: { ...this.options }, look: { ...this.look }, clouds: !!this.clouds, gpuMs: g };
+    return { quality: this.quality, ...this.stats, view: this.view, options: { ...this.options }, look: { ...this.look }, clouds: !!this.clouds, gpuMs: g };
   }
 
   /** Render targets this module owns (GPU memory estimate). */

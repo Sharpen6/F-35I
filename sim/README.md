@@ -514,9 +514,14 @@ vapour first shows.
 * **Light and the HDR frame** (`js/env`, see `js/env/README.md`): the scene is drawn into a
   half-float 4x MSAA target in physical units and finished by `js/env/Post.js` (clouds, bloom, sun
   glare, AgX with a look, night vision); the canvas itself has no MSAA or depth buffer. The
+  cockpit view is the pilot's eye (glare, no lens ghosts), the outside views a camera (faint, small
+  ghosts); main.js tells Post which (`post.view`). The
   exposure is metered on the light at the camera and adapts like an eye; the ambient light is the
   sky plus the ground around the camera at its land-cover albedo; the moon and the stars have
-  their real positions and phase for the date. Transparent things near the camera (burner plume,
+  their real positions and phase for the date. The night sky's glow and the light under the
+  clouds follow the cities' light pollution where the camera is (`js/env/lightPollution.js`:
+  an orange-grey dome over Gush Dan, a dark sky with the Milky Way over the Dead Sea), and the
+  stars that show follow it. Transparent things near the camera (burner plume,
   canopy, sprites) are drawn after the clouds; the sun's shadow box widens near the ground to take
   in buildings and trees ahead of the camera.
 * **Units for lights** (lighting fix): one scene unit of illuminance is `LUX_PER_UNIT` = 32,000 lux
@@ -563,5 +568,7 @@ vapour first shows.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here. The sky, stars, moon and clouds are procedural (formulas: Hillaire 2020
-  atmosphere, the Astronomical Almanac's low-precision sun and moon, Perlin-Worley cloud noise);
+  atmosphere, the Astronomical Almanac's low-precision sun and moon, Perlin-Worley cloud noise;
+  the night sky's light pollution is a model calibrated to the published brightness numbers of
+  Falchi et al. 2016, no atlas data is loaded);
   the land-cover albedo that lights the shadows is ESA WorldCover (above, CC BY 4.0).
