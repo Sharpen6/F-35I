@@ -21,10 +21,11 @@
 // Takeoff:      after lift-off from a take-off roll the attitude mode is kept while the stick stays
 //               pulled, then the air laws take over.  After a bounce (a short ground contact, no
 //               acceleration) the attitude mode holds the attitude the jet left the runway with for
-//               up to bounceHoldTime, hands-off too; a push or gear up hands over to the air laws.  The stick still held at that moment is "ratcheted": the C* law
-//               only sees stick beyond what was held, the reference follows the stick down as it is
-//               released and fades out over ratchetTau (3 s), so a held pull comes in smoothly
-//               instead of pulling the jet toward the AoA limit at once.
+//               up to bounceHoldTime, hands-off too; a push or gear up hands over to the air laws.
+//               The stick still held at that moment is "ratcheted": the C* law only sees stick
+//               beyond what was held, the reference follows the stick down as it is released and
+//               fades out over ratchetTau (3 s), so a held pull comes in smoothly instead of pulling
+//               the jet toward the AoA limit at once.
 
 import { clamp, wrapPi, smoothstep, D2R } from './tables.js';
 import { G0 } from './atmosphere.js';
