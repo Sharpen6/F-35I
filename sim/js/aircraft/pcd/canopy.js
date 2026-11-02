@@ -168,9 +168,9 @@ export class CanopyGlass {
   /**
    * @param {object} o
    * @param {THREE.Object3D} o.root the player's glTF root
-   * @param {THREE.Texture} o.detail the glass texture (detail.js makeGlassTexture)
+   * @param {THREE.Texture} [o.detail] the glass texture (detail.js makeGlassTexture; or setDetail)
    */
-  constructor({ root, detail }) {
+  constructor({ root, detail = null }) {
     this.mesh = null;
     this.dirt = 1;
     root.traverse((o) => { if (!this.glass && o.isMesh && o.material && o.material.name === 'F35_canopy_tint') this.glass = o; });
@@ -227,6 +227,9 @@ export class CanopyGlass {
 
   set visible(v) { if (this.mesh) this.mesh.visible = v; }
   get visible() { return !!(this.mesh && this.mesh.visible); }
+
+  /** The glass texture (detail.js makeGlassTexture; until it is set, no haze and no scratches). */
+  setDetail(t) { this.uniforms && (this.uniforms.uGlass.value = t); }
 
   /**
    * @param {object} s {lightDir (world, towards the sun or the moon), lightColor (its irradiance),

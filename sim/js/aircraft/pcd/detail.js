@@ -151,30 +151,40 @@ export function makeDetailTexture(size = 512, seed = 35) {
  *         correctly in the mipmaps (a scratch and its reverse are the same line).
  *
  * Rasterised here (anti-aliased stamps along each scratch), not with a 2D canvas: the direction
- * has to follow every point of an arc.
+ * has to follow every point of an arc. At 1024 over the canopy's 0.42 m tile (0.41 mm a texel)
+ * the scratches are 0.25-0.45 mm wide: hairlines of a pixel or so at 1080p on the glass beside
+ * the head (0.7-1.4 mm at 512 showed as soft strokes several pixels wide). Sizes in texels scale
+ * with `size`, so the pattern is the same at any size. 1024² RGBA with mipmaps: 5.6 MB.
  * @param {number} size texture size (px)
  * @returns {THREE.DataTexture}
  */
-export function makeGlassTexture(size = 512, seed = 53) {
+export function makeGlassTexture(size = 1024, seed = 53) {
   const rand = rng(seed);
   const n = size * size;
+  const px = size / 1024;                         // texels per texel at 1024
   const I = new Float32Array(n), C = new Float32Array(n), Sn = new Float32Array(n);
   // one anti-aliased dot of radius r at (x, y) (wrapped), strength a, direction ang
-  const stamp = (x, y, r, a, ang) => {
-    const c2 = Math.cos(2 * ang), s2 = Math.sin(2 * ang);
-    const x0 = Math.floor(x - r - 1), x1 = Math.ceil(x + r + 1), y0 = Math.floor(y - r - 1), y1 = Math.ceil(y + r + 1);
+  const stamp = (x, y, r, a, c2, s2) => {
+    const R = r + 0.5;
+    const x0 = Math.floor(x - R), x1 = Math.ceil(x + R), y0 = Math.floor(y - R), y1 = Math.ceil(y + R);
     for (let py = y0; py <= y1; py++) {
-      for (let px = x0; px <= x1; px++) {
-        const f = Math.min(1, Math.max(0, r + 0.5 - Math.hypot(px + 0.5 - x, py + 0.5 - y)));
-        if (!f) continue;
-        const k = (((py % size) + size) % size) * size + (((px % size) + size) % size);
-        const add = a * f * (1 - I[k]);           // saturating: crossing scratches do not exceed 1
+      const dy = py + 0.5 - y, row = (((py % size) + size) % size) * size;
+      for (let qx = x0; qx <= x1; qx++) {
+        const dx = qx + 0.5 - x;
+        const f = R - Math.sqrt(dx * dx + dy * dy);
+        if (f <= 0) continue;
+        const k = row + (((qx % size) + size) % size);
+        const add = a * (f < 1 ? f : 1) * (1 - I[k]);   // saturating: crossing scratches do not exceed 1
         I[k] += add; C[k] += add * c2; Sn[k] += add * s2;
       }
     }
   };
-  // a curve sampled every 0.5 px: (t) => [x, y, direction]
-  const curve = (len, at, w, a) => { for (let s = 0; s <= len; s += 0.5) { const [x, y, d] = at(s); stamp(x, y, w * 0.5, a * 0.5, d); } };
+  // a curve stamped every quarter texel, each stamp a quarter of the strength (at half a texel
+  // the hairlines came out beaded): at(s, P) sets P.x, P.y and P.d, the direction
+  const P = { x: 0, y: 0, d: 0 }, DS = 0.25;
+  const curve = (len, at, w, a) => {
+    for (let s = 0; s <= len; s += DS) { at(s, P); stamp(P.x, P.y, w * 0.5, a * DS, Math.cos(2 * P.d), Math.sin(2 * P.d)); }
+  };
   // cleaning swirls: arcs round a few centres
   for (let c = 0; c < 8; c++) {
     const cx = rand() * size, cy = rand() * size;
@@ -183,26 +193,28 @@ export function makeGlassTexture(size = 512, seed = 53) {
       const r = (0.04 + 0.5 * Math.pow(rand(), 1.5)) * size;
       const a0 = rand() * Math.PI * 2, da = (0.15 + rand() * 0.7) * (rand() < 0.5 ? -1 : 1);
       const a = 0.12 + 0.5 * Math.pow(rand(), 2);
-      const w = 0.9 + rand() * 0.8;
-      curve(Math.abs(da) * r, (s) => { const t = a0 + Math.sign(da) * s / r; return [cx + r * Math.cos(t), cy + r * Math.sin(t), t + Math.PI / 2]; }, w, a);
+      const w = (0.6 + rand() * 0.5) * px;
+      curve(Math.abs(da) * r, (s, p) => { const t = a0 + Math.sign(da) * s / r; p.x = cx + r * Math.cos(t); p.y = cy + r * Math.sin(t); p.d = t + Math.PI / 2; }, w, a);
     }
   }
   // a few straight scratches (a ring, a buckle)
   for (let i = 0; i < 26; i++) {
     const x = rand() * size, y = rand() * size, ang = rand() * Math.PI, len = (0.02 + 0.25 * Math.pow(rand(), 2)) * size;
     const a = 0.25 + 0.6 * Math.pow(rand(), 2);
-    const w = 0.9 + rand() * 0.6;
-    curve(len, (s) => [x + Math.cos(ang) * s, y + Math.sin(ang) * s, ang], w, a);
+    const w = (0.6 + rand() * 0.4) * px;
+    curve(len, (s, p) => { p.x = x + Math.cos(ang) * s; p.y = y + Math.sin(ang) * s; p.d = ang; }, w, a);
   }
   // haze: soft smudges and wipe marks, dust specks
   const blot = fbm(size, 4, 4, seed + 1, 0.55);
   const wipe = fbm(size, 8, 3, seed + 2, 0.5);
   const haze = new Float32Array(n);
   for (let i = 0; i < n; i++) haze[i] = 0.12 + 0.88 * smooth(0.5, 0.8, blot[i]) * (0.5 + 0.5 * wipe[i]);
-  for (let k = 0; k < n / 2500; k++) {
-    const x = Math.floor(rand() * size), y = Math.floor(rand() * size), r = 0.6 + rand() * 1.1, v = 0.5 + rand() * 0.5;
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
+  // (dust specks 1-3 mm across, the same on the tile at any size)
+  for (let k = 0; k < 105; k++) {
+    const x = Math.floor(rand() * size), y = Math.floor(rand() * size), r = (1.2 + rand() * 2.2) * px, v = 0.5 + rand() * 0.5;
+    const R = Math.ceil(r + 0.5);
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
         const f = Math.max(0, 1 - Math.hypot(dx, dy) / (r + 0.5));
         if (!f) continue;
         const j = ((y + dy + size) % size) * size + ((x + dx + size) % size);

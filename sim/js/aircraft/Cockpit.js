@@ -123,8 +123,10 @@ export class Cockpit {
     // behind a post chain the scene renders into a target with other program variants)
     this.interior.start().then((s) => { this.interiorStats = s; })
       .catch((e) => console.warn('Cockpit: interior:', e.message));
-    this.glassDetail = makeGlassTexture(512);
-    this.canopy = new CanopyGlass({ root: visual.root, detail: this.glassDetail });
+    // the canopy pass; its glass texture is made the first time the pass is on (_glass: 1024²,
+    // 0.1-0.2 s of start-up that the low quality, without the pass, does not pay)
+    this.glassDetail = null;
+    this.canopy = new CanopyGlass({ root: visual.root });
     // the side-stick, the throttle, the hands on them and the pedals from the pilot's inputs (rig
     // nodes, re-posed after the rig); inceptorFix lists the controls whose hinge was rebuilt
     const inc = visual.player && visual.rig ? buildInceptors(visual.rig, visual.player) : { nodes: [], fixed: [] };
@@ -181,7 +183,7 @@ gl_FragColor.a = ${DISPLAY_ALPHA.toFixed(1)};`);
     this.quality = q;
     const Q = COCKPIT_QUALITY[q] || COCKPIT_QUALITY.medium;
     this.pcd.setQuality(q);
-    if (this.canopy) this.canopy.enabled = Q.canopy;
+    if (this.canopy) { this.canopy.enabled = Q.canopy; if (Q.canopy) this._glass(); }
     if (this.interior) this.interior.detailAmount = Q.detail;
     if (this.shadow) this.shadow.setQuality(q);
   }
@@ -290,6 +292,7 @@ gl_FragColor.a = ${DISPLAY_ALPHA.toFixed(1)};`);
     if (this.canopy) {
       const show = this.canopy.enabled !== false && d < 80 && this.visual.object3d.visible;
       this.canopy.visible = show;
+      if (show && !this.glassDetail) this._glass();       // (on without a setQuality)
       if (show && this.env) {
         this.canopy.update({
           lightDir: L.dir, lightColor: L.color, ambient: L.ambient, inside: this.inside,
@@ -342,6 +345,13 @@ gl_FragColor.a = ${DISPLAY_ALPHA.toFixed(1)};`);
       n.object.position.copy(_rt);
       n.object.quaternion.copy(_rq);
     }
+  }
+
+  /** The canopy's glass texture, made once, the first time the canopy pass is on. */
+  _glass() {
+    if (this.glassDetail || !this.canopy || !this.canopy.mesh) return;
+    this.glassDetail = makeGlassTexture(1024);
+    this.canopy.setDetail(this.glassDetail);
   }
 
   /** Tests: the tops of the side-stick and the throttle (17 cm up the lever) in the glTF root frame. */
