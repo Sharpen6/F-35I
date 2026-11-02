@@ -6,8 +6,9 @@
 For each pair: the share of all pixels, and of the pixels that differ from the sky's smooth
 gradient (a rough "cloud or detail" mask: local contrast), whose colour changed by more than
 --threshold / 255 in any channel between two consecutive frames of a still camera. The clouds'
-ray march used to boil (white noise per frame, no temporal filter): ~16 % of the cloud pixels
-changed by more than 4/255 from one frame to the next.
+ray march used to boil (white noise per frame, no temporal filter): 9 to 30 % of the detail
+pixels changed by more than 4/255 from one frame to the next (30 % under a scattered deck seen
+from below, 9-10 % in and beside a broken deck); with the temporal filter under 0.1 %.
 """
 import sys
 from pathlib import Path

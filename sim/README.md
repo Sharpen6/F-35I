@@ -40,8 +40,10 @@ flies a scripted 60 s take-off from Tel Nof 36 at noon: MIL, then afterburner, r
 150 kt, gear up, climb and a turn toward Tel Aviv, with the view going chase, cockpit, fly-by,
 chase. At the end the sim stops and the results stay on screen (and in `window.__bench`, and as
 `BENCH {...}` in the console): average fps, 1 % low fps (the mean frame rate of the slowest 1 %
-of frames), minimum fps, frame-time percentiles, draw calls and triangles per frame, and an
-estimate of the GPU memory the app uploaded (textures, geometry, render targets, the canvas).
+of frames), minimum fps, frame-time percentiles, draw calls and triangles per frame, an
+estimate of the GPU memory the app uploaded (textures, geometry, render targets including the HDR
+chain's and the clouds', the canvas), and the GPU time of the scene, the clouds and the post
+passes where the browser has timer queries (Chrome on Windows: `GPU time` line).
 The first 3 s (shader compiles, first terrain tiles) are not counted. Options: `&quality=`,
 `&time=`, `&spawn=` (an airborne start point flies straight on), `&seconds=`. For a headless
 screenshot of the result on a machine with a real GPU, wait in Playwright (headless Chrome with
@@ -250,7 +252,8 @@ The other modules (sim/DESIGN.md): `js/env` (sky, sun, haze, lighting), `js/terr
 node sim/tests/e2e.mjs   [--port 8110] [--out DIR] [--size 960x540] [--quality low|medium|high] [--root SIM_FOLDER]
 node sim/tests/smoke.mjs [--mode stubs|real|both] [--port 8103] [--out DIR] [--root SIM_FOLDER]
 node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs        (flight model, no browser)
-node sim/tests/lighting_shots.mjs [--port 8148] [--out DIR] [--set quick|times|night|sky|clouds|shadows|all] [--only a,b] [--quality q] [--resume]
+node sim/tests/lighting_shots.mjs [--port 8148] [--out DIR] [--set quick|times|night|sky|clouds|shadows|twilight|flicker|all] [--only a,b] [--quality q] [--frames N] [--resume]
+python3 sim/tests/frame_diff.py DIR [--threshold 4]                    (frame-to-frame change of the flicker pairs)
 ```
 
 Both browser tests start `serve.py` on their port and open the app in headless Chromium
@@ -286,8 +289,10 @@ is there, for real: menu, a manual take-off, the tower view, two airborne start 
 
 **`tests/lighting_shots.mjs`** takes the screenshots of the light, sky and clouds work
 (`js/env/README.md`): the same places at six times of day, dusk and night, the weather presets
-from below, inside and above, the shadows near the ground; the exposure of each shot and
-`renderInfo()` / `gpuMemory()` go to its log and `report.json`.
+from below, inside and above, the shadows near the ground, the dusk in steps from sunset to
+night; the exposure of each shot and `renderInfo()` / `gpuMemory()` go to its log and
+`report.json`. `--frames N` draws N frames before each shot (the clouds' temporal filter settles);
+the `flicker` set takes two consecutive frames of a still camera, which `frame_diff.py` compares.
 
 ### Test API (`index.html?test=1`)
 
@@ -350,6 +355,17 @@ then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
   their real positions and phase for the date. Transparent things near the camera (burner plume,
   canopy, sprites) are drawn after the clouds; the sun's shadow box widens near the ground to take
   in buildings and trees ahead of the camera.
+* **Units for lights** (lighting fix): one scene unit of illuminance is `LUX_PER_UNIT` = 32,000 lux
+  (`js/env/Environment.js`): a three.js point or spot light takes `candela / LUX_PER_UNIT`, an
+  emissive surface `cd/m^2 / LUX_PER_UNIT`. The night exposure goes up to 285 (it stopped at 40);
+  lights tuned by eye at 40 keep their look through `env.nightLightGain` (= min(1, 40 / exposure),
+  already in the `uNight` uniform), displays drawn at a fixed picture level divide by the exposure
+  (`js/env/displayLevels.js` does it for the glb's PCD glass, tablet and switch LEDs, and steps
+  aside when a cockpit module sets `app.cockpit`).
+* **Clouds** are filtered in time (no boiling; `app.clouds.temporal`), cast their shadows per
+  fragment on three.js's own materials too (`js/env/cloudShadowChunk.js`, a patch of three's light
+  chunk made once at start-up), and on high step down to the medium tier if their measured GPU
+  time stays over `app.clouds.budgetMs` (2.5 ms).
 
 ## Credits
 

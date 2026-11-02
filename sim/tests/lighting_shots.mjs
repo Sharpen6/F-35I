@@ -119,6 +119,7 @@ function sets() {
   s.twilight.push({ name: 'tw_tlv_2130_cities', spawn: 'tlv_3000', time: 21.5, cam: { orbit: [0, -18, 40] } });
   s.twilight.push({ name: 'tw_tlv_2130_clouds', spawn: 'tlv_3000', time: 21.5, cam: 'chase', clouds: 'scattered' });
   s.twilight.push({ name: 'tw_tlv_2200_fullmoon_cl', spawn: 'tlv_3000', time: 22.0, cam: 'chase', clouds: 'scattered', year: 2024 });
+  s.twilight.push({ name: 'tw_telnof_2130_cockpit', spawn: 'telnof_36', time: 21.5, cam: 'cockpit' });
   // frame-to-frame change (cloud boil): the same view, two consecutive frames
   s.flicker = [
     { name: 'fl_coast_1200_up', spawn: 'coast_low', time: 12, cam: { orbit: [180, -25, 40] }, clouds: 'scattered', pair: true },
@@ -175,6 +176,9 @@ async function main() {
     const err = await page.evaluate(() => window.__sim.error);
     if (err) throw new Error(`app did not load: ${err}`);
     const S = (fn, a) => page.evaluate(fn, a);
+    // the software renderer's GPU timer reads ~1 s for the clouds, so their budget (Clouds.js
+    // budgetMs) would step high down to medium after two seconds: keep the tier asked for
+    await S(() => { const C = window.__sim.app.clouds; if (C && 'budgetMs' in C) { C.budgetMs = null; C.setQuality(C.quality); } });
     for (const s of list) {
       await S(async ({ spawn, time, climb, year, clouds, inside, back }) => {
         const sim = window.__sim, app = sim.app;
@@ -188,7 +192,9 @@ async function main() {
         const C = app.clouds;
         if (inside && C && C.layer) {
           // the nearest point (on a spiral) where the cumulus is solid for 900 m along the heading,
-          // so the jet is still in it after the 2 s of flight below; back: start that far before it
+          // so the jet is still in it after the 2 s of flight below; back: start that far before the
+          // cloud's edge on the way in (the field below its threshold: the rendered cloud is that
+          // footprint pushed around by the 3D noise, up to ~150 m)
           const F = await import('./js/env/cloudField.js');
           const hd = (sp.heading_deg || 0) * Math.PI / 180;
           const fx = Math.sin(hd), fz = -Math.cos(hd);
@@ -200,7 +206,15 @@ async function main() {
               if (solid(x, z) && solid(x + fx * 450, z + fz * 450) && solid(x + fx * 900, z + fz * 900)) { best = [x, z]; break; }
             }
           }
-          if (best) { sp.x = best[0] - fx * (back || 0); sp.z = best[1] - fz * (back || 0); sp.y = inside; }
+          if (best) {
+            let [x, z] = best;
+            if (back) {
+              const field = (px, pz) => F.fieldAt((px + C.wind[0]) / C.layer.scale, (pz + C.wind[1]) / C.layer.scale);
+              for (let k = 0; k < 6000 && field(x, z) > C.layer.threshold - 0.02; k += 25) { x -= fx * 25; z -= fz * 25; }
+              x -= fx * back; z -= fz * back;
+            }
+            sp.x = x; sp.z = z; sp.y = inside;
+          }
         }
         sim.start(spawn, { time, camera: 'chase' });
         Object.assign(sp, keep);
