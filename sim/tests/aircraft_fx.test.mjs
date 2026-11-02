@@ -3,20 +3,24 @@
 //   node --import ./sim/tests/node-three.mjs sim/tests/aircraft_fx.test.mjs
 //
 // anti-collision flash pattern, nozzle opening at idle and its lag behind the lever, the burner's
-// exposure compensation and day look, the light level (day / night from the sun, not the exposure),
-// the condensation model (vapour at high g in humid low air, the cone near Mach 1, contrails high
-// up), the contrail's ring buffer (it fades out before it runs out of points), the landing-light
-// pool's visibility gain and roll-off.
+// exposure compensation, day look and night look (a fixed picture level), the light level (day /
+// night from the sun, not the exposure), the rule for lights at night (Environment.js lightGain) and
+// the point lights' visibility floor and the one switch-on schedule (lightsOn), the jet's lights at
+// night (a core cap without a blue-hour ball, the lenses' colour), the condensation model (vapour at high g in humid low air, the
+// cone near Mach 1, contrails high up), the contrail's ring buffer (it fades out before it runs out
+// of points), the landing-light pool's roll-off, its floor on dark land and the lamp it shares
+// with the buildings (off by day and from 400 m up).
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { anticollPattern, AircraftLights } from '../js/aircraft/lights.js';
 import { nozzleIdleOpen, lagThrottle, NOZZLE_TAU } from '../js/aircraft/AircraftVisual.js';
-import { flameExposureComp, flameDayLook } from '../js/aircraft/Afterburner.js';
+import { flameExposureComp, flameDayLook, Afterburner, FLAME_DAY, FLAME_NIGHT, throatGlow } from '../js/aircraft/Afterburner.js';
 import { air, condensation, skyLogLux, darknessOf, fxEnv, Ribbon } from '../js/aircraft/fxshared.js';
 import { FX_QUALITY } from '../js/aircraft/AircraftFX.js';
-import { poolGain, poolFactor } from '../js/aircraft/LandingPool.js';
+import { poolFactor, POOL_KNEE, LandingPool, LAMP_UNIFORMS } from '../js/aircraft/LandingPool.js';
+import { artificialLightGain, lightNight, lightsOn, pointLightThreshold, skyIlluminance, NIGHT_ADAPTED_EXPOSURE } from '../js/env/Environment.js';
 
 test('anti-collision beacons: one short flash a second each, top and bottom alternating', () => {
   let topOn = 0, botOn = 0, both = 0;
@@ -51,10 +55,70 @@ test('light level: from the sun, darkness 0 by day and at sunset, 1 after civil 
   fxEnv.update({ sunElevationDeg: 45 });
 });
 
-test('light glows: no night gain by day, strong at night', () => {
-  assert.equal(AircraftLights.nightGain(0), 1);
-  assert.ok(AircraftLights.nightGain(1) > 100);
-  assert.ok(AircraftLights.nightGain(0.5) < AircraftLights.nightGain(1));
+test('lights at night: physical by day and in the dusk, the same on screen at any night exposure', () => {
+  assert.equal(artificialLightGain(0.93, 60), 1, 'noon');
+  assert.equal(artificialLightGain(25, -2.35), 1, 'blue hour (sun 2.35 deg down): physical');
+  assert.equal(lightNight(-3), 0);
+  assert.equal(lightNight(-12), 1);
+  for (const e of [40, 120, 285]) {
+    const display = artificialLightGain(e, -20) * e;              // radiance x exposure per unit radiance
+    assert.ok(Math.abs(display - NIGHT_ADAPTED_EXPOSURE) < 1e-6, `exposure ${e}: ${display}`);
+  }
+  // in between, never below the physical light and never more than the night's
+  for (let el = -8; el <= 0; el += 0.5) {
+    const g = artificialLightGain(150, el);
+    assert.ok(g >= 1 && g <= NIGHT_ADAPTED_EXPOSURE / 150 + 1e-9, `sun ${el}: ${g}`);
+  }
+  // one switch-on schedule for every light: off by day, on (fully) before the gain starts to rise
+  assert.equal(lightsOn(5), 0, 'day');
+  assert.equal(lightsOn(-3), 1, 'on by -3 deg');
+  for (let el = -4; el <= 3; el += 0.25) assert.ok(lightsOn(el) <= lightsOn(el - 0.25) + 1e-12, `monotonic at ${el}`);
+  assert.ok(lightsOn(0) > 0 && lightsOn(1) < 0.01, `switching from sunset: ${lightsOn(0)}`);
+  assert.ok(lightsOn(-1) > 0.3 && lightsOn(-1) < 0.7, `half on a degree after sunset: ${lightsOn(-1)}`);
+  assert.ok(lightsOn(-3.5) === 1 && lightNight(-3.5) === 0, 'the gain rises only once all the lights are on');
+  // the effects' light level is the environment's table
+  for (const el of [-20, -6, -2, 0, 1.6, 30, 90]) assert.ok(Math.abs(skyLogLux(el) - Math.log10(skyIlluminance(el))) < 1e-12);
+  // a point light is seen against a darker ground with less light at the eye
+  assert.ok(pointLightThreshold(-20) < pointLightThreshold(-4) && pointLightThreshold(-4) < pointLightThreshold(30));
+});
+
+test('light glows: a point many times over the threshold stays a visible dot, none below it', () => {
+  assert.equal(AircraftLights.visibleFloor(1), 0, 'at the threshold');
+  assert.equal(AircraftLights.visibleFloor(0.2), 0);
+  assert.ok(AircraftLights.visibleFloor(8) >= 0.3, 'three stops over: a clear dot');
+  assert.ok(AircraftLights.visibleFloor(4) < AircraftLights.visibleFloor(8));
+  assert.ok(AircraftLights.visibleFloor(1e6) <= 0.8, 'never a white blob: a saturated colour any tone curve keeps');
+});
+
+test('light glows: at night a centre no brighter on the display than any point light, by day as it was', () => {
+  assert.equal(AircraftLights.coreCap(0.93, 1, 0), Infinity, 'noon: no cap');
+  assert.equal(AircraftLights.coreCap(25, 1, 0), Infinity, 'blue hour before the lights take over');
+  // a 40 cd tail light 18 m from the camera at night: ~1,000 on the display uncapped, 64 capped
+  for (const e of [40, 230, 285]) {
+    const cap = AircraftLights.coreCap(e, 1, 1);
+    assert.ok(Math.abs(cap * e - 64) < 1e-9, `exposure ${e}: ${cap * e}`);
+  }
+  // a red light (brightest channel 1, the others low) the same by its brightest channel
+  assert.ok(Math.abs(AircraftLights.coreCap(230, 0.9, 1) * 230 * 0.9 - 64) < 1e-9);
+  // eased in over the first tenth of the night (no pop), then the cap itself: in the blue hour
+  // (lightNight 0.18, exposure 236) a tail light holds no more than at night (it grew into a ball)
+  assert.ok(Math.abs(AircraftLights.coreCap(230, 1, 0.05) / AircraftLights.coreCap(230, 1, 1) - 2) < 1e-9);
+  assert.ok(Math.abs(AircraftLights.coreCap(236, 1, 0.18) * 236 - 64) < 1e-9, 'blue hour: the night cap');
+  for (let n = 0.01; n <= 1; n += 0.01) {
+    assert.ok(AircraftLights.coreCap(236, 1, n) <= AircraftLights.coreCap(236, 1, n - 0.01) + 1e-9, `smooth at ${n}`);
+  }
+});
+
+test('lenses: at night a coloured surface (its glow carries the brightness), by day as they were', () => {
+  // a nav lens (emissive 4 x its colour's brightest channel 1) at night, exposure 230: ~920 on the
+  // display uncapped (white through any tone curve), 0.8 capped
+  assert.equal(AircraftLights.lensCap(4, 0.93, 1, 0), 4, 'noon: its own value');
+  assert.equal(AircraftLights.lensCap(4, 25, 1, 0), 4, 'dusk before the night look');
+  for (const e of [40, 230, 285]) {
+    const v = AircraftLights.lensCap(14, e, 0.9, 1) * e * 0.9;
+    assert.ok(Math.abs(v - 0.8) < 1e-9, `exposure ${e}: ${v}`);
+  }
+  assert.ok(AircraftLights.lensCap(0.001, 230, 1, 1) === 0.001, 'a dim lens is not raised');
 });
 
 test('nozzle: open at idle, closed at MIL', () => {
@@ -78,6 +142,38 @@ test('burner: display brightness grows only with the 4th root of the exposure', 
   assert.ok(Math.abs(display(0.93) - 1) < 1e-9);
   assert.ok(display(40) / display(0.93) < 3, 'night flame not a white ball');
   assert.ok(display(40) > display(0.93), 'but brighter than by day');
+});
+
+test('burner: noon draws the day table exactly, the night its own look (long, diamonds yellower than the body)', () => {
+  const ab = new Afterburner({ exit: [0, 0.12, 6.205], radius: 0.47, radiusAB: 0.56, axis: [0, 0, 1],
+    throat: [0, 0.12, 5.785], throatRadius: 0.405 });
+  const u = ab.uniforms;
+  ab._setLook(1);
+  assert.deepEqual(u.uC1.value.toArray(), FLAME_DAY.c1);
+  assert.deepEqual(u.uDiaCol.value.toArray(), FLAME_DAY.dia);
+  assert.deepEqual(u.uSat.value.toArray(), FLAME_DAY.sat);
+  assert.equal(u.uKappa.value, FLAME_DAY.kappa);
+  assert.equal(u.uKnee.value, ab.shoulder.knee);
+  ab._setLook(0);
+  assert.deepEqual(u.uC2.value.toArray(), FLAME_NIGHT.c2);
+  assert.equal(u.uDia.value.x, FLAME_NIGHT.diaShape[0]);
+  assert.ok(FLAME_NIGHT.length > FLAME_DAY.length);
+  assert.ok(FLAME_NIGHT.dia[1] / FLAME_NIGHT.dia[0] > FLAME_NIGHT.c2[1] / FLAME_NIGHT.c2[0], 'diamonds yellower');
+  assert.ok(FLAME_NIGHT.lip[2] > FLAME_NIGHT.lip[0], 'a blue-violet sheath');
+  // the idle throat at night: a dim dark red (the luminance of ~930 K by the rule: under 0.15 on the
+  // display), MIL an orange-red a few times brighter, the burner's throat a bright yellow-white
+  const idle = throatGlow(FLAME_NIGHT, 0, 0, 1);
+  assert.ok(idle[0] > 0.02 && idle[0] < 0.15 && idle[1] < 0.3 * idle[0] && idle[2] < idle[1], `idle ${idle}`);
+  const mil = throatGlow(FLAME_NIGHT, 0.75, 0, 1);
+  assert.ok(mil[0] > 3 * idle[0] && mil[0] < 2 && mil[1] < 0.6 * mil[0], `MIL ${mil}`);
+  // in the dusk (the rule's gain 1, exposure 40: display per cd/m^2 40 / 32000) the heat shows little
+  const dusk = throatGlow(FLAME_NIGHT, 0.75, 0, 1, [0, 0, 0], 40 / 32000);
+  assert.ok(dusk[0] < 0.1 * mil[0], `dusk MIL ${dusk}`);
+  const burner = throatGlow(FLAME_NIGHT, 1, 1, 1);
+  assert.ok(burner[0] > 1 && burner[1] > 0.5 * burner[0], `burner ${burner}`);
+  // noon's engine heat as before (only the dark shows it)
+  const noon = throatGlow(FLAME_DAY, 0, 0, 0);
+  assert.ok(Math.abs(noon[0] - 0.012 * 0.15) < 1e-12);
 });
 
 test('burner: day look by the light level (sun elevation), not by the exposure', () => {
@@ -145,15 +241,61 @@ test('quality table: every level, the burner steps and the cone shells grow with
     && FX_QUALITY.medium.shells <= FX_QUALITY.high.shells);
 });
 
-test('landing-light pool: physics only by day and at dusk, a visibility gain in the dark', () => {
-  assert.equal(poolGain(skyLogLux(79)), 1);                   // noon
-  assert.ok(poolGain(skyLogLux(1.6)) < 1.001, 'sunset: physics only');
-  assert.ok(poolGain(skyLogLux(-1.24)) < 1.05, 'dusk: physics only');
-  assert.ok(poolGain(skyLogLux(-10)) > 250, 'night');
+test('landing-light pool: physical by day and at dusk, the rule for lights at night, a soft roll-off', () => {
+  // gain 1 (day, dusk): nearly the physical 1 + E_lamp / E_amb
+  assert.ok(Math.abs(poolFactor(0.5, 1) - 1.5) < 0.01, 'physical');
+  assert.equal(poolFactor(0, 6), 1);
+  // at night (lightGain ~6 at exposure 230) the lamp counts six times over the moonlit ground
+  const g = artificialLightGain(230, -20);
+  assert.ok(poolFactor(1, g) > 5 && poolFactor(1, g) < 1 + g + 1e-9);
   // roll-off: grows with the lamp's light, ever slower (a lit runway, not a white wedge)
-  const L = skyLogLux(-12);
-  assert.ok(poolFactor(1, L) < poolFactor(2, L));
-  assert.ok(poolFactor(2, L) - poolFactor(1, L) < poolFactor(1, L) - poolFactor(0, L));
-  assert.ok(poolFactor(10, L) < 300, `bounded: ${poolFactor(10, L).toFixed(0)}`);
-  assert.equal(poolFactor(0, L), 1);
+  assert.ok(poolFactor(1, g) < poolFactor(2, g));
+  assert.ok(poolFactor(2, g) - poolFactor(1, g) < poolFactor(1, g) - poolFactor(0, g));
+  assert.ok(poolFactor(100, g) < 1 + POOL_KNEE * 3, `bounded: ${poolFactor(100, g).toFixed(0)}`);
+});
+
+test('landing-light pool: on dark land a floor from the lamp against the real night (Fechner)', () => {
+  // short final from 65 m: the beam's ~0.5 lux on the runway 370 m ahead against the boosted moonlit
+  // ground (~20 lux as drawn) and the real one (a crescent moon and the night's glow, ~0.01 lux)
+  const g = artificialLightGain(230, -24);
+  const rule = poolFactor(0.5 / 20.7, g);
+  const floor = poolFactor(0.5 / 20.7, g, 0.5 / 0.01);
+  assert.ok(rule < 1.2, `the rule alone: nothing on the runway (${rule.toFixed(2)})`);
+  assert.ok(floor > 3 && floor < 6, `with the floor a pool (${floor.toFixed(2)})`);
+  // the touchdown zone in the flare (~12 lux) brighter again, the asphalt under the nose (~300 lux)
+  // brighter still and the rule's there: the floor only lifts the dim far end of the beam
+  const flare = poolFactor(12 / 20.7, g, 12 / 0.01), nose = poolFactor(300 / 20.7, g, 300 / 0.01);
+  assert.ok(flare > floor && nose > flare, `${floor.toFixed(1)} < ${flare.toFixed(1)} < ${nose.toFixed(1)}`);
+  assert.equal(nose, poolFactor(300 / 20.7, g), 'near the nose the rule wins');
+  // by day and at dusk nothing is boosted (the real light is the drawn one, gain 1): the floor is
+  // under the rule (ln(1 + r) < r), the pool as it was
+  for (const r of [0.01, 0.1, 0.5, 2, 10]) assert.equal(poolFactor(r, 1, r), poolFactor(r, 1));
+});
+
+test('landing lamp for the other shaders (LAMP_UNIFORMS): off by day and high up, on near the ground at night', () => {
+  const pool = new LandingPool(new THREE.Group(), { heightAt: () => 0 });
+  const down = new THREE.Vector3(0, -Math.sin(0.19), -Math.cos(0.19));
+  const landing = { on: true, position: new THREE.Vector3(0, 65, 0), direction: down,
+    beams: [{ direction: down, intensity: 400000, spread: 0.1222, weight: 1 },
+      { direction: down, intensity: 250000, spread: 0.2269, weight: 0 }] };
+  const R = LAMP_UNIFORMS.uLampRule.value;
+  fxEnv.update({ sunElevationDeg: 30, exposure: 1 });
+  pool.update(landing, true);
+  assert.equal(R.w, 0, 'by day the buildings draw as before');
+  fxEnv.update({ sunElevationDeg: -20, exposure: 230, lightGain: 1400 / 230, groundLightPhysical: 0.0113 / 32000 });
+  pool.update(landing, true);
+  assert.equal(R.w, 1, 'short final at night: on');
+  assert.ok(Math.abs(R.x - 1400 / 230) < 1e-9 && R.y > 0, 'the rule for lights at night and the real ground light');
+  landing.position.y = 325;
+  pool.update(landing, true);
+  assert.ok(R.w > 0.3 && R.w < 0.7, `fading out from 250 m up (${R.w.toFixed(2)} at 325 m)`);
+  landing.position.y = 450;
+  pool.update(landing, true);
+  assert.equal(R.w, 0, 'from 400 m up: off');
+  landing.position.y = 65;
+  pool.update(landing, true);
+  pool.update(null, false);
+  assert.equal(R.w, 0, 'the light off (or the effects switched off): off');
+  pool.dispose();
+  fxEnv.update({ sunElevationDeg: 45 });
 });

@@ -437,8 +437,10 @@ neighbours and region (`sim/tools/world/README.md`).
   industrial halls, houses, greenhouses, old stone, the power stations' banded stacks, the air
   bases' steel-clad halls and hangars with their doors, the Azrieli Spiral's bare concrete frame),
   windows that reflect the sky and show rooms behind them, lit windows and shop fronts at night
-  (fewer after midnight), roofs with tiles, metal, solar water heaters and clutter, the Dome of the
-  Rock's gilding. Lit like the terrain (sun, sky, aerial perspective, logarithmic depth).
+  (fewer after midnight; walls and roofs in the jet's landing light lit by it,
+  `js/aircraft/LandingPool.js` `LAMP_GLSL`), roofs with tiles, metal, solar water heaters and
+  clutter, the Dome of the Rock's gilding. Lit like the terrain (sun, sky, aerial perspective,
+  logarithmic depth).
 * **Shadows**: every building receives the sun's shadow map, and the full-detail chunks cast into
   it when the shadow camera covers more than the aircraft (300 m or more across; js/env sizes it to
   the jet, so in this tree they do not). At every height each building casts a ground shadow: a
@@ -527,10 +529,23 @@ vapour first shows.
 * **Units for lights** (lighting fix): one scene unit of illuminance is `LUX_PER_UNIT` = 32,000 lux
   (`js/env/Environment.js`): a three.js point or spot light takes `candela / LUX_PER_UNIT`, an
   emissive surface `cd/m^2 / LUX_PER_UNIT`. The night exposure goes up to 285 (it stopped at 40);
-  lights tuned by eye at 40 keep their look through `env.nightLightGain` (= min(1, 40 / exposure),
-  already in the `uNight` uniform), displays drawn at a fixed picture level divide by the exposure
+  lights tuned by eye at 40 keep their look through `env.nightLightGain` (the rule below scaled to
+  that exposure: min(1, 40 / exposure) at full night; in the `uNight` uniform times the switch-on
+  schedule `env.lightsOn`), displays drawn at a fixed picture level divide by the exposure
   (`js/env/displayLevels.js` does it for the glb's PCD glass, tablet and switch LEDs, and steps
   aside when a cockpit module sets `app.cockpit`).
+* **Lights at night** (night calibration, `js/env/README.md` "Lights at night"): one rule for every
+  artificial light and self-lit surface across the modules. Physical values (cd, cd/m^2, lux) times
+  `env.lightGain`: 1 by day and in the blue hour, once the sky is dark the gain of an eye adapted
+  to lit streets (1400 / exposure), so lamps, windows, airfield lights, cars, obstruction lights,
+  the jet's lights and its landing-light pool look the same on the screen at exposure 40 or 285;
+  point lights share one sprite shader with a visibility floor over the threshold of a point source
+  (`env.pointThreshold`). All switch on by one schedule (`env.lightsOn`, from just before sunset),
+  and their pixels carry a mark (`js/env/emitters.js`) by which the output keeps their hue (a red
+  light stays red, the burner orange) and night vision leaves them alone. The burner and the
+  cockpit's displays are picture levels (fixed at night). Check with `node sim/tests/night_shots.mjs`
+  (blue hour, night and noon at Ben Gurion, Tel Nof, over Tel Aviv and Jerusalem; `--list`); e2e
+  reads the pixels at night (PAPI, red lights, landing-light pool, burner, tail light).
 * **Clouds** are filtered in time (no boiling; `app.clouds.temporal`), cast their shadows per
   fragment on three.js's own materials too (`js/env/cloudShadowChunk.js`, a patch of three's light
   chunk made once at start-up), and on high step down to the medium tier if their measured GPU

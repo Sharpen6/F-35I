@@ -207,31 +207,42 @@ kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
   positions; aprons as 5 m concrete slabs with stains. Lit exactly as the terrain (sun through
   the atmosphere, sky, the aircraft's shadow) plus GGX sheen, then the same aerial perspective.
   At night: street lights along lit roads (sodium on main roads, warm LED in town) and apron
-  floodlights, with the eye's adaptation the capped exposure lacks once the sky is dark. The
+  floodlights, with the eye's adaptation the capped exposure lacks once the sky is dark
+  (`env.lightGain`, the rule every module's lights follow: js/env/README.md "Lights at night"). The
   terrain's own shadows (hills over valleys at a low sun) when gfx-terrain's horizon maps are in
   (`terrain.horizon.uniforms` and `HORIZON_GLSL` of js/terrain/horizonMap.js, loaded only then;
   one more sampler).
-* **Airfield lights** (`AirportLights.js`): one `THREE.Points` per airfield, camera-facing
-  sprites. Each light has a colour and intensity (cd) per side of its axis and a beam; the
-  vertex shader computes the illuminance at the eye through the atmosphere (`I T / d^2`) against
-  the threshold of a point source on the background (Allard: `E_t = 10^(0.64 log B - 5.7)` lux,
-  `B` from the sun's elevation). The light's irradiance is spread over a Gaussian of at least
-  0.65 px (wider when bright, as glare) integrated over each pixel (erf), so a light keeps its
-  energy wherever it falls between pixel centres: no twinkling as it moves. A display cannot show
-  a point as bright as the eye sees it, so a light the eye sees well is at least as bright as its
-  excess over the threshold says (as star magnitudes), up to 0.85 of white; only physically
-  bright (near) lights saturate, up to 64 in HDR (the bloom). Radians per pixel from the drawing
-  buffer (HiDPI counted once). PAPI white above its unit's angle, red below (2 white 2 red on
-  3 deg); sequenced flashers held 40 ms (two or three frames; an 8 ms flash fell between
-  frames). Runway, approach and taxiway lights on from sun 8 deg (dimmer steps at night),
-  floodlights from sunset, PAPI always.
+* **Airfield lights** (`AirportLights.js`): one `THREE.Points` per airfield, camera-facing sprites.
+  Each light has a colour and intensity (cd) per side of its axis and a beam; the vertex shader
+  computes the illuminance at the eye through the atmosphere (`I T / d^2`) against the threshold of
+  a point source on the background (Allard: `E_t = 10^(0.64 log B - 5.7)` lux, `B` from the sun's
+  elevation: `env.pointThreshold`); the same GLSL (`POINT_LIGHT_VERT_GLSL`,
+  `POINT_LIGHT_FRAG_GLSL`) draws the cars and the buildings' obstruction lights. The light's
+  irradiance is spread over a Gaussian of at least 0.65 px (wider when bright, as glare) integrated
+  over each pixel (erf), so a light keeps its energy wherever it falls between pixel centres: no
+  twinkling as it moves. A display cannot show a point as bright as the eye sees it, so a light the
+  eye sees well is at least as bright as its excess over the threshold says (as star magnitudes),
+  up to 0.8 on the display in its brightest channel once the lights are on (the colour normalised
+  by its maximum, not its luminance: a red at the floor is a full red, not a red at 3x white; by
+  day, without Post.js's lights' path, by its luminance up to 0.85, as before); only physically bright
+  (near) lights saturate, up to 64 in HDR (the bloom). Each sprite writes its mark as a light into
+  the alpha (js/env/emitters.js, blended with `emitterBlending`): Post.js tone maps it by its
+  brightest channel and keeps its hue, and night vision leaves it alone, so a red stays red (CIE x
+  ~0.58; AgX alone turned the PAPI's red units white and every red light salmon, x ~0.42).
+  Radians per pixel from the drawing buffer (HiDPI counted once). PAPI white above its unit's
+  angle, red below (2 white 2 red on 3 deg); sequenced flashers held 40 ms (two or three frames; an
+  8 ms flash fell between frames). Runway, approach, taxiway lights and floodlights switch on by
+  the one schedule of js/env (`env.lightsOn`: from just before sunset, full with the sun 2.5 deg
+  down), the PAPI always; at night the runway, approach and PAPI lights step down to 35 % (as ATC
+  sets them on a clear night) as the eye adapts (`env.lightNight`).
 * **Street lamps** (`AirportLights.js`, `lamps_<ix>_<iz>.bin`): one `THREE.Points` per road tile
   within 20 / 14 / 8 km (high / medium / low), their own program (16 bytes a lamp). The luminaire
   (cut-off optics: 3000 cd sodium / 1200 cd LED from below its horizontal plane, ~8 % of that from
   above: the glow of its glass) and, beyond the range where the ribbons show the pool of light on
   the road, the pool as a point (600 / 250 cd from straight above, Lambertian). Thinned with
   distance to (4 km / d)^2 of the lamps (at least 1 in 16), the ones kept carrying the light of
-  the others; faded out at the end of the range. On with the street lights. Cities are lit lines
+  the others; faded out at the end of the range. On with the street lights (`env.lightsOn`, the
+  road shader's pools too), with the sprites' mark as a light. Cities are lit lines
   of lamps to the horizon instead of black beyond the road range. `Roads.lampRange`: where the
   terrain's procedural city lights should start (gfx-terrain), so the two do not count twice.
 * **Traffic at night** (`Traffic.js`): cars on the lanes of motorways, trunk, primary, secondary
@@ -247,7 +258,7 @@ kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
   tunnel, a smaller street, the loaded tiles' edge) it fades out over its last 40 m; such a car,
   one that falls behind the radius and the surplus after a quality change come back elsewhere,
   fading in. Positions on the CPU (~0.3 ms a frame for 3500 cars here), uploaded for the slots in
-  use only. From sunset to sunrise only: there are no car models by day.
+  use only. Shown while the street lights are on (`env.lightsOn`): there are no car models by day.
 * URL parameters: `roads=0` (no roads, airfield surfaces or lights), `airportlights=0` (no
   airfield lights, no traffic), `traffic=0`.
 * Shader samplers (the D3D11 limit is 16): the road program 5, 6 with the sun's shadow map

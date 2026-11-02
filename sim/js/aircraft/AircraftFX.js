@@ -143,6 +143,8 @@ export class AircraftFX {
     this.on = !!on;
     this.group.visible = this.on;
     if (!this.on && this.vapor) this.vapor.reset();
+    // the pool's lamp off for the other shaders too (LandingPool.js LAMP_UNIFORMS)
+    if (!this.on && this.pool) this.pool.update(null, false);
     this._fresh = true;
   }
 

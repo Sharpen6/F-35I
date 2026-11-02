@@ -30,6 +30,9 @@
 
 import * as THREE from 'three';
 import { BOX_VERT, CHUNK_VERT, BUILDING_FRAG, DEPTH_FRAG, LIGHT_VERT, LIGHT_FRAG, SHADOW_VERT, SHADOW_FRAG } from './buildingShaders.js';
+import { LUX_PER_UNIT, artificialLightGain, pointLightThreshold, lightsOn as lightsOnAt } from '../env/Environment.js';
+import { emitterBlending } from '../env/emitters.js';
+import { LAMP_UNIFORMS } from '../aircraft/LandingPool.js';
 
 const TILE = 6400;
 const CORE_HALF = 51200;
@@ -50,9 +53,21 @@ const MAX_TILE_LOADS = 2;            // tiles being fetched / parsed at once
 const MAX_CHUNK_BUILDS = 2;          // chunks being built at once
 const FADE_S = 0.6;                  // cross-fade between a chunk's boxes and its full detail (s)
 
-/** Share of the windows lit at local solar time h (an evening peak, a quiet small hours). */
-function litFraction(h) {
-  const P = [[0, 0.30], [2, 0.17], [5, 0.12], [6.5, 0.2], [8, 0.08], [17, 0.08], [19, 0.42], [21, 0.52], [23, 0.40], [24, 0.30]];
+// Night light (js/env/README.md "Lights at night": physical values x env.lightGain / LUX_PER_UNIT):
+// a lit window's luminance (cd/m^2, the brightest channel of its tint: rooms behind glass and
+// curtains ~10-40 cd/m^2 with the shader's spread from room to room, shop fronts x 1.8; at night
+// 0.5-0.8 on the display, where Post.js keeps a light's hue) and the street lights' illuminance on
+// the lowest floors of the walls (lux; streets get 10-20 lux on the ground, the walls beside them
+// less, falling off upwards in the shader).
+const WINDOW_CD = 20;
+const FACADE_LUX = 8;
+
+// Share of the windows lit at local solar time h: homes (an evening peak, quiet small hours),
+// offices and public buildings (the working day; after 20:00 late workers, cleaners and the
+// lights left on, 15-30 %)
+const LIT_HOMES = [[0, 0.30], [2, 0.17], [5, 0.12], [6.5, 0.2], [8, 0.08], [17, 0.08], [19, 0.42], [21, 0.52], [23, 0.40], [24, 0.30]];
+const LIT_OFFICES = [[0, 0.1], [6, 0.1], [8, 0.55], [17, 0.6], [19, 0.4], [20, 0.28], [22, 0.18], [24, 0.1]];
+function litFraction(h, P = LIT_HOMES) {
   h = ((h % 24) + 24) % 24;
   for (let i = 1; i < P.length; i++) {
     if (h <= P[i][0]) {
@@ -142,6 +157,7 @@ export class Buildings {
     // uniforms shared by every building material (by reference)
     this._shared = {
       uLight: { value: new THREE.Vector4() },
+      uLitOffice: { value: 0 },
       uAlbedo: { value: new THREE.Vector3(0.78, terrain?.albedoGain ?? 0.7, 1) },
       uVis: { value: new THREE.Vector4(this.Q.visK, 0.25, 0.0012, this.Q.far) },
       uDebug: { value: params.get('buildingsDebug') === '1' ? 1 : 0 },
@@ -159,7 +175,13 @@ export class Buildings {
       uShadowView: { value: new THREE.Vector4(0, 0, 1, 1) },
     };
     this.shadowMaterial = this._shadowMaterial();
-    this._lightU = { uLightOn: { value: new THREE.Vector3(0, 0, 1) } };
+    // obstruction lights: on, time; and the point-light rule's uniforms (AirportLights.js)
+    this._lightU = {
+      uLightOn: { value: new THREE.Vector3(0, 0, 1) },
+      uThreshold: { value: 1e-7 }, uExposure: { value: 1 }, uPxAngle: { value: 1e-3 }, uGain: { value: 1 / LUX_PER_UNIT },
+      uLightsOn: { value: 0 },
+    };
+    this._dbSize = new THREE.Vector2();
     this.lightMaterial = this._lightMaterial();
     this._fading = new Set();            // chunks cross-fading with their boxes
     this._cand = [];                     // _streamChunks: candidates, pooled (no garbage per frame)
@@ -239,7 +261,8 @@ export class Buildings {
    */
   _material(box, dither = false, fade = null) {
     const lights = THREE.UniformsUtils.clone(THREE.UniformsLib.lights);
-    const uniforms = { ...lights, ...this.env.uniforms, ...this._shared };
+    // the jet's landing light by reference (LandingPool.js: off by day)
+    const uniforms = { ...lights, ...this.env.uniforms, ...this._shared, ...LAMP_UNIFORMS };
     if (box) uniforms.uFade = fade || { value: Array.from({ length: 16 }, () => new THREE.Vector4()) };
     else if (dither) uniforms.uFadeIn = { value: 0 };
     const defines = box ? { BOX: 1 } : {};
@@ -286,17 +309,17 @@ export class Buildings {
   }
 
   _lightMaterial() {
-    return new THREE.ShaderMaterial({
+    // added light with its mark as a light in the alpha (js/env/emitters.js)
+    return emitterBlending(new THREE.ShaderMaterial({
       name: 'BuildingLights',
       uniforms: { ...this.env.uniforms, ...this._lightU },
       vertexShader: LIGHT_VERT,
       fragmentShader: LIGHT_FRAG,
       transparent: true,
-      blending: THREE.AdditiveBlending,
       depthTest: true,
       depthWrite: false,
       fog: false,
-    });
+    }));
   }
 
   /**
@@ -390,7 +413,7 @@ export class Buildings {
     f.camera.getWorldPosition(this._cam);
     this._streamTiles();
     this._streamChunks();
-    if (f.draw) this._prepareDraw();
+    if (f.draw) this._prepareDraw(f.camera);
   }
 
   setTime(hours) {
@@ -719,7 +742,7 @@ export class Buildings {
   }
 
   // ------------------------------------------------------------------------------ per drawn frame
-  _prepareDraw() {
+  _prepareDraw(camera) {
     const visK = this.Q.visK, far = this.Q.far;
     const now = performance.now();
     // wall time since the last drawn frame: a fade runs its FADE_S whatever the frame rate (after
@@ -728,13 +751,13 @@ export class Buildings {
     this._lastT = now;
     this._frame++;
     this._updateFades(dt);
-    // the sun: ground shadows by day, obstruction lights at dusk and night
+    // the sun: ground shadows by day; lit windows and obstruction lights by the one switch-on
+    // schedule of every light (js/env "Lights at night": env.lightsOn, from just before sunset)
     const sunY = this.env.sunDirection ? this.env.sunDirection.y : 1;
-    const dark = Math.min(1, Math.max(0, (0.1 - sunY) / 0.2));
-    const kDark = dark * dark * (3 - 2 * dark);
+    const kOn = this.env.lightsOn ?? lightsOnAt(this.env.sunElevationDeg ?? 90);
     const shadowK = this.shadowsOn ? Math.min(1, Math.max(0, (sunY - 0.02) / 0.1)) : 0;
     const shadowFar = this.Q.shadowFar;
-    const lightsOn = this.lightsOn && kDark > 0.01;
+    const lightsOn = this.lightsOn && kOn > 0.01;
     let boxes = 0, tiles = 0, chunks = 0, verts = 0, chunkBytes = 0, boxBytes = 0, shadows = 0, shadowBytes = 0, lights = 0;
     for (let ti = 0; ti < this._tileList.length; ti++) {
       const t = this._tileList[ti];
@@ -789,15 +812,29 @@ export class Buildings {
       sl.target.getWorldPosition(this._tmpV || (this._tmpV = new THREE.Vector3()));
       SU.uRealShadow.value.set(this._tmpV.x, this._tmpV.z, 0.5 * (sc.right - sc.left), 1);
     } else SU.uRealShadow.value.set(0, 0, 0, 0);
-    // obstruction lights: darkness, time (flashing), pixel scale
-    const LU = this._lightU.uLightOn.value;
-    LU.set(kDark, now / 1000, (this.renderer.domElement?.height || 1080) / 1080);
+    // obstruction lights: on, time (flashing); the rule for point lights (env: the eye's
+    // adaptation and the threshold of a point light; the renderer's exposure and pixel size)
+    const env = this.env, el = env.sunElevationDeg ?? 90;
+    const lightGain = env.lightGain ?? artificialLightGain(env.exposure, el);
+    const LUo = this._lightU;
+    LUo.uLightOn.value.set(kOn, now / 1000, 0);
+    LUo.uThreshold.value = env.pointThreshold ?? pointLightThreshold(el);
+    LUo.uExposure.value = this.renderer.toneMappingExposure || 1;
+    LUo.uGain.value = lightGain / LUX_PER_UNIT;
+    LUo.uLightsOn.value = env.lightsOn ?? lightsOnAt(el);
+    if (camera && camera.isPerspectiveCamera) {
+      const hPx = this.renderer.getDrawingBufferSize(this._dbSize).y || 1;
+      LUo.uPxAngle.value = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / (camera.zoom || 1) / hPx;
+    }
     // the terrain's albedo gain (it may change at run time): roofs match the ground under them
     this._shared.uAlbedo.value.y = this.terrain?.albedoGain ?? this._shared.uAlbedo.value.y;
-    // night: lit windows and street light; the sun's elevation sets how much they show
+    // night: lit windows and street light, switched on through the dusk (kOn), physical
+    // values seen by the eye's adaptation (lightGain)
     const U = this._shared.uLight.value;
     const h = this.hours;
-    U.set(litFraction(h), 0.014 * kDark, 0.008 * kDark, h > 22.5 || h < 6 ? 0.25 : 0.85);
+    const art = kOn * lightGain / LUX_PER_UNIT;
+    U.set(litFraction(h), WINDOW_CD * art, FACADE_LUX * art, h > 22.5 || h < 6 ? 0.25 : 0.85);
+    this._shared.uLitOffice.value = litFraction(h, LIT_OFFICES);
     const S = this.stats;
     S.tiles = tiles; S.boxes = boxes; S.chunks = chunks; S.chunkVertices = verts;
     S.chunkMB = +(chunkBytes / 1048576).toFixed(1); S.boxMB = +(boxBytes / 1048576).toFixed(1);

@@ -21,12 +21,12 @@
 import * as THREE from 'three';
 import { HGRID, TILE_M, CORE_HALF, CHUNK_M, CHUNKS, NOISE_SIZE } from './roadMesh.js';
 import { ROAD_VERT, roadFrag, MAX_MASTS } from './roadShaders.js';
-import { AirportLights, skyIlluminance, LAMP_RANGE } from './AirportLights.js';
+import { AirportLights, LAMP_RANGE } from './AirportLights.js';
 import { Traffic } from './Traffic.js';
+import { LUX_PER_UNIT, artificialLightGain, lightsOn } from '../env/Environment.js';
 
 const FAR_HALF = 204800;
-const LUX_TO_SCENE = 1 / 32000;          // scene irradiance unit (Environment SUN_ILLUMINANCE 4 = ~128 klux)
-const ADAPTED_EXPOSURE = 1400;           // eye adapted to lit streets / aprons (daylight ~0.9 at 128 klux)
+const LUX_TO_SCENE = 1 / LUX_PER_UNIT;   // scene irradiance unit (Environment SUN_ILLUMINANCE 4 = ~128 klux)
 
 /**
  * Per quality: draw range (3D distance, m) of group 0 (main roads, railways, airfields) and group 1
@@ -255,20 +255,18 @@ export class Roads {
     this.stats.triangles = tris;
   }
 
-  /** Street lights and floodlights: on from a little before sunset; brightness for night eyes. */
+  /** Street lights and floodlights: on by the one schedule (env.lightsOn); brightness for night eyes. */
   _updateLightUniforms(cam) {
     const S = this._shared;
     const el = this.env.sunElevationDeg ?? 30;
-    const on = Math.min(1, Math.max(0, (2.5 - el) / 3.5));
-    // The display keeps a night scene darker than a dark-adapted eye sees it (the exposure is
-    // capped). Once the sky's own light is negligible next to the lamps (below ~30 lux, sun
-    // under -4 deg), lit surfaces get the missing adaptation: up to the exposure of an eye
-    // adapted to lit streets and aprons. At dusk the sky still lights the ground, the lamps add
-    // their few tens of lux to it and the gain stays 1 (a lit apron is a little brighter, no more).
-    const exp = Math.max(this.env.exposure ?? 1, 1e-3);
-    const t = Math.min(1, Math.max(0, (1.5 - Math.log10(skyIlluminance(el))) / 2));
-    const night = t * t * (3 - 2 * t);
-    const gain = Math.max(1, 1 + night * (ADAPTED_EXPOSURE / exp - 1));
+    // js/env "Lights at night": on from just before sunset to the sun at -2.5 deg, as everything
+    const on = this.env.lightsOn ?? lightsOn(el);
+    // Lights at night (js/env/README.md): the display keeps a night scene darker than a
+    // dark-adapted eye sees it. Once the sky's own light is negligible next to the lamps (below
+    // ~30 lux, sun under -4.5 deg), lit surfaces get the missing adaptation, up to the exposure of
+    // an eye adapted to lit streets and aprons (env.lightGain). At dusk the sky still lights the
+    // ground, the lamps add their few tens of lux to it and the gain stays 1.
+    const gain = this.env.lightGain ?? artificialLightGain(this.env.exposure, el);
     S.uArt.value.set(on, LUX_TO_SCENE * gain, this.Q.detail, 0);
     this.sceneGain = LUX_TO_SCENE * gain;          // the light sprites' (AirportLights) too
     S.uAlbedoGain.value = this.terrain.albedoGain ?? 0.7;

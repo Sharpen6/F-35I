@@ -15,9 +15,11 @@
 // instead of shimmering), shop fronts, open ground floors on columns, balconies, closed
 // shutters, stone courses, corrugated metal, curtain walls with Fresnel sky reflection and a
 // sun glint, roof tiles, metal seams, solar panels; at night lit windows (per window, blended
-// into the mean lit fraction where windows get smaller than a pixel) and street light on the
-// lower walls. Light and haze are the terrain's (atmoSunIrradianceAt, uAmbient, ground bounce,
-// atmoAerial), so a building and the ground under it fade alike.
+// into the mean lit fraction where windows get smaller than a pixel; warm homes, paler offices,
+// their frames and mullions) and street light on the lower walls. Where lit windows make most of
+// a pixel's light it carries their mark as a light (js/env/emitters.js: Post.js keeps their hue).
+// Light and haze are the terrain's (atmoSunIrradianceAt, uAmbient, ground bounce, atmoAerial), so
+// a building and the ground under it fade alike.
 //
 // A chunk switching between boxes and full detail cross-fades: both are drawn for a moment with
 // complementary screen-space dither masks (DITHER, interleaved gradient noise), so neither pops.
@@ -27,6 +29,9 @@
 // building: the box's shadow on its ground plane, multiplied into what is drawn).
 
 import { ATMOSPHERE_PARS, ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
+import { POINT_LIGHT_VERT_GLSL, POINT_LIGHT_FRAG_GLSL } from './AirportLights.js';
+import { EMITTER_GLSL } from '../env/emitters.js';
+import { LAMP_GLSL } from '../aircraft/LandingPool.js';
 
 // wall styles, roof styles, roof shapes, surface kinds: sim/tools/world/buildings.py, BuildingsWorker.js
 export const WALL = { plaster: 0, stone: 1, glass: 2, office: 3, industrial: 4, house: 5, greenhouse: 6, concrete: 7, public: 8, tower: 9, oldstone: 10, stack: 11, hangar: 12, frame: 13 };
@@ -204,7 +209,10 @@ uniform bool receiveShadow;
 ${ATMOSPHERE_PARS}
 ${SAFE_H}
 
-uniform vec4 uLight;          // lit window fraction, window radiance, street light irradiance, lit share of shops
+uniform vec4 uLight;          // lit window fraction (homes), window radiance, street light irradiance, lit share of shops
+uniform float uLitOffice;     // lit window fraction (offices, public buildings)
+${EMITTER_GLSL}
+${LAMP_GLSL}
 uniform vec3 uAlbedo;         // wall albedo gain, roof albedo gain (the terrain's), detail on (1) / off (0)
 uniform float uDebug;         // 1: colour by level of detail
 #if defined( DITHER ) && !defined( BOX )
@@ -367,6 +375,7 @@ void main() {
   vec3 gndE = PI * uGroundRadiance * (0.5 - 0.5 * N.y);     // light bounced off the ground
 
   vec3 radiance;
+  vec3 lightR = vec3(0.0);          // the part of it that is the lit windows' own light
   if (kind > 0.5 && kind < 1.5) {
     // ================================================================= roofs
     float rs = sty;
@@ -538,12 +547,14 @@ void main() {
     // some buildings and floors are busier than others: kept at the scale of buildings and floors,
     // which stay visible further than single windows, so a far city is not one even glow
     float busy = (0.2 + 1.6 * hash12(vec2(seed, 41.0 + face))) * mix(1.0, 0.35 + 1.3 * hash12(vec2(cell.y, seed + 5.0)), 1.0 - smoothstep(0.35, 0.9, gw.y));
-    float litP = (shops && groundCell) ? uLight.w : min(uLight.x * busy, 1.0);
+    float litP = (shops && groundCell) ? uLight.w : min((resid ? uLight.x : uLitOffice) * busy, 1.0);
     float lit = mix(litP, step(h2, litP), detail);
     float curtainIn = mix(0.3, step(h3, 0.3), detail);
-    // warm homes (2700-3000 K), whiter offices and shops
-    vec3 tint = mix(vec3(1.0, 0.58, 0.26), vec3(1.0, 0.74, 0.44), mix(0.5, h3, detail));
-    tint = mix(tint, vec3(0.86, 0.90, 1.0), resid ? 0.12 : 0.5);
+    // warm homes (2700-3200 K: incandescent, warm LED, behind curtains), offices and shops whiter
+    // (3500-4500 K fluorescent and LED panels); linear sRGB by the brightest channel (Post.js
+    // shows a lit window by its hue: these are its colour on the screen)
+    vec3 tint = resid ? mix(vec3(1.0, 0.45, 0.14), vec3(1.0, 0.56, 0.25), mix(0.5, h3, detail))
+                      : mix(vec3(1.0, 0.60, 0.32), vec3(1.0, 0.74, 0.52), mix(0.5, h3, detail));
     float glassW = win * (1.0 - shut * (groundCell && shops ? 0.0 : 1.0));
     float shutW = win - glassW;
 
@@ -571,13 +582,20 @@ void main() {
     float roomAlb = mix(0.12, 0.28, curtainIn) * (curtain ? 0.6 : 1.0);
     vec3 room = vec3(roomAlb) * (uAmbient * 0.45 + gndE * 0.5 + sunE * (NdL * shadow * 0.3 + 0.03)) / PI;
     float spandrel = curtain ? 1.0 - pulse(g.y, gw.y, 0.0, 0.84) : 0.0;   // opaque glass at the slabs
-    vec3 emit = uLight.y * tint * lit * (1.0 - spandrel) * ((shops && groundCell) ? 1.8 : 1.0) * mix(1.0, 0.6 + 0.8 * h3, detail);
+    // a lit room: brighter or dimmer rooms (a ceiling light, a lamp, a screen), the frames across
+    // the glass (a mullion in the middle of a window, every 1.5 m along a curtain wall or an office
+    // ribbon: box-filtered, so far away they are their share of the glass)
+    float mull = (curtain || st == 3.0) ? pulse(fac.x / 1.5, fw.x / 1.5 * 1.25, 0.0, 0.04)
+                                        : pulse(g.x, gw.x, 0.5 - 0.02 * 3.0 / bay, 0.5 + 0.02 * 3.0 / bay);
+    vec3 emit = uLight.y * tint * lit * (1.0 - spandrel) * ((shops && groundCell) ? 1.8 : 1.0)
+      * mix(1.0, 0.47 + 1.2 * h3 * h3 + 0.25 * h1, detail) * (1.0 - 0.85 * mull);
     vec3 glassR = F * refl + (1.0 - F) * (room * (1.0 - spandrel) + emit);
     // the parts
     vec3 recR = wallAlb * 0.35 * Erec / PI;
     float wallW = max(1.0 - win - balc - pilo, 0.0);
     shutR += uLight.y * tint * lit * 0.06;                     // light through the slats
     radiance = wallR * wallW + shutR * shutW + glassR * glassW + recR * (balc + pilo);
+    lightR = (1.0 - F) * emit * glassW + uLight.y * tint * lit * 0.06 * shutW;
     // the metal frames of a curtain wall reflect a little too
     if (curtain) radiance += 0.3 * F * refl * wallW * upper;
     // below the floor (foundations)
@@ -595,6 +613,22 @@ void main() {
       vec3 openR = concrete * 0.18 * ((skyE + gndE) * 0.6 + sunE * shadow * 0.08) / PI;
       vec3 frameR = mix(openR, concrete * Ediff / PI, solid);
       radiance = mix(radiance, frameR, bare);
+      lightR *= 1.0 - bare;
+    }
+    if (plainWall) lightR = vec3(0.0);
+  }
+
+  // ---- the jet's landing light (js/aircraft/LandingPool.js LAMP_GLSL) ----
+  // walls and roofs in its beams, by the pool's rule (the pool's grid on the ground cannot light
+  // them: on short final over a town it was lit ground between dark blocks); a wall facing the
+  // lamp takes more of it than the ground. None while the pool is off (by day: as before)
+  if (uLampRule.w > 0.0) {
+    float El = lampLight(uCameraPos + vRel - uLampPos, N);
+    if (El > 0.0) {
+      // against this face's light as drawn and its real light (the ground's, less on a wall);
+      // the windows' own light stays as it is
+      vec3 Eamb = sunE * NdL * shadow + skyE + gndE;
+      radiance = lightR + (radiance - lightR) * lampFactor(El, Eamb, uLampRule.y * (0.6 + 0.4 * N.y));
     }
   }
 
@@ -607,26 +641,32 @@ void main() {
       color = mix(color, vec3(1.0, 0.25, 0.1) * 0.4, 0.6);
     #endif
   }
-  gl_FragColor = vec4(color, 1.0);
+  // the lit windows' share of the pixel's light: where they make most of it, the pixel is a light
+  // (js/env/emitters.js); by day (no window light) a surface as everything else
+  float lightShare = smoothstep(0.35, 0.8, max(lightR.r, max(lightR.g, lightR.b)) / max(max(radiance.r, max(radiance.g, radiance.b)), 1e-12));
+  gl_FragColor = vec4(color, lightShare > 0.0 ? emitterAlpha(lightShare) : 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
 `;
 
 // ---------------------------------------------------------------------------- obstruction lights
-// Red lights on the tops of tall structures, as points (Buildings.js: one THREE.Points per tile).
-// aLight: x = 1 flashing (medium intensity, structures >= 150 m and stacks) / 0 steady (low
-// intensity), y = phase (s). Steady lights 2.5 px, flashing ones 3.5 px at their peak; brightness
-// falls with distance (a point source: 1 / d^2, kept above a floor so far ones stay a dot).
+// Red lights on the tops of tall structures, as points (Buildings.js: one THREE.Points per tile),
+// drawn by the rule every point light follows (js/world/AirportLights.js POINT_LIGHT_VERT_GLSL,
+// js/env/README.md "Lights at night"): the illuminance at the eye through the air, I T / d^2,
+// against the threshold of a point source on the night's ground, never fainter than its excess
+// over the threshold says. ICAO Annex 14 intensities (night setting): low-intensity type B, steady,
+// 32 cd; medium-intensity type B, red flashing 20-60 a minute, 2,000 cd.
+// aLight: x = 1 flashing (structures >= 150 m and stacks) / 0 steady, y = phase (s).
+export const OBSTRUCTION_CD = { steady: 32, flashing: 2000 };
 export const LIGHT_VERT = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
 ${ATMOSPHERE_CORE}
+${SAFE_H}
+${POINT_LIGHT_VERT_GLSL}
 attribute vec2 aLight;
-uniform vec3 uLightOn;         // darkness (0 day .. 1 night), time (s), pixels per metre at 1 m (viewport)
-varying vec3 vRel;
-varying float vH;
-varying float vI;
+uniform vec3 uLightOn;         // on (0 day .. 1 night), time (s), -
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vec3 rel = wp.xyz - uCameraPos;
@@ -635,37 +675,27 @@ void main() {
   mv.xyz -= drop * viewMatrix[1].xyz;
   gl_Position = projectionMatrix * mv;
   #include <logdepthbuf_vertex>
-  vRel = rel - vec3(0.0, drop, 0.0);
-  vH = wp.y;
+  rel.y -= drop;
   float d = max(length(rel), 1.0);
-  // flashing: 40 a minute, 0.5 s on with soft edges (type B); steady: always on (type C)
+  // flashing: 40 a minute, 0.5 s on with soft edges (type B); steady: always on
   float ph = fract(uLightOn.y / 1.5 + aLight.y);
-  float on = aLight.x > 0.5 ? smoothstep(0.0, 0.06, ph) * (1.0 - smoothstep(0.30, 0.36, ph)) : 1.0;
-  float near = clamp(1800.0 / d, 0.25, 1.0);
-  vI = uLightOn.x * on * near * near * (aLight.x > 0.5 ? 2.2 : 1.0);
-  gl_PointSize = (aLight.x > 0.5 ? 3.5 : 2.5) * clamp(uLightOn.z, 0.6, 2.0) * mix(0.7, 1.0, on);
-  if (vI <= 0.001) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  float flash = aLight.x > 0.5 ? smoothstep(0.0, 0.06, ph) * (1.0 - smoothstep(0.30, 0.36, ph)) : 1.0;
+  float I = uLightOn.x * flash * (aLight.x > 0.5 ? ${OBSTRUCTION_CD.flashing.toFixed(1)} : ${OBSTRUCTION_CD.steady.toFixed(1)});
+  // the air between dims the light (added light: the haze in front is the world's, drawn already)
+  vec3 T = atmoPathTransmittance(uCamAltitude, atmoSafeH(wp.y), d);
+  pointLightSprite(I, vec3(1.0, 0.07, 0.025) * T, d);
+  if (vSize <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 }
 `;
 
 export const LIGHT_FRAG = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_fragment>
-${ATMOSPHERE_CORE}
-${SAFE_H}
-varying vec3 vRel;
-varying float vH;
-varying float vI;
+${POINT_LIGHT_FRAG_GLSL}
 void main() {
   #include <logdepthbuf_fragment>
-  vec2 q = gl_PointCoord * 2.0 - 1.0;
-  float r2 = dot(q, q);
-  if (r2 > 1.0) discard;
-  float dist = max(length(vRel), 1.0);
-  vec3 L = vec3(1.0, 0.07, 0.025) * 0.9 * vI * exp(-2.5 * r2);
-  // the air between dims the light (added light: the haze in front is the world's, drawn already)
-  vec3 c = L * atmoPathTransmittance(uCamAltitude, atmoSafeH(vH), dist);
-  gl_FragColor = vec4(max(c, 0.0), 1.0);
+  vec3 L = pointLightRadiance();
+  gl_FragColor = vec4(L, pointLightAlpha(L));
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }

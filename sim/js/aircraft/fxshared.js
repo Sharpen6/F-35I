@@ -14,6 +14,9 @@
 // the ribbon keeps its points in a preallocated ring and writes the vertex arrays in place.
 
 import * as THREE from 'three';
+import { LUX_PER_UNIT, artificialLightGain, lightNight, pointLightThreshold, skyIlluminance } from '../env/Environment.js';
+
+export { LUX_PER_UNIT };
 
 const CP = 1005;                       // J/(kg K)
 const smooth = THREE.MathUtils.smoothstep;
@@ -27,28 +30,13 @@ const smooth = THREE.MathUtils.smoothstep;
 export const fxExposure = { get: (renderer) => (renderer && renderer.toneMappingExposure) || 1 };
 
 /**
- * log10 of the illuminance (lux) on level ground under a clear, moonless sky by the sun's elevation
- * (deg), after the standard twilight tables (e.g. the Explanatory Supplement to the Astronomical
- * Almanac): ~120 klx with the sun high, ~400 lx at sunset, ~3 lx at the end of civil twilight
- * (-6 deg), ~0.01 lx at the end of nautical twilight (-12 deg), ~0.001 lx (starlight and airglow)
- * below -18 deg.
+ * log10(lux) of a clear, moonless sky's light on the ground for the sun's elevation (deg): the
+ * environment's table (Environment.js skyIlluminance, the one the rule for lights at night and the
+ * lights' switch-on schedule read): ~120 klx with the sun high, ~700 lx at sunset, ~3 lx at the end
+ * of civil twilight (-6 deg), ~0.001 lx (starlight and airglow) below -18 deg.
  */
-const SKY_LUX = [[-18, -3.0], [-15, -2.6], [-12, -2.0], [-10, -1.4], [-8, -0.6], [-6, 0.5], [-4, 1.3],
-  [-2, 2.0], [-1, 2.3], [0, 2.6], [1, 2.95], [2, 3.25], [5, 3.75], [10, 4.15], [20, 4.55], [30, 4.8],
-  [60, 5.03], [90, 5.1]];
-
-/** log10(lux) of a clear, moonless sky's light on the ground for the sun's elevation (deg). */
 export function skyLogLux(elevationDeg) {
-  const e = Number.isFinite(elevationDeg) ? elevationDeg : 45;
-  if (e <= SKY_LUX[0][0]) return SKY_LUX[0][1];
-  for (let i = 1; i < SKY_LUX.length; i++) {
-    const [e1, l1] = SKY_LUX[i];
-    if (e <= e1) {
-      const [e0, l0] = SKY_LUX[i - 1];
-      return l0 + (l1 - l0) * (e - e0) / (e1 - e0);
-    }
-  }
-  return SKY_LUX[SKY_LUX.length - 1][1];
+  return Math.log10(skyIlluminance(Number.isFinite(elevationDeg) ? elevationDeg : 45));
 }
 
 /** Darkness 0..1 for a light level: 0 above ~1000 lx (sun above ~+1 deg), 1 below ~3 lx (~-6 deg). */
@@ -68,6 +56,15 @@ export function darknessOf(logLux) {
  *                    brightness is normalised to it (main's meter and the HDR chain's: 0.93)
  *   bloom            null: an HDR target (float) is taken to mean the HDR chain with its bloom; true /
  *                    false force it. With bloom the lights draw a fainter glare halo of their own.
+ *   lightGain, lightNight, pointThreshold
+ *                    the rule for lights at night (js/env/README.md, Environment.js): the jet's lights
+ *                    and its landing light's pool are physical light x lightGain / LUX_PER_UNIT, its
+ *                    position lights seen from afar at least as bright as their excess over the
+ *                    threshold of a point light (lux) says; lightNight 0 (day, dusk) .. 1 (night)
+ *   groundLightPhysical
+ *                    the sky's and the moon's light on level ground without the night's boosts
+ *                    (scene units, luminance; Environment.groundLightPhysical, else the clear moonless
+ *                    sky's table): what the landing light's pool is seen against on dark land
  */
 export const fxEnv = {
   sunElevationDeg: 45,
@@ -75,6 +72,10 @@ export const fxEnv = {
   darkness: 0,
   noonExposure: 0.93,
   bloom: null,
+  lightGain: 1,
+  lightNight: 0,
+  pointThreshold: pointLightThreshold(45),
+  groundLightPhysical: skyIlluminance(45) / LUX_PER_UNIT,
   update(env) {
     let el = env && Number.isFinite(env.sunElevationDeg) ? env.sunElevationDeg : null;
     if (el === null && env && env.sunDirection) el = THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, env.sunDirection.y))));
@@ -82,6 +83,12 @@ export const fxEnv = {
     this.sunElevationDeg = el;
     this.logLux = skyLogLux(el);
     this.darkness = darknessOf(this.logLux);
+    // the environment's values (an environment without them: the same rule from its exposure)
+    this.lightNight = Number.isFinite(env.lightNight) ? env.lightNight : lightNight(el);
+    this.lightGain = Number.isFinite(env.lightGain) ? env.lightGain : artificialLightGain(env.exposure, el);
+    this.pointThreshold = Number.isFinite(env.pointThreshold) ? env.pointThreshold : pointLightThreshold(el);
+    this.groundLightPhysical = Number.isFinite(env.groundLightPhysical) && env.groundLightPhysical > 0
+      ? env.groundLightPhysical : skyIlluminance(el) / LUX_PER_UNIT;
   },
   /** Whether the frame being drawn goes through the HDR chain's bloom (see bloom above). */
   bloomOn(renderer) {
