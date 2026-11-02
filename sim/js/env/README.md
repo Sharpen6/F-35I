@@ -348,6 +348,10 @@ the same resolution (~70 %); low marches at a quarter resolution with no detail 
 * Moonlight and the night glow are boosted ("day for night", above); the eye's real night vision
   is far dimmer, and the night exposure (285) still stops short of a fully dark-adapted eye.
 * Low quality keeps the shadow box around the jet: no building or tree shadows near the ground.
+* Light that other modules tuned by eye at the old night exposure (40) shows ~7 x brighter at
+  night (285) until it is multiplied by `env.nightLightGain`: here the jet's throat glow at idle
+  (`js/aircraft/Afterburner.js`, an orange disc in the night shots); the aircraft track's light
+  sprites and landing-light pool when they are merged.
 * There is no GPU in the development container: the GPU costs above are estimates; the bench's
   GPU time line measures them on a real GPU.
 

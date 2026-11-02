@@ -192,29 +192,29 @@ async function main() {
         const C = app.clouds;
         if (inside && C && C.layer) {
           // the nearest point (on a spiral) where the cumulus is solid for 900 m along the heading,
-          // so the jet is still in it after the 2 s of flight below; back: start that far before the
-          // cloud's edge on the way in (the field below its threshold: the rendered cloud is that
-          // footprint pushed around by the 3D noise, up to ~150 m)
+          // so the jet is still in it after the 2 s of flight below. back: instead a point with clear
+          // air for the first back - 250 m along the heading (the 2 s of flight, the chase camera)
+          // and the cloud solid from 150 m beyond back (a broken deck covers 62 %: a fixed distance
+          // before a solid point is often inside the next cloud; the field changes slowly, so the
+          // margins are small). The rendered cloud is the field's footprint pushed around by the 3D
+          // noise (up to ~150 m).
           const F = await import('./js/env/cloudField.js');
           const hd = (sp.heading_deg || 0) * Math.PI / 180;
           const fx = Math.sin(hd), fz = -Math.cos(hd);
-          const solid = (x, z) => F.fieldAt((x + C.wind[0]) / C.layer.scale, (z + C.wind[1]) / C.layer.scale) > C.layer.threshold + 0.1;
+          const field = (x, z) => F.fieldAt((x + C.wind[0]) / C.layer.scale, (z + C.wind[1]) / C.layer.scale);
+          const solid = (x, z, d, m = 0.1) => field(x + fx * d, z + fz * d) > C.layer.threshold + m;
+          const clear = (x, z, d) => field(x + fx * d, z + fz * d) < C.layer.threshold - 0.03;
+          const ok = back
+            ? (x, z) => [0, 100, 200, 300, 400].every((d) => d > back - 250 || clear(x, z, d)) && solid(x, z, back + 150, 0.05) && solid(x, z, back + 450, 0.05)
+            : (x, z) => solid(x, z, 0) && solid(x, z, 450) && solid(x, z, 900);
           let best = null;
           for (let r = 0; r < 40000 && !best; r += 150) {
             for (let a = 0; a < 6.283; a += 150 / Math.max(r, 150)) {
               const x = sp.x + r * Math.cos(a), z = sp.z + r * Math.sin(a);
-              if (solid(x, z) && solid(x + fx * 450, z + fz * 450) && solid(x + fx * 900, z + fz * 900)) { best = [x, z]; break; }
+              if (ok(x, z)) { best = [x, z]; break; }
             }
           }
-          if (best) {
-            let [x, z] = best;
-            if (back) {
-              const field = (px, pz) => F.fieldAt((px + C.wind[0]) / C.layer.scale, (pz + C.wind[1]) / C.layer.scale);
-              for (let k = 0; k < 6000 && field(x, z) > C.layer.threshold - 0.02; k += 25) { x -= fx * 25; z -= fz * 25; }
-              x -= fx * back; z -= fz * back;
-            }
-            sp.x = x; sp.z = z; sp.y = inside;
-          }
+          if (best) { sp.x = best[0]; sp.z = best[1]; sp.y = inside; }
         }
         sim.start(spawn, { time, camera: 'chase' });
         Object.assign(sp, keep);
