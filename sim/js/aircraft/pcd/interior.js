@@ -39,9 +39,10 @@ import { SHADOW_GLSL } from './shadow.js';
 export const INTERIOR_PAINT = {
   F35_cockpit: { color: 0x45484b, roughness: 0.6, metalness: 0, detail: 1 },
   F35_cockpit_panel: { color: 0x3a3c40, roughness: 0.52, metalness: 0, detail: 0.8 },
-  // the bow (pcd/frame.js): a dark satin frame whose rounded edges catch the sky, its fastener heads
+  // the bow and the canopy frame's liner (pcd/frame.js, sills.js): a dark satin frame whose rounded
+  // edges catch the sky; the bow's sealant beads and handholds a light grey
   F35_canopy_bow: { color: 0x323437, roughness: 0.5, metalness: 0, detail: 0.4 },
-  F35_canopy_fastener: { color: 0x7a7d80, roughness: 0.35, metalness: 0.6, detail: 0.2 },
+  F35_canopy_fitting: { color: 0x8b8e90, roughness: 0.62, metalness: 0, detail: 0.3 },
   F35_glare_pad: { color: 0x57534b, roughness: 0.85, metalness: 0, detail: 0.6 },
   // the coaming's hood (pcd/parts.js): a flat black anti-glare finish
   F35_glare_shield: { color: 0x1e1f21, roughness: 0.93, metalness: 0, detail: 0.8 },
@@ -117,13 +118,7 @@ export class Interior {
     this._splits = [];
     this._patched = new Set();
     this._emissive = [];
-    this.byName = new Map();
-    this.root.traverse((o) => {
-      if (!o.isMesh || !o.material || Array.isArray(o.material)) return;
-      const n = o.material.name || '';
-      if (!this.byName.has(n)) this.byName.set(n, { material: o.material, meshes: [] });
-      this.byName.get(n).meshes.push(o);
-    });
+    this._index();
     this.box = this._checkFrame();
     // the paint's linear albedo (the canopy's reflection of the interior)
     this.albedo = luminance(new THREE.Color(INTERIOR_SKIN.color));
@@ -151,6 +146,17 @@ export class Interior {
   }
 
   // ------------------------------------------------------------------------------ set-up
+  /** The model's meshes by material name (again at start(): pcd/parts.js adds meshes and materials). */
+  _index() {
+    this.byName = new Map();
+    this.root.traverse((o) => {
+      if (!o.isMesh || !o.material || Array.isArray(o.material)) return;
+      const n = o.material.name || '';
+      if (!this.byName.has(n)) this.byName.set(n, { material: o.material, meshes: [] });
+      this.byName.get(n).meshes.push(o);
+    });
+  }
+
   /**
    * The analysis box, the floor plate and the outside points are in the glTF root frame, for this
    * model: checked here against the model (the eye, the canopy glass, the pedals), the box grown
@@ -209,7 +215,7 @@ export class Interior {
   _repaint() {
     for (const [name, p] of Object.entries(INTERIOR_PAINT)) {
       const e = this.byName.get(name);
-      if (!e) continue;
+      if (!e || this._saved.has(e.material)) continue;
       const m = e.material;
       this._saved.set(m, { color: m.color.clone(), roughness: m.roughness, metalness: m.metalness });
       m.color.set(p.color);
@@ -242,7 +248,9 @@ export class Interior {
       if (!wb.intersectsBox(box)) return;
       const glass = mat.isShaderMaterial && name.endsWith('_tint');
       if (mat.transparent && !glass) return;
-      const kind = glass ? 'glass' : name.startsWith('P2_') ? 'pilot' : 'wall';
+      // ('frame': the canopy bow and the frame's liner, pcd/parts.js: walls that do not shade
+      // themselves, their 1.5 cm voxels would)
+      const kind = glass ? 'glass' : name.startsWith('P2_') ? 'pilot' : o.userData.ckFrame ? 'frame' : 'wall';
       const P = g.attributes.position, N = g.attributes.normal;
       const pos = new Float32Array(P.count * 3), nrm = N ? new Float32Array(P.count * 3) : null;
       NM.getNormalMatrix(M);
@@ -269,8 +277,13 @@ export class Interior {
     return n in INTERIOR_PAINT || AO_ONLY.includes(n) || n.startsWith('P2_') || m === this.skinMaterial;
   }
 
-  /** Run the analysis (worker) and apply it. Resolves to the stats, or null when it failed. */
+  /**
+   * Run the analysis (worker) and apply it. Resolves to the stats, or null when it failed. The
+   * rebuilt parts (pcd/parts.js) are in place by now: their materials are painted first.
+   */
   async start() {
+    this._index();
+    if (this.enabled) this._repaint();
     const list = this._gather();
     const eye = this.eyeLocal;
     const msg = {

@@ -1,5 +1,6 @@
-// Geometry for the cockpit parts made at load time (frame.js, coaming.js): a small mesh builder,
-// profile sweeps along a list of frames, studs (fastener heads) and the per-vertex cavity term.
+// Geometry for the cockpit parts made at load time (pcd/parts.js and its builders): a small mesh
+// builder, profile sweeps along a list of frames, round bars, studs (fastener heads), the
+// per-vertex cavity term, and a vertex weld for reading the glb's meshes.
 //
 // * Normals are given, not computed: a profile says which of its corners are sharp (the normal is
 //   split there) and which are rounded (one averaged normal), so a 4 mm bevel reads as a rounded
@@ -12,6 +13,46 @@
 //   interior.js multiplies it into the per-vertex occlusion it computes.
 
 import * as THREE from 'three';
+
+/**
+ * Weld a position attribute: vertices at the same place (to 1 / q m) get one number. Returns
+ * {rep (Int32Array: each vertex's number, 0 .. count - 1, in order of first appearance), first
+ * (Int32Array: the first vertex of each number), count}. A hash table over the rounded positions
+ * (no strings: the cockpit tub's 5000 vertices in well under a millisecond).
+ */
+export function weld(P, q = 1e4) {
+  const n = P.count;
+  const X = new Int32Array(n), Y = new Int32Array(n), Z = new Int32Array(n);
+  const direct = !P.isInterleavedBufferAttribute && !P.normalized && P.itemSize === 3;
+  const A = P.array;
+  for (let i = 0; i < n; i++) {
+    X[i] = Math.round((direct ? A[i * 3] : P.getX(i)) * q);
+    Y[i] = Math.round((direct ? A[i * 3 + 1] : P.getY(i)) * q);
+    Z[i] = Math.round((direct ? A[i * 3 + 2] : P.getZ(i)) * q);
+  }
+  let size = 16;
+  while (size < n * 2) size <<= 1;
+  const table = new Int32Array(size).fill(-1), mask = size - 1;
+  const rep = new Int32Array(n), first = new Int32Array(n);
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    let h = (Math.imul(X[i], 73856093) ^ Math.imul(Y[i], 19349663) ^ Math.imul(Z[i], 83492791)) & mask;
+    for (;;) {
+      const j = table[h];
+      if (j < 0) { table[h] = i; rep[i] = count; first[count++] = i; break; }
+      if (X[j] === X[i] && Y[j] === Y[i] && Z[j] === Z[i]) { rep[i] = rep[j]; break; }
+      h = (h + 1) & mask;
+    }
+  }
+  return { rep, first: first.slice(0, count), count };
+}
+
+/** A profile ({t, n, hard, cav} points round a solid) in counterclockwise order (reversed if not). */
+export function ccwProfile(p) {
+  let a = 0;
+  for (let k = 0; k < p.length; k++) { const u = p[k], w = p[(k + 1) % p.length]; a += u.t * w.n - w.t * u.n; }
+  return a < 0 ? p.slice().reverse() : p;
+}
 
 /** A typed array at least `need` long: `a`, or a copy of it twice as long (or more). */
 function grown(a, need) {
@@ -252,6 +293,25 @@ export function stud(B, o, n, r, h, seg = 8, foot = 0.55) {
     B.quad(r0[k], r0[k1], r1[k1], r1[k]);
     B.tri(r1[k], r1[k1], top);
   }
+}
+
+/**
+ * A round bar along a path (Vector3s, its corners already rounded) lying in a plane with normal
+ * `up` (Vector3, unit): a circle of radius r in `seg` steps swept along it; the ends left open
+ * (they go into the part the bar stands on). cav: the cavity of every vertex.
+ */
+export function tube(B, path, up, r, seg = 10, cav = 1) {
+  const circle = [];
+  for (let k = 0; k < seg; k++) {
+    const a = (k / seg) * Math.PI * 2;
+    circle.push({ t: r * Math.cos(a), n: r * Math.sin(a), cav });
+  }
+  const frames = path.map((p, i) => {
+    const a = path[Math.max(0, i - 1)], c = path[Math.min(path.length - 1, i + 1)];
+    const d = c.clone().sub(a).normalize();
+    return { o: p, t: new THREE.Vector3().crossVectors(d, up).normalize(), n: up };
+  });
+  return sweep(B, frames, circle, true);
 }
 
 /** A polygon's corners ([t, n, ...]) in counterclockwise order (reversed if clockwise). */

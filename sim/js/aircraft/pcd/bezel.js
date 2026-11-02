@@ -2,9 +2,9 @@
 //
 // The glb's frame round the 20 x 8 in glass (scripts/f35/cockpit.py) is four square bars and a
 // divider. The PCD's own housing is a moulded bezel with rounded corners whose inner lip is
-// chamfered down to the glass, the two halves parted by a slim mullion, its screws at the
-// corners: swept here round the glass's rectangle (the glass, its picture and the canvas mapping
-// are the glb's, untouched).
+// chamfered down to the glass, the two halves parted by a slim mullion, its screws (the bezel's
+// own finish) at the corners: swept here round the glass's rectangle (the glass, its picture and
+// the canvas mapping are the glb's, untouched).
 
 import * as THREE from 'three';
 import { MeshBuilder, sweep, roundedPolygon, roundedBox, stud, ccw } from './shapes.js';
@@ -22,12 +22,13 @@ export const BEZEL = {
 
 /**
  * The bezel from the glass's rectangle: c (centre), u (right, unit), v (up the glass, unit), n
- * (its normal, towards the pilot), hu, hv (half sizes), all in the root frame. Returns {frame,
- * screws} (BufferGeometries, root frame).
+ * (its normal, towards the pilot), hu, hv (half sizes), all in the root frame. Returns {frame
+ * (BufferGeometry, root frame, the screw heads with it), screws (their count)}.
  */
 export function buildBezel({ c, u, v, n, hu, hv }) {
   const K = BEZEL;
-  const B = new MeshBuilder(), S = new MeshBuilder();
+  const B = new MeshBuilder(), S = B;
+  let screws = 0;
   // the profile across the frame: t outwards from the glass's edge, n towards the pilot
   const W = K.width;
   const prof = roundedPolygon(ccw([
@@ -64,10 +65,12 @@ export function buildBezel({ c, u, v, n, hu, hv }) {
       .addScaledVector(u, x * (hu + (x ? d : 0)) + (x === 0 ? 0.06 : 0))
       .addScaledVector(v, y * (hv + d));
     stud(S, o, n, K.screw.r, K.screw.h, 8, 0.5);
+    screws++;
     if (x === 0) {
       o.addScaledVector(u, -0.12);
       stud(S, o, n, K.screw.r, K.screw.h, 8, 0.5);
+      screws++;
     }
   }
-  return { frame: B.geometry(), screws: S.geometry() };
+  return { frame: B.geometry(), screws };
 }

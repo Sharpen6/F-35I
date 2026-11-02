@@ -12,18 +12,22 @@
 //      open: a single-sided panel, interior paint on its back (twoFaced);
 //   4. every vertex of the cockpit parts gets an ambient occlusion value: the fraction of a
 //      cosine-weighted set of rays that leave the cockpit (through the glass) instead of hitting
-//      a wall or the pilot nearer than aoDist (a hit at distance s counts 1 - s / aoDist);
+//      a wall or the pilot nearer than aoDist (a hit at distance s counts 1 - s / aoDist). A
+//      'frame' part (the canopy bow, the frame's liner: slim parts on the glass) is a wall to
+//      everything else but not to its own vertices, whose rays would start inside its voxels (1.5
+//      cm, as thick as the part): its own creases come with it (pcd/shapes.js ckCavity);
 //   5. every vertex of a classified mesh gets the share (by area) of the faces round it that are
 //      interior, over welded positions (seams split the vertices): the paint's edge is then drawn
 //      along the 0.5 line of that share, a smooth line through the triangles instead of the
 //      saw-tooth of their edges along the sills.
 //
 // in:  { eye: [x, y, z], eyes: [[x, y, z], ...], box: { min, max }, voxel, outside: [[x, y, z], ...],
-//        aoRays, aoDist, meshes: [{ id, kind: 'wall' | 'glass' | 'pilot', pos, nrm, index, classify, ao }] }
+//        aoRays, aoDist, meshes: [{ id, kind: 'wall' | 'frame' | 'glass' | 'pilot', pos, nrm, index, classify, ao }] }
 // out: { ok, leak, interior: { id: Uint32Array of triangle numbers }, twoFaced: { id: ... },
 //        ao: { id: Uint8Array }, inside: { id: Uint8Array per vertex, 255 all interior }, stats, ms }
 
-const WALL = 1, GLASS = 2, PILOT = 4;
+const WALL = 1, GLASS = 2, PILOT = 4, FRAME = 8;
+const SOLID = WALL | FRAME;
 
 self.onmessage = (e) => {
   const t0 = performance.now();
@@ -63,7 +67,7 @@ function analyse(msg) {
   const triOf = {};                          // mesh id -> its triangle -> occluder number (-1: none)
   const mg = step;                           // a sample covers the triangle within this distance
   for (const m of meshes) {
-    const bit = m.kind === 'glass' ? GLASS : m.kind === 'pilot' ? PILOT : WALL;
+    const bit = m.kind === 'glass' ? GLASS : m.kind === 'pilot' ? PILOT : m.kind === 'frame' ? FRAME : WALL;
     const occ = bit !== PILOT;
     const P = m.pos, I = m.index;
     const tmap = occ ? new Int32Array(I.length / 3).fill(-1) : null;
@@ -209,11 +213,11 @@ function analyse(msg) {
     return { air, count: tail, leak };
   };
   let barrier = new Uint8Array(N);
-  for (let q = 0; q < N; q++) barrier[q] = grid[q] & (WALL | GLASS) ? 1 : 0;
+  for (let q = 0; q < N; q++) barrier[q] = grid[q] & (SOLID | GLASS) ? 1 : 0;
   let fl = flood(barrier);
   stats.dilated = false;
   if (fl.leak) {
-    barrier = dilate(WALL | GLASS);
+    barrier = dilate(SOLID | GLASS);
     fl = flood(barrier);
     stats.dilated = true;
   }
@@ -235,7 +239,7 @@ function analyse(msg) {
       if (q < 0) return false;
       if (s <= own) continue;
       if (air[q]) return true;
-      if (grid[q] & (WALL | GLASS)) return false;
+      if (grid[q] & (SOLID | GLASS)) return false;
     }
     return false;
   };
@@ -260,7 +264,7 @@ function analyse(msg) {
       const q = vox(px + dx * s, py + dy * s, pz + dz * s);
       if (q < 0) return true;
       if (s <= own) continue;
-      if (grid[q] & (WALL | GLASS)) return false;
+      if (grid[q] & (SOLID | GLASS)) return false;
       if (!air[q]) return true;
     }
     return false;
@@ -309,7 +313,7 @@ function analyse(msg) {
         for (let s = step; s <= vs * 7; s += step) {
           const q = vox(cx + sg * fx * s, cy + sg * fy * s, cz + sg * fz * s);
           if (q < 0) { out.push('out'); break; }
-          out.push((s <= own ? 'o' : '') + (air[q] ? 'A' : '') + (barrier[q] ? 'b' : '') + (grid[q] & WALL ? 'W' : '') + (grid[q] & GLASS ? 'G' : '') + (grid[q] & PILOT ? 'P' : '') || '.');
+          out.push((s <= own ? 'o' : '') + (air[q] ? 'A' : '') + (barrier[q] ? 'b' : '') + (grid[q] & WALL ? 'W' : '') + (grid[q] & FRAME ? 'F' : '') + (grid[q] & GLASS ? 'G' : '') + (grid[q] & PILOT ? 'P' : '') || '.');
         }
         return out.join(' ');
       };
@@ -319,7 +323,8 @@ function analyse(msg) {
     });
   }
 
-  // ---- 4. ambient occlusion per vertex (walls and the pilot occlude, the glass does not)
+  // ---- 4. ambient occlusion per vertex (walls and the pilot occlude, the glass does not; a frame
+  //      part's own kind does not occlude it)
   const dirs = [];
   for (let k = 0; k < aoRays; k++) {
     // cosine-weighted hemisphere (z up), a Fibonacci spiral
@@ -334,6 +339,7 @@ function analyse(msg) {
     const P = m.pos, Nn = m.nrm;
     const nv = P.length / 3;
     const res = new Uint8Array(nv).fill(255);
+    const occluders = m.kind === 'frame' ? WALL | PILOT : SOLID | PILOT;
     for (let v = 0; v < nv; v++) {
       const px = P[v * 3], py = P[v * 3 + 1], pz = P[v * 3 + 2];
       if (vox(px, py, pz) < 0) continue;
@@ -357,7 +363,7 @@ function analyse(msg) {
         for (let s = 0; s < aoDist; s += march) {
           const q = vox(ox + dx * s, oy + dy * s, oz + dz * s);
           if (q < 0) break;
-          if (grid[q] & (WALL | PILOT)) { occl += 1 - s / aoDist; break; }
+          if (grid[q] & occluders) { occl += 1 - s / aoDist; break; }
         }
       }
       res[v] = Math.round(255 * (1 - occl / dirs.length));

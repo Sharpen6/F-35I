@@ -7,7 +7,7 @@
 //   * the headbox: the parachute container with rounded edges under a lid (a seam 3 cm below its
 //     top), as on the US16E's (photos c09, c34: a dark box just under the glass);
 //   * the main beams: rounded box sections with a machined guide strip down their front inner
-//     edge and bolts along their inner face (the seat's structure, dark metal).
+//     edge and bolts along their inner face (the seat's structure, its dark paint).
 
 import * as THREE from 'three';
 import { roundedBox, stud } from './shapes.js';
@@ -70,7 +70,8 @@ export function buildHeadbox(b, B) {
 
 /**
  * A main beam from its glb box (side +1: +x, the left; -1 the right), into MeshBuilders B (the
- * beam and its guide strip, in the seat's paint) and M (its bolts, bare metal), root frame.
+ * beam and its guide strip, in the seat's paint) and M (its bolt heads; parts.js gives B), root
+ * frame.
  */
 export function buildBeam(b, side, B, M) {
   const S = SEAT;

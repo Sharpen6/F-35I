@@ -121,8 +121,8 @@ export class Cockpit {
     this._setupPcdMaterial();
     this.pcd.setMaps(terrain).catch(() => {});
     this.detail = makeDetailTexture(512);
-    // the glb's bow, coaming, seat, consoles, sills and PCD bezel rebuilt (pcd/parts.js): before
-    // the interior, whose analysis takes them in
+    // the glb's bow, coaming, seat, consoles, sills and PCD bezel rebuilt (pcd/parts.js, one part
+    // per task): before the interior's analysis, which takes them in
     this.parts = new CockpitParts({ visual });
     this.interior = new Interior({ visual, detail: this.detail });
     // the cockpit's own sun shadow, on the interior's analysis box (the pilot's head, hidden at the
@@ -134,7 +134,9 @@ export class Cockpit {
     // (the patched materials need 5-9 new programs: the next render compiles them, once, normally
     // behind the menu. A compileAsync here would not help: the materials are already patched, and
     // behind a post chain the scene renders into a target with other program variants)
-    this.interior.start().then((s) => { this.interiorStats = s; })
+    this.ready = this.parts.build()
+      .then(() => (this.parts.disposed ? null : this.interior.start()))
+      .then((s) => { this.interiorStats = s; })
       .catch((e) => console.warn('Cockpit: interior:', e.message));
     // the canopy pass; its glass texture is made the first time the pass is on (_glass: 1024²,
     // 0.1-0.2 s of start-up that the low quality, without the pass, does not pay)

@@ -1,29 +1,36 @@
-// Cockpit parts rebuilt at load time from the glb's own geometry (Cockpit.js makes them before the
-// interior analysis, so the worker's occlusion, the cockpit shadow and the paint patch take them
-// like the glb's parts):
+// Cockpit parts rebuilt at load time from the glb's own geometry (Cockpit.js builds them before
+// the interior analysis, so the worker's occlusion, the cockpit shadow and the paint patch take
+// them like the glb's parts):
 //
-// * the canopy bow (frame.js): the glb's slab swept with a real section, fasteners and seals;
+// * the canopy bow (frame.js): the glb's arch swept with a slim section, sealant beads and two
+//   handholds;
 // * the coaming (coaming.js): a hood with a bull-nosed lip and an anti-glare top in place of the
-//   glb's slab (dropped from the merged cockpit mesh), its two pads as low housings;
+//   glb's slab (dropped from the merged cockpit mesh), its two pads as low housings, fitted to
+//   the glb's outline from the eye (the helmet's coaming line);
 // * the seat's headbox and main beams (seat.js): rounded, with a lid, guide strips and bolts;
 // * the side consoles (consoles.js): Dzus-fastened panels, one per switch row, round the glb's
 //   switches, throttle and stick;
-// * the canopy frame's inner face and the sills (sills.js): a liner with a retainer, a seal and a
-//   bolt row along the canopy's sides, a rounded cap over the tub wall's crest;
+// * the canopy frame's inner face (sills.js: a liner with a retainer, a seal and a bolt row) and
+//   the sills' crest (a rounded cap over the tub wall's top edge);
 // * the PCD's bezel (bezel.js): a moulded frame with a chamfered lip and a mullion round the glass.
 //
-// Each new mesh takes the material of the part it replaces, or one of NEW_MATERIALS (clones of the
-// cockpit's: the same shader program, nothing to compile at first sight); the replaced glb mesh is
-// hidden (and skipped by the analysis, userData.ckSkip), or, inside a merged mesh, its triangles
-// are dropped from the index. setEnabled(false) / dispose() put the glb's parts back; ?ckparts=0
-// leaves them all as the glb has them. A part whose glb source is not as expected is left as the
-// glb has it (a warning, `stats` says which).
+// Fastener heads are part of the surface they hold (its paint: a dome that catches the light, not
+// a bright dot). Each new mesh takes the material of the part it replaces, or one of
+// NEW_MATERIALS (clones of the cockpit's: the same shader program, nothing to compile at first
+// sight); the replaced glb mesh is hidden (and skipped by the analysis, userData.ckSkip), or,
+// inside a merged mesh, its triangles are dropped from the index. setEnabled(false) / dispose()
+// put the glb's parts back; ?ckparts=0 leaves them all as the glb has them.
+//
+// build() makes them one part per task (each well under the 50 ms of a long task on the PC; the
+// welds of the glb meshes are made once and kept), and each part is a transaction: everything is
+// made first, then put in place at once, so a part whose glb source is not as expected (a
+// warning, `stats` says which) leaves the glb's part exactly as it was.
 
 import * as THREE from 'three';
 import { bowRings, buildBow } from './frame.js';
-import { buildCoaming } from './coaming.js';
+import { coamingSpec, buildCoaming } from './coaming.js';
 import { partBox, buildHeadbox, buildBeam } from './seat.js';
-import { MeshBuilder, mergeBuilt } from './shapes.js';
+import { MeshBuilder, mergeBuilt, weld } from './shapes.js';
 import { buildConsole, consoleBuilders } from './consoles.js';
 import { sillSections, buildLiner, buildSillCap } from './sills.js';
 import { buildBezel } from './bezel.js';
@@ -38,11 +45,50 @@ const SEAT_BOXES = {
   beamR: new THREE.Box3(new THREE.Vector3(-0.26, 0.26, 4.07), new THREE.Vector3(-0.21, 1.17, 4.44)),
 };
 
+/** The design eye in the glTF root frame when the visual cannot say (rig.info.eye of f35i_rig.json). */
+const DEFAULT_EYE = new THREE.Vector3(0, 1.0803, 4.4714);
+
 /**
  * New materials (interior.js INTERIOR_PAINT gives their paint): clones of a glb cockpit material,
  * so that they take the same shader program as the cockpit's, before and after the interior's patch.
  */
-const NEW_MATERIALS = ['F35_glare_shield', 'F35_canopy_fastener', 'F35_console_panel'];
+export const NEW_MATERIALS = ['F35_glare_shield', 'F35_canopy_fitting', 'F35_console_panel'];
+
+/** The parts, in build order (one task each). */
+export const STEPS = ['bow', 'coaming', 'seat', 'consoles', 'stations', 'liner', 'sills', 'bezel', 'merged'];
+
+/**
+ * The draws when every part is built (after the merge: the bow and the canopy frame's liner; the
+ * bow's beads and handholds; the hood, the consoles' base and the bezel; the console panels; the
+ * pads; the seat; the sills' cap).
+ */
+export const EXPECTED_DRAWS = 7;
+
+/** Let the browser draw and handle input between two parts (a task each). */
+function nextTask() {
+  const s = globalThis.scheduler;
+  if (s && typeof s.yield === 'function') return s.yield();
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** What a part changes, made first and put in place at once (CockpitParts._commit). */
+class Change {
+  constructor() {
+    this.adds = [];         // {geometry, like, parent, name, material, frame}
+    this.hides = [];        // glb meshes
+    this.trims = new Map(); // geometry -> its new index (BufferAttribute)
+    this.removes = [];      // meshes of this.added replaced (the merge)
+  }
+
+  add(geometry, like, name, material = like.material, frame = false) {
+    this.adds.push({ geometry, like, parent: like.parent, name, material, frame });
+  }
+
+  hide(mesh) { this.hides.push(mesh); }
+
+  /** (made but not put in place: their buffers go) */
+  discard() { for (const a of this.adds) a.geometry.dispose(); }
+}
 
 export class CockpitParts {
   /** @param {object} o @param {object} o.visual AircraftVisual (loaded, the player's) */
@@ -50,69 +96,139 @@ export class CockpitParts {
     this.visual = visual;
     this.root = visual.root;
     this.enabled = true;
+    this.disposed = false;
     this.added = [];          // new meshes
     this.hidden = [];         // glb meshes hidden
-    this.trimmed = [];        // {geometry, index}: glb meshes with triangles dropped (the index before)
+    this.trimmed = [];        // {geometry, index (the glb's), cut (the index with the parts dropped)}
     this.materials = new Map();
     this.stats = {};
     this.byMat = new Map();
+    this.ready = null;
+    this._welds = new WeakMap();
     if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('ckparts') === '0') {
       this.enabled = false;
       this.stats.off = true;
       return;
     }
-    const t0 = performance.now();
     this.root.traverse((o) => {
       if (!o.isMesh || !o.material || Array.isArray(o.material)) return;
       const n = o.material.name || '';
       if (!this.byMat.has(n)) this.byMat.set(n, []);
       this.byMat.get(n).push(o);
     });
-    this.root.updateMatrixWorld(true);
-    this._rootInv = new THREE.Matrix4().copy(this.root.matrixWorld).invert();
     const proto = ((this.byMat.get('F35_cockpit_panel') || this.byMat.get('F35_cockpit') || [])[0] || {}).material;
     for (const n of NEW_MATERIALS) {
       const m = proto ? proto.clone() : new THREE.MeshStandardMaterial({ side: THREE.DoubleSide });
       m.name = n;
       this.materials.set(n, m);
     }
-    this._try('bow', () => this._bow());
-    this._try('coaming', () => this._coaming());
-    this._try('seat', () => this._seat());
-    this._try('consoles', () => this._consoles());
-    this._try('sills', () => this._sills());
-    this._try('bezel', () => this._bezel());
-    this._try('merged', () => this._merge());
-    this.stats.ms = +(performance.now() - t0).toFixed(1);
-  }
-
-  _try(name, fn) {
-    const t0 = performance.now();
-    try {
-      this.stats[name] = fn();
-      this.stats[name].ms = +(performance.now() - t0).toFixed(1);
-    } catch (e) {
-      console.warn(`Cockpit: ${name} not rebuilt:`, e.message);
-      this.stats[name] = { err: e.message };
-    }
   }
 
   /**
-   * A new mesh next to `like` (same parent, transform, material unless given, shadow flags; the
-   * environment makes every mesh of the jet a caster of the sun's shadow and a receiver anyway).
+   * Build every part, one per task. Resolves to the stats when done (or disposed on the way).
+   * Called twice, the same promise.
    */
-  _add(geometry, like, name, material = like.material) {
-    const m = new THREE.Mesh(geometry, material);
-    m.name = name;
-    m.position.copy(like.position);
-    m.quaternion.copy(like.quaternion);
-    m.scale.copy(like.scale);
-    m.castShadow = like.castShadow;
-    m.receiveShadow = like.receiveShadow;
-    m.renderOrder = like.renderOrder;
-    like.parent.add(m);
-    this.added.push(m);
-    return m;
+  build() {
+    if (this.ready) return this.ready;
+    this.ready = (async () => {
+      if (this.stats.off) return this.stats;
+      const t0 = performance.now();
+      let sum = 0, max = 0;
+      for (const name of STEPS) {
+        if (this.disposed) break;
+        const ms = this._step(name);
+        sum += ms;
+        max = Math.max(max, ms);
+        await nextTask();
+      }
+      this.stats.ms = +sum.toFixed(1);
+      this.stats.maxTaskMs = +max.toFixed(1);
+      this.stats.wallMs = +(performance.now() - t0).toFixed(1);
+      return this.stats;
+    })();
+    return this.ready;
+  }
+
+  /** One part: made, then put in place (or nothing changes). Returns the time it took (ms). */
+  _step(name) {
+    const t0 = performance.now();
+    const ch = new Change();
+    try {
+      const st = this['_' + name](ch);
+      this._commit(ch);
+      st.ms = +(performance.now() - t0).toFixed(1);
+      this.stats[name] = st;
+    } catch (e) {
+      ch.discard();
+      console.warn(`Cockpit: ${name} not rebuilt:`, e.message);
+      this.stats[name] = { err: e.message };
+    }
+    return performance.now() - t0;
+  }
+
+  /** Put a part's change in place, all of it or (on an error half way) none of it. */
+  _commit(ch) {
+    const undo = [];
+    try {
+      for (const m of ch.removes) {
+        const i = this.added.indexOf(m), parent = m.parent;
+        if (i < 0) continue;
+        this.added.splice(i, 1);
+        parent?.remove(m);
+        undo.push(() => { parent?.add(m); this.added.push(m); });
+      }
+      for (const a of ch.adds) {
+        const m = new THREE.Mesh(a.geometry, a.material);
+        m.name = a.name;
+        m.position.copy(a.like.position);
+        m.quaternion.copy(a.like.quaternion);
+        m.scale.copy(a.like.scale);
+        // (the environment makes every mesh of the jet a caster of the sun's shadow and a receiver)
+        m.castShadow = a.like.castShadow;
+        m.receiveShadow = a.like.receiveShadow;
+        m.renderOrder = a.like.renderOrder;
+        m.visible = this.enabled;
+        // a 'frame' part (the bow, the canopy frame's liner) does not shade itself in the
+        // interior's occlusion (its 1.5 cm voxels would)
+        if (a.frame) m.userData.ckFrame = true;
+        a.parent.add(m);
+        this.added.push(m);
+        undo.push(() => { m.parent?.remove(m); this.added.splice(this.added.indexOf(m), 1); });
+      }
+      for (const m of ch.hides) {
+        const was = [m.visible, m.userData.ckSkip];
+        if (this.enabled) { m.visible = false; m.userData.ckSkip = true; }
+        this.hidden.push(m);
+        undo.push(() => { [m.visible, m.userData.ckSkip] = was; this.hidden.splice(this.hidden.indexOf(m), 1); });
+      }
+      for (const [g, cut] of ch.trims) {
+        let t = this.trimmed.find((x) => x.geometry === g);
+        const before = t ? { cut: t.cut } : null;
+        if (!t) { t = { geometry: g, index: g.index, cut }; this.trimmed.push(t); } else t.cut = cut;
+        const idx = g.index;
+        if (this.enabled) g.setIndex(cut);
+        undo.push(() => {
+          g.setIndex(idx);
+          if (before) t.cut = before.cut; else this.trimmed.splice(this.trimmed.indexOf(t), 1);
+        });
+      }
+    } catch (e) {
+      for (let i = undo.length - 1; i >= 0; i--) { try { undo[i](); } catch { /* keep undoing */ } }
+      throw e;
+    }
+    for (const m of ch.removes) m.geometry.dispose();
+  }
+
+  /** The design eye in the glTF root frame. */
+  _eye() {
+    const v = this.visual;
+    if (v.object3d && typeof v.eyeWorld === 'function') {
+      v.object3d.updateMatrixWorld(true);
+      return v.eyeWorld(new THREE.Vector3()).applyMatrix4(new THREE.Matrix4().copy(this.root.matrixWorld).invert());
+    }
+    const e = v.info && (v.info.raw?.eye || v.info.eye);
+    if (Array.isArray(e)) return new THREE.Vector3(-e[0], e[1], -e[2]);      // body frame -> glTF root frame
+    return DEFAULT_EYE.clone();
   }
 
   /**
@@ -126,13 +242,27 @@ export class CockpitParts {
     const M = new THREE.Matrix4();
     for (let i = chain.length - 1; i >= 0; i--) {
       const o = chain[i];
+      if (!rest.has(o) && o.matrixAutoUpdate) o.updateMatrix();
       M.multiply(rest.has(o) ? new THREE.Matrix4().makeTranslation(rest.get(o)) : o.matrix);
     }
     return M;
   }
 
-  /** mesh -> glTF root frame */
-  _toRoot(mesh) { return new THREE.Matrix4().multiplyMatrices(this._rootInv, mesh.matrixWorld); }
+  /**
+   * mesh -> glTF root frame, from the nodes' own matrices (not the world's: the jet may move
+   * between two parts of the build).
+   */
+  _toRoot(mesh) {
+    const chain = [];
+    for (let o = mesh; o && o !== this.root; o = o.parent) chain.push(o);
+    const M = new THREE.Matrix4();
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const o = chain[i];
+      if (o.matrixAutoUpdate) o.updateMatrix();
+      M.multiply(o.matrix);
+    }
+    return M;
+  }
 
   /** A geometry made in the root frame, moved into `mesh`'s frame. */
   _inFrameOf(geometry, mesh) {
@@ -142,35 +272,47 @@ export class CockpitParts {
     return geometry;
   }
 
-  /**
-   * The islands (welded connected parts) of `mesh`: {idx (its index, or 0..n), tri (each triangle's
-   * island), islands: [{box (root frame), tris, verts (vertex numbers)}]}.
-   */
-  _islands(mesh) {
-    const g = mesh.geometry, P = g.attributes.position;
-    const idx = g.index ? g.index.array : Uint32Array.from({ length: P.count }, (_, i) => i);
-    const ids = new Map(), rep = new Int32Array(P.count);
+  /** The points of a mesh in the root frame: [x, y, z, ...]. */
+  _points(mesh) {
+    const P = mesh.geometry.attributes.position, M = this._toRoot(mesh), v = new THREE.Vector3(), out = new Float64Array(P.count * 3);
     for (let i = 0; i < P.count; i++) {
-      const k = `${Math.round(P.getX(i) * 1e4)},${Math.round(P.getY(i) * 1e4)},${Math.round(P.getZ(i) * 1e4)}`;
-      let r = ids.get(k);
-      if (r === undefined) { r = ids.size; ids.set(k, r); }
-      rep[i] = r;
+      v.fromBufferAttribute(P, i).applyMatrix4(M);
+      out[i * 3] = v.x; out[i * 3 + 1] = v.y; out[i * 3 + 2] = v.z;
     }
-    const par = Int32Array.from({ length: ids.size }, (_, i) => i);
+    return out;
+  }
+
+  /**
+   * The islands (welded connected parts) of `mesh` under its current index (a change's pending
+   * one first): {idx, tri (each triangle's island), islands: [{box (root frame), tris, verts
+   * (vertex numbers)}]}.
+   */
+  _islands(mesh, ch = null) {
+    const g = mesh.geometry, P = g.attributes.position;
+    let w = this._welds.get(g);
+    if (!w) { w = weld(P); this._welds.set(g, w); }
+    const cur = (ch && ch.trims.get(g)) || g.index;
+    const idx = cur ? cur.array : Uint32Array.from({ length: P.count }, (_, i) => i);
+    const rep = w.rep;
+    const par = new Int32Array(w.count);
+    for (let i = 0; i < par.length; i++) par[i] = i;
     const find = (x) => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
     for (let t = 0; t < idx.length; t += 3) {
       const a = find(rep[idx[t]]), b = find(rep[idx[t + 1]]), c = find(rep[idx[t + 2]]);
       par[b] = a; par[find(c)] = a;
     }
+    // only the vertices the index uses (a trimmed index leaves the dropped ones unused)
+    const used = new Uint8Array(P.count);
+    for (let t = 0; t < idx.length; t++) used[idx[t]] = 1;
     const M = this._toRoot(mesh), v = new THREE.Vector3();
-    const num = new Map(), islands = [];
+    const num = new Int32Array(w.count).fill(-1), islands = [];
     const of = (i) => {
       const r = find(rep[i]);
-      let k = num.get(r);
-      if (k === undefined) { k = islands.length; num.set(r, k); islands.push({ box: new THREE.Box3(), tris: 0, verts: [] }); }
-      return k;
+      if (num[r] < 0) { num[r] = islands.length; islands.push({ box: new THREE.Box3(), tris: 0, verts: [] }); }
+      return num[r];
     };
     for (let i = 0; i < P.count; i++) {
+      if (!used[i]) continue;
       const isl = islands[of(i)];
       isl.box.expandByPoint(v.fromBufferAttribute(P, i).applyMatrix4(M));
       isl.verts.push(i);
@@ -182,13 +324,13 @@ export class CockpitParts {
 
   /**
    * Drop the islands of `mesh` that lie inside `boxes` (a Box3 or a list, root frame) from its
-   * index. Returns null when none, else {box (theirs, root frame), tris, islands: [{which (the
-   * box's number), box, points ([x, y, z, ...] root frame)}]}.
+   * index, in the change `ch` (put in place with it). Returns null when none, else {box (theirs,
+   * root frame), tris, islands: [{which (the box's number), box, points ([x, y, z, ...] root frame)}]}.
    */
-  _trimIslands(mesh, boxes) {
+  _trimIslands(mesh, boxes, ch) {
     const list = Array.isArray(boxes) ? boxes : [boxes];
     const g = mesh.geometry, P = g.attributes.position;
-    const { idx, tri, islands } = this._islands(mesh);
+    const { idx, tri, islands } = this._islands(mesh, ch);
     const M = this._toRoot(mesh), v = new THREE.Vector3();
     const drop = new Map();
     islands.forEach((isl, k) => {
@@ -206,75 +348,69 @@ export class CockpitParts {
       keep.push(idx[t * 3], idx[t * 3 + 1], idx[t * 3 + 2]);
     }
     for (const d of drop.values()) out.union(d.box);
-    // (one record per geometry, its index as the glb had it: trimmed again, it stays the first)
-    if (!this.trimmed.some((t) => t.geometry === g)) this.trimmed.push({ geometry: g, index: g.index });
-    g.setIndex(new THREE.BufferAttribute(P.count > 65535 ? Uint32Array.from(keep) : Uint16Array.from(keep), 1));
+    ch.trims.set(g, new THREE.BufferAttribute(P.count > 65535 ? Uint32Array.from(keep) : Uint16Array.from(keep), 1));
     return { box: out, tris: n, islands: [...drop.values()] };
   }
 
-  _hide(mesh) {
-    mesh.visible = false;
-    mesh.userData.ckSkip = true;
-    this.hidden.push(mesh);
-  }
-
-  _bow() {
+  // ------------------------------------------------------------------------------ the parts
+  _bow(ch) {
     const glb = (this.byMat.get('F35_canopy_bow') || [])[0];
     if (!glb) throw new Error('no canopy bow (F35_canopy_bow) in the model');
     const r = bowRings(glb.geometry);
     if (r.err) throw new Error(r.err);
     const b = buildBow(r.rings);
-    this._add(b.geometry, glb, 'Canopy_Bow_Frame');
-    this._add(b.fasteners, glb, 'Canopy_Bow_Fasteners', this.materials.get('F35_canopy_fastener'));
-    this._hide(glb);
-    return { rings: r.rings.length, tris: (b.geometry.index.count + b.fasteners.index.count) / 3, studs: b.studs, length: +b.length.toFixed(3) };
+    ch.add(b.geometry, glb, 'Canopy_Bow_Frame', glb.material, true);
+    ch.add(b.fittings, glb, 'Canopy_Bow_Fittings', this.materials.get('F35_canopy_fitting'), true);
+    ch.hide(glb);
+    return { rings: r.rings.length, tris: (b.geometry.index.count + b.fittings.index.count) / 3, band: +(2 * b.half).toFixed(4), handholds: b.handholds, length: +b.length.toFixed(3) };
   }
 
-  _coaming() {
+  _coaming(ch) {
     let cut = null, host = null;
     for (const m of this.byMat.get('F35_cockpit') || []) {
-      cut = this._trimIslands(m, SHIELD_BOX);
+      cut = this._trimIslands(m, SHIELD_BOX, ch);
       if (cut) { host = m; break; }
     }
     if (!cut) throw new Error('no glare shield in the cockpit mesh');
-    const c = buildCoaming(cut.box);
-    this._add(this._inFrameOf(c.hood, host), host, 'Coaming_Hood', this.materials.get('F35_glare_shield'));
     const pad = (this.byMat.get('F35_glare_pad') || [])[0];
-    if (pad) {
-      this._add(this._inFrameOf(c.pads, pad), pad, 'Coaming_Pads');
-      this._hide(pad);
+    const shield = Float64Array.from(cut.islands.flatMap((i) => i.points));
+    const spec = coamingSpec(shield, pad ? this._points(pad) : null);
+    const c = buildCoaming(spec, this._eye());
+    ch.add(this._inFrameOf(c.hood, host), host, 'Coaming_Hood', this.materials.get('F35_glare_shield'));
+    if (pad && c.pads) {
+      ch.add(this._inFrameOf(c.pads, pad), pad, 'Coaming_Pads');
+      ch.hide(pad);
     }
-    return { dropped: cut.tris, hood: c.hood.index.count / 3, pads: c.pads.index.count / 3 };
+    return { dropped: cut.tris, hood: c.hood.index.count / 3, pads: c.pads ? c.pads.index.count / 3 : 0, fit: c.fit };
   }
 
-  _seat() {
+  _seat(ch) {
     const glb = (this.byMat.get('F35_seat') || [])[0];
     if (!glb) throw new Error('no seat (F35_seat) in the model');
     const names = Object.keys(SEAT_BOXES);
-    const cut = this._trimIslands(glb, Object.values(SEAT_BOXES));
+    const cut = this._trimIslands(glb, Object.values(SEAT_BOXES), ch);
     if (!cut) throw new Error('no headbox or beams in the seat mesh');
-    const B = new MeshBuilder(), M = new MeshBuilder(), parts = [];
+    const B = new MeshBuilder(), parts = [];
     for (const isl of cut.islands) {
       const name = names[isl.which], b = partBox(isl.points);
       if (name === 'headbox') buildHeadbox(b, B);
-      else buildBeam(b, name === 'beamL' ? 1 : -1, B, M);
+      else buildBeam(b, name === 'beamL' ? 1 : -1, B, B);
       parts.push(name);
     }
-    const body = B.geometry(), metal = M.geometry();
-    this._add(this._inFrameOf(body, glb), glb, 'Seat_Rebuilt');
-    if (metal.index.count) this._add(this._inFrameOf(metal, glb), glb, 'Seat_Rebuilt_Metal', this.materials.get('F35_canopy_fastener'));
-    return { dropped: cut.tris, parts, tris: (body.index.count + metal.index.count) / 3 };
+    const body = B.geometry();
+    ch.add(this._inFrameOf(body, glb), glb, 'Seat_Rebuilt');
+    return { dropped: cut.tris, parts, tris: body.index.count / 3 };
   }
 
-  _consoles() {
+  _consoles(ch) {
     const host = (this.byMat.get('F35_cockpit_panel') || [])[0];
     if (!host) throw new Error('no consoles (F35_cockpit_panel) in the model');
     // the consoles: the panel mesh's tall, long boxes out at the sides
-    const consoles = this._islands(host).islands.map((i) => i.box)
+    const consoles = this._islands(host, ch).islands.map((i) => i.box)
       .filter((b) => Math.abs(b.min.x + b.max.x) / 2 > 0.25 && b.max.y - b.min.y > 0.15 && b.max.z - b.min.z > 0.4);
     if (!consoles.length) throw new Error('no console boxes');
     // what stands on their tops: the switches (their rows), the throttle's track and the stick's base
-    const boxesOf = (name) => (this.byMat.get(name) || []).flatMap((m) => this._islands(m).islands.map((i) => i.box));
+    const boxesOf = (name) => (this.byMat.get(name) || []).flatMap((m) => this._islands(m, ch).islands.map((i) => i.box));
     const switches = boxesOf('F35_switch'), features = boxesOf('F35_cockpit');
     const out = consoleBuilders();
     let panels = 0;
@@ -292,14 +428,15 @@ export class CockpitParts {
         .map((f) => ({ x0: f.min.x, x1: f.max.x, z0: f.min.z, z1: f.max.z }));
       panels += buildConsole(c, rows.map((r) => r.sum / r.n), holes, out);
     }
-    const base = out.base.geometry(), plates = out.plates.geometry(), fast = out.fasteners.geometry();
-    this._add(this._inFrameOf(base, host), host, 'Console_Base', this.materials.get('F35_glare_shield'));
-    this._add(this._inFrameOf(plates, host), host, 'Console_Panels', this.materials.get('F35_console_panel'));
-    this._add(this._inFrameOf(fast, host), host, 'Console_Fasteners', this.materials.get('F35_canopy_fastener'));
-    return { consoles: consoles.length, panels, tris: (base.index.count + plates.index.count + fast.index.count) / 3 };
+    const base = out.base.geometry(), plates = out.plates.geometry();
+    ch.add(this._inFrameOf(base, host), host, 'Console_Base', this.materials.get('F35_glare_shield'));
+    ch.add(this._inFrameOf(plates, host), host, 'Console_Panels', this.materials.get('F35_console_panel'));
+    return { consoles: consoles.length, panels, fasteners: out.heads, tris: (base.index.count + plates.index.count) / 3 };
   }
 
-  _sills() {
+  /** The sections the liner and the sills' cap are made from (sills.js), once. */
+  _sillStations() {
+    if (this._st) return this._st;
     const under = (o, name) => { for (; o; o = o.parent) if (o.name === name) return true; return false; };
     const tub = (this.byMat.get('F35_cockpit') || [])[0];
     const frame = (this.byMat.get('F35_Skin_A') || []).find((m) => under(m, 'Canopy'));
@@ -311,32 +448,42 @@ export class CockpitParts {
       frame: { geometry: frame.geometry, matrix: Mf },
       glass: { geometry: glass.geometry, matrix: this._restToRoot(glass) },
     }, 3.2, 5.5);
-    // the frame's inner face: the canopy's (made at rest, into the frame mesh's own frame)
-    const L = new MeshBuilder(), LM = new MeshBuilder();
-    const lined = buildLiner(st, L, LM);
-    const inv = Mf.clone().invert();
-    const bow = (this.byMat.get('F35_canopy_bow') || [])[0]?.material;
-    let tris = 0;
-    if (lined > 0 && bow) {
-      for (const [g, mat, name] of [[L.geometry(), bow, 'Canopy_Frame_Liner'], [LM.geometry(), this.materials.get('F35_canopy_fastener'), 'Canopy_Frame_Bolts']]) {
-        g.applyMatrix4(inv); g.computeBoundingBox(); g.computeBoundingSphere();
-        this._add(g, frame, name, mat);
-        tris += g.index.count / 3;
-      }
-    }
-    // the sill's crest: the tub's
-    const C = new MeshBuilder(), CM = new MeshBuilder();
-    const capped = buildSillCap(st, C, CM, SHIELD_BOX.min.z);
-    if (capped > 0) {
-      const g = C.geometry(), gm = CM.geometry();
-      this._add(this._inFrameOf(g, tub), tub, 'Cockpit_Sill_Cap');
-      this._add(this._inFrameOf(gm, tub), tub, 'Cockpit_Sill_Screws', this.materials.get('F35_canopy_fastener'));
-      tris += (g.index.count + gm.index.count) / 3;
-    }
-    return { stations: st.length, lined: +lined.toFixed(3), capped: +capped.toFixed(3), tris };
+    this._st = { st, tub, frame, Mf };
+    return this._st;
   }
 
-  _bezel() {
+  /** The sections first, in a task of their own (nothing to put in place). */
+  _stations() {
+    return { stations: this._sillStations().st.length };
+  }
+
+  /** The canopy frame's inner face: the canopy's (made at rest, into the frame mesh's own frame). */
+  _liner(ch) {
+    const { st, frame, Mf } = this._sillStations();
+    const L = new MeshBuilder();
+    const lined = buildLiner(st, L, L);
+    const bow = (this.byMat.get('F35_canopy_bow') || [])[0]?.material;
+    if (!(lined > 0) || !bow) throw new Error('no canopy frame to line');
+    const g = L.geometry();
+    g.applyMatrix4(Mf.clone().invert());
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    ch.add(g, frame, 'Canopy_Frame_Liner', bow, true);
+    return { stations: st.length, lined: +lined.toFixed(3), tris: g.index.count / 3 };
+  }
+
+  /** The sills' crest: the tub's. */
+  _sills(ch) {
+    const { st, tub } = this._sillStations();
+    const C = new MeshBuilder();
+    const capped = buildSillCap(st, C, C, SHIELD_BOX.min.z);
+    if (!(capped > 0)) throw new Error('no sill to cap');
+    const g = C.geometry();
+    ch.add(this._inFrameOf(g, tub), tub, 'Cockpit_Sill_Cap');
+    return { stations: st.length, capped: +capped.toFixed(3), tris: g.index.count / 3 };
+  }
+
+  _bezel(ch) {
     const screen = [...(this.byMat.get('F35_PCD_Screen_live') || []), ...(this.byMat.get('F35_PCD_Screen') || [])][0];
     const tub = (this.byMat.get('F35_cockpit') || [])[0];
     if (!screen || !tub) throw new Error('no PCD glass or cockpit mesh in the model');
@@ -351,44 +498,34 @@ export class CockpitParts {
     if (n.z > 0) n.negate();
     const c = box.getCenter(new THREE.Vector3());
     // the glb's frame and divider round it: dropped from the cockpit mesh
-    const cut = this._trimIslands(tub, box.clone().expandByScalar(0.03));
+    const cut = this._trimIslands(tub, box.clone().expandByScalar(0.03), ch);
     const b = buildBezel({ c, u, v, n, hu: (box.max.x - box.min.x) / 2, hv: up.length() / 2 });
-    this._add(this._inFrameOf(b.frame, tub), tub, 'PCD_Bezel', this.materials.get('F35_glare_shield'));
-    this._add(this._inFrameOf(b.screws, tub), tub, 'PCD_Bezel_Screws', this.materials.get('F35_canopy_fastener'));
-    return { dropped: cut ? cut.tris : 0, tris: (b.frame.index.count + b.screws.index.count) / 3 };
+    ch.add(this._inFrameOf(b.frame, tub), tub, 'PCD_Bezel', this.materials.get('F35_glare_shield'));
+    return { dropped: cut ? cut.tris : 0, tris: b.frame.index.count / 3, screws: b.screws };
   }
 
   /**
-   * The new meshes that share a parent, a transform, a material and the shadow flags merged into
-   * one: the fasteners of the tub's parts are one draw, the hood, the consoles' base and the bezel
-   * another, the bow and the frame's liner (both on the canopy) a third.
+   * The new meshes that share a parent, a transform, a material, the shadow flags and the
+   * occlusion kind merged into one: the hood, the consoles' base and the bezel are one draw, the
+   * bow and the frame's liner (both on the canopy) another.
    */
-  _merge() {
+  _merged(ch) {
     const groups = new Map();
     for (const m of this.added) {
       m.updateMatrix();
-      const key = [m.parent.uuid, m.material.uuid, m.castShadow, m.receiveShadow, m.renderOrder, ...m.matrix.elements.map((e) => e.toFixed(6))].join('|');
+      const key = [m.parent.uuid, m.material.uuid, m.castShadow, m.receiveShadow, m.renderOrder, !!m.userData.ckFrame, ...m.matrix.elements.map((e) => e.toFixed(6))].join('|');
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(m);
     }
-    const before = this.added.length, out = [];
+    let draws = 0;
     for (const list of groups.values()) {
-      if (list.length === 1) { out.push(list[0]); continue; }
+      draws++;
+      if (list.length === 1) continue;
       const first = list[0];
-      const m = new THREE.Mesh(mergeBuilt(list.map((x) => x.geometry)), first.material);
-      m.name = list.map((x) => x.name).join('+');
-      m.position.copy(first.position);
-      m.quaternion.copy(first.quaternion);
-      m.scale.copy(first.scale);
-      m.castShadow = first.castShadow;
-      m.receiveShadow = first.receiveShadow;
-      m.renderOrder = first.renderOrder;
-      first.parent.add(m);
-      for (const x of list) { x.parent.remove(x); x.geometry.dispose(); }
-      out.push(m);
+      ch.add(mergeBuilt(list.map((x) => x.geometry)), first, list.map((x) => x.name).join('+'), first.material, !!first.userData.ckFrame);
+      ch.removes.push(...list);
     }
-    this.added = out;
-    return { meshes: before, draws: out.length };
+    return { meshes: this.added.length, draws };
   }
 
   /** The glb's parts back (false) or the rebuilt ones (true). */
@@ -397,13 +534,11 @@ export class CockpitParts {
     this.enabled = on;
     for (const m of this.added) m.visible = on;
     for (const m of this.hidden) { m.visible = !on; m.userData.ckSkip = on; }
-    for (const t of this.trimmed) {
-      if (!t.cut) t.cut = t.geometry.index;
-      t.geometry.setIndex(on ? t.cut : t.index);
-    }
+    for (const t of this.trimmed) t.geometry.setIndex(on ? t.cut : t.index);
   }
 
   dispose() {
+    this.disposed = true;
     this.setEnabled(false);
     for (const m of this.added) {
       m.parent?.remove(m);

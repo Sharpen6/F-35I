@@ -5,10 +5,11 @@
 // glass. Built here along both, from the glb's own sections (sliced every 2.5 cm fore and aft):
 //
 //   * the frame's inner face: a liner panel, the transparency's retaining strip along its top with
-//     its bolts, a rubber seal along its foot where the canopy closes on the sill (the canopy's:
-//     they move with it);
+//     its bolts (every 9 cm), a rubber seal along its foot where the canopy closes on the sill
+//     (the canopy's: they move with it);
 //   * the sill's crest: a rounded cap over the tub wall's top edge (it catches the sky as a soft
 //     highlight instead of a hard line), its screws along the sill.
+// The bolt and screw heads are painted with the part they hold (one mesh with it).
 
 import * as THREE from 'three';
 import { MeshBuilder, sweepProfiles, roundedPolygon, stud, alongPolyline, ccw } from './shapes.js';
@@ -18,7 +19,7 @@ export const SILL = {
   liner: { stand: 0.001, thick: 0.0028, r: 0.0012, foot: 0.013, head: 0.011 },
   retainer: { width: 0.02, proud: 0.0042, r: 0.0016, top: 0.0025 },
   seal: { width: 0.012, height: 0.0065, r: 0.004 },
-  bolt: { pitch: 0.045, r: 0.0026, h: 0.0011 },
+  bolt: { pitch: 0.09, r: 0.0026, h: 0.0011 },
   cap: { r: 0.007, proud: 0.0008, wall: 0.03, sill: 0.034, screw: 0.07 },
 };
 
@@ -93,7 +94,7 @@ function runs(st, ok) {
 
 /**
  * The canopy frame's inner face (both sides) into B (liner, retainer, seal: the bow's paint) and
- * M (bolts), root frame. Returns the length lined (one side).
+ * M (the bolt heads: B too, painted with it), root frame. Returns the length lined (one side).
  */
 export function buildLiner(st, B, M) {
   const S = SILL;
@@ -143,8 +144,8 @@ export function buildLiner(st, B, M) {
 
 /**
  * The sill's crest (both sides): a rounded cap over the tub wall's top edge, into B (the tub's
- * paint) and its screws into M, root frame, aft of zMax (the instrument panel). Returns the length
- * capped (one side).
+ * paint) and its screw heads into M (B too), root frame, aft of zMax (the instrument panel).
+ * Returns the length capped (one side).
  */
 export function buildSillCap(st, B, M, zMax = Infinity) {
   const S = SILL.cap;
