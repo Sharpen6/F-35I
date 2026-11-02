@@ -14,6 +14,9 @@
 // the ribbon keeps its points in a preallocated ring and writes the vertex arrays in place.
 
 import * as THREE from 'three';
+import { LUX_PER_UNIT, artificialLightGain, lightNight, pointLightThreshold } from '../env/Environment.js';
+
+export { LUX_PER_UNIT };
 
 const CP = 1005;                       // J/(kg K)
 const smooth = THREE.MathUtils.smoothstep;
@@ -68,6 +71,11 @@ export function darknessOf(logLux) {
  *                    brightness is normalised to it (main's meter and the HDR chain's: 0.93)
  *   bloom            null: an HDR target (float) is taken to mean the HDR chain with its bloom; true /
  *                    false force it. With bloom the lights draw a fainter glare halo of their own.
+ *   lightGain, lightNight, pointThreshold
+ *                    the rule for lights at night (js/env/README.md, Environment.js): the jet's lights
+ *                    and its landing light's pool are physical light x lightGain / LUX_PER_UNIT, its
+ *                    position lights seen from afar at least as bright as their excess over the
+ *                    threshold of a point light (lux) says; lightNight 0 (day, dusk) .. 1 (night)
  */
 export const fxEnv = {
   sunElevationDeg: 45,
@@ -75,6 +83,9 @@ export const fxEnv = {
   darkness: 0,
   noonExposure: 0.93,
   bloom: null,
+  lightGain: 1,
+  lightNight: 0,
+  pointThreshold: pointLightThreshold(45),
   update(env) {
     let el = env && Number.isFinite(env.sunElevationDeg) ? env.sunElevationDeg : null;
     if (el === null && env && env.sunDirection) el = THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, env.sunDirection.y))));
@@ -82,6 +93,10 @@ export const fxEnv = {
     this.sunElevationDeg = el;
     this.logLux = skyLogLux(el);
     this.darkness = darknessOf(this.logLux);
+    // the environment's values (an environment without them: the same rule from its exposure)
+    this.lightNight = Number.isFinite(env.lightNight) ? env.lightNight : lightNight(el);
+    this.lightGain = Number.isFinite(env.lightGain) ? env.lightGain : artificialLightGain(env.exposure, el);
+    this.pointThreshold = Number.isFinite(env.pointThreshold) ? env.pointThreshold : pointLightThreshold(el);
   },
   /** Whether the frame being drawn goes through the HDR chain's bloom (see bloom above). */
   bloomOn(renderer) {

@@ -4,11 +4,14 @@
 //     E_lamp = sum over the beams of I(theta) cos(incidence) / r^2          (lights.js beams)
 //     E_amb  = the sky's and the sun's light on level ground                 (fxshared fxLight)
 //     ground = albedo (E_amb + E_lamp) / pi
-// By day and at sunset E_lamp / E_amb is all there is (a 250,000 cd taxi beam gives ~130 lx 10 m
-// ahead of the nose, a sunset sky ~400 lx: a faint brightening near the nose wheel). In the dark the
-// sim's exposure stops far short of a dark-adapted eye, so the lamp gets a visibility gain (poolGain,
-// from the light level fxEnv, not the exposure: it rises from ~3 deg below the horizon) under a
-// logarithmic roll-off (POOL_KNEE), so the pool reads as a lit runway that fades out along the beam.
+// By day and at sunset E_lamp / E_amb is all there is (a 250,000 cd taxi beam gives ~350 lx 10 m
+// ahead of the nose, a sunset sky ~400 lx: a faint brightening near the nose wheel). At night the
+// lamp's light is seen as every artificial light is (js/env/README.md "Lights at night"): times
+// fxEnv.lightGain, the eye's adaptation to the lights (1 by day and in the dusk, 1400 / exposure
+// once the sky is dark), so the pool is as bright next to the lit aprons and streets as it is in
+// lux: bright under the nose, falling off along the beam as the light grazes the ground (E ~ h /
+// r^3 at the taxi light's 1.5 m). A soft roll-off far above the night's light (POOL_KNEE) only
+// keeps the asphalt right under the lamp from turning to a white sheet.
 //
 // On the 8-bit canvas the frame is already tone-mapped, and the tone curve is not a multiplication:
 // its toe crushes the red of the dark bluish night ground, its shoulder squeezes white paint. So what
@@ -28,26 +31,17 @@
 // visual.lights.landing for a terrain or roads shader that wants to light itself.
 
 import * as THREE from 'three';
-import { fxEnv, fxLight, fogUniforms } from './fxshared.js';
+import { fxEnv, fxLight, fogUniforms, LUX_PER_UNIT } from './fxshared.js';
 
 /**
- * Visibility gain of the pool for the sky's light level (log10 lux, fxEnv.logLux): 1 down to ~30 lx
- * (the sun ~3 deg below the horizon: physics only), up to POOL_GAIN once the sky is dark (~0.1 lx).
+ * Roll-off of the brightening far above the light already on the ground: F = 1 + K ln(1 + gain *
+ * E_lamp / E_amb / K) on the luminance of the ratio (the shader scales the colour channels'
+ * brightening in proportion): nearly the physical 1 + ratio up to ~K, logarithmic beyond.
+ * gain: the rule for lights at night (fxEnv.lightGain).
  */
-export const POOL_GAIN = 300;
-export function poolGain(logLux) {
-  return 1 + (POOL_GAIN - 1) * (1 - THREE.MathUtils.smoothstep(logLux, -1.0, 1.5));
-}
-/**
- * Log roll-off of the brightening: F = 1 + K ln(1 + gain * E_lamp / E_amb / K), on the luminance of
- * the ratio (the shader scales the colour channels' brightening in proportion). At night, through
- * ACES at the exposure's ceiling, asphalt (4, 5, 11) without the lamp comes out ~(108, 104, 98) 10 m
- * ahead of the nose, ~(65, 62, 59) at 25 m, and the landing beam's 1-4 lx on the touchdown zone on
- * the approach ~(20-40) grey.
- */
-export const POOL_KNEE = 4;
-export function poolFactor(ratio, logLux) {
-  return 1 + POOL_KNEE * Math.log(1 + poolGain(logLux) * Math.max(0, ratio) / POOL_KNEE);
+export const POOL_KNEE = 64;
+export function poolFactor(ratio, gain = 1) {
+  return 1 + POOL_KNEE * Math.log(1 + Math.max(0, gain) * Math.max(0, ratio) / POOL_KNEE);
 }
 /** Multiplying draws of the grid (each by M's N-th root, see the header), then one additive draw. */
 export const POOL_PASSES = 3;
@@ -55,7 +49,7 @@ export const POOL_PASSES = 3;
  *  (terrainShaders.js runwayPaint). */
 export const POOL_ALBEDO = [0.115, 0.62];
 
-const CD = 1 / 30000;
+const CD = 1 / LUX_PER_UNIT;
 const NX = 17, NZ = 33;
 const NEAR = 2.5, FAR = 320;           // m along the ground ahead of the lamp
 
@@ -88,7 +82,7 @@ const POOL_FRAG = /* glsl */`
   uniform vec3 uSunDir;
   uniform vec3 uSunColor;
   uniform vec3 uAmbient;
-  uniform float uGain;         // visibility gain (poolGain)
+  uniform float uGain;         // lights at night: fxEnv.lightGain
   uniform float uKnee;         // POOL_KNEE
   uniform vec2 uAlbedo;        // POOL_ALBEDO (asphalt, paint)
   uniform float uMaxMul;       // the most the multiplying draws can do together on the canvas (2^passes)
@@ -236,7 +230,7 @@ export class LandingPool {
     // target does not (the first draw sets the shared uniforms for all of them)
     this.mesh.onBeforeRender = (renderer) => {
       this.uniforms.uLinear.value = fxEnv.linearTarget(renderer) ? 1 : 0;
-      this.uniforms.uGain.value = poolGain(fxEnv.logLux);
+      this.uniforms.uGain.value = fxEnv.lightGain;
     };
     this._lastLamp = new THREE.Vector3(1e9, 0, 0);
     this._lastDir = new THREE.Vector3();

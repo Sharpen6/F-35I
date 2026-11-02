@@ -17,8 +17,9 @@
 //              (with the jet on its wheels it lights the runway from ~5 m out). The taxi beam takes
 //              over with weight on wheels, the landing beam once airborne (blended over ~0.8 s).
 //
-// Photometry. Scene radiance units: the sun's 4.0 is ~120 klx (sim/js/env), so 1 unit of radiance
-// is ~30,000 cd/m^2 and 1 unit of illuminance ~30,000 lux. Lens emission (LENS) is in those units.
+// Photometry. Scene radiance units: the sun's 4.0 is ~128 klx (sim/js/env), so 1 unit of radiance
+// is LUX_PER_UNIT = 32,000 cd/m^2 and 1 unit of illuminance 32,000 lux. Lens emission (LENS) is in
+// those units.
 // The glows are ONE THREE.Points draw for all the lights of an aircraft; per light:
 //   core   the lens while it is smaller than a few pixels: the light reaching the camera, I / d^2,
 //          spread over a ~2.5 px dot (energy-conserving), so a distant light stays a point of the
@@ -35,18 +36,23 @@
 //          a lit lens is a small bright dot, never an LED glow. When the frame goes through the HDR
 //          chain's bloom (fxEnv.bloomOn) the halo is fainter and the shoulder higher: the bloom then
 //          makes most of the glare.
-// In the dark the sim's exposure stops at 40, far below a dark-adapted eye, so cores and halos get a
-// visibility gain that grows with the darkness (nightGain): distant lights stay visible for miles.
+// Lights at night (js/env/README.md): the light reaching the camera is seen by the eye's adaptation
+// to the lights, not by the meter's exposure: E x fxEnv.lightGain (1 by day and in the dusk,
+// 1400 / exposure once the sky is dark), the same rule as the airfield lights and street lamps,
+// so a position light looks the same at exposure 40 and at 285. And as for those (the rule for
+// point lights, js/world/AirportLights.js), a light many times over the threshold of a point source
+// on the night's ground is at least as bright on the display as that excess says (visibleFloor;
+// at night only: by day the jet's lights keep their look), so it stays a dot for miles.
 // The exposure is read from the renderer (toneMappingExposure) when the glows are drawn.
 //
 // Light positions and directions come from rig.info.lights (node-relative, model frame), so the
 // glows ride on the node that carries the lens (the landing lamp swings up with the nose leg).
 
 import * as THREE from 'three';
-import { fxExposure, fxEnv, fogUniforms, FOG_PARS_GLSL } from './fxshared.js';
+import { fxExposure, fxEnv, fogUniforms, FOG_PARS_GLSL, LUX_PER_UNIT } from './fxshared.js';
 
 const ROLE = { nav: 'nav', beacon: 'anticoll', anticoll: 'anticoll', formation: 'formation', landing: 'landing' };
-const CD = 1 / 30000;                  // cd/m^2 -> scene radiance units; lux -> illuminance units
+const CD = 1 / LUX_PER_UNIT;            // cd/m^2 -> scene radiance units; lux -> illuminance units
 
 // lens material -> emission (scene radiance units) when on, multiplies the glTF emissive colour.
 // LED lenses look much brighter than their average (the dies are small): ~100k cd/m^2 for nav.
@@ -336,12 +342,13 @@ export class AircraftLights {
   }
 
   /**
-   * Visibility gain of the glows in the dark (darkness 0..1, fxEnv): 1 by day, ~200 at night, where
-   * the exposure stops at 40 and a dark-adapted eye would go on far beyond it.
+   * The rule for point lights (js/world/AirportLights.js POINT_LIGHT_VERT_GLSL): the least display
+   * brightness of the centre of a light V times over the threshold of a point source (as star
+   * magnitudes: 0 at V 1, 0.35 at V 8, up to 0.85).
    */
-  static nightGain(darkness) {
-    const d = Math.min(1, Math.max(0, darkness || 0));
-    return 1 + 203 * d * d;
+  static visibleFloor(V) {
+    const lv = Math.log2(Math.max(V, 1e-6));
+    return Math.min(1, Math.max(0, lv / 3)) * Math.min(0.35 + 0.06 * Math.max(lv - 3, 0), 0.85);
   }
 
   /** The glows' shoulder for the target last drawn into: [knee, cap] saturated, [knee, cap] white. */
@@ -400,7 +407,9 @@ export class AircraftLights {
     // ---------------------------------------------------------------- glows
     const exposure = Math.max(0.05, this.exposure);
     const dark = fxEnv.darkness;
-    const G = AircraftLights.nightGain(dark);
+    // lights at night: the eye's adaptation to the lights (js/env); the threshold of a point light
+    const G = fxEnv.lightGain;
+    const threshold = fxEnv.pointThreshold;
     const haloGain = this.haloGain * (this._bloom ? HALO_BLOOM : 1);
     // the display brightness the shader's shoulder caps a saturated / a white light at
     const sh = this._shoulder();
@@ -426,12 +435,15 @@ export class AircraftLights {
         const g = this._pattern(s, _v, _m);
         if (g > 1e-4) {
           const cd = GLOW[s.role].cd * lv * g;
-          const E = cd * CD / (d * d);                        // illuminance at the camera (scene units)
+          const Elux = cd / (d * d);                           // illuminance at the camera (lux)
+          const E = Elux * CD;                                 // (scene units)
           const lensPx = s.lensSize / (d * pxAngle);
           const coreFade = s.lensSize > 0 ? 1 - smooth(lensPx, 1.5, 4.0) : 1;
           // energy-conserving: the profile (1 + 2 r^2 / a^2)^-2 holds pi a^2 / 2 px (GLOW_FRAG); one
           // brighter than the shoulder lets it show looks bigger through its skirt, never a flat disc
-          core = E * G / (omegaPx * Math.PI * coreR * coreR / 2) * coreFade;
+          core = E * G / (omegaPx * Math.PI * coreR * coreR / 2);
+          // at night never fainter than the light's excess over the threshold says (a far light)
+          core = Math.max(core, AircraftLights.visibleFloor(Elux / threshold) * dark / (exposure * s.peak)) * coreFade;
           // a little wider once it is far over the cap (the skirt alone would leave a 1 px pin)
           const over = core * exposure * s.peak / (capWhite + (capSat - capWhite) * s.sat);
           if (over > 4) {
