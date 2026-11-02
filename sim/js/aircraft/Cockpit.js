@@ -31,11 +31,31 @@ const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a
 const clamp1 = (x) => (x > 1 ? 1 : x < -1 ? -1 : x || 0);
 
 /**
- * Rig nodes that show the pilot's inputs: the rig moves the side-stick (and the hand on it) and
- * the pedals with the flight controls' surface commands, which in a fly-by-wire jet are not where
- * the pilot holds them (trim, the control laws). The throttle already follows the lever.
+ * Rig nodes that show the pilot's inputs, re-posed here after the rig: the side-stick and the
+ * hand on it, the throttle and the hand on it, the rudder pedals. The rig moves the stick and the
+ * pedals with the flight controls' surface commands, which in a fly-by-wire jet are not where the
+ * pilot holds them (trim, the control laws); here they follow the inputs. `base`: the lever a hand
+ * holds (the hand turns with it about the lever's pivot).
  */
-const INCEPTORS = { Stick: 1, Pilot_Hand_R: 1, Pedal_L: 1, Pedal_R: 1 };
+const INCEPTORS = {
+  Stick: { controls: ['stick_pitch', 'stick_roll'] },
+  Pilot_Hand_R: { base: 'Stick', controls: ['stick_pitch', 'stick_roll'] },
+  Throttle: { controls: ['throttle'] },
+  Pilot_Hand_L: { base: 'Throttle', controls: ['throttle'] },
+  Pedal_L: { controls: ['pedals'] },
+  Pedal_R: { controls: ['pedals'] },
+};
+
+/**
+ * Which way the top of a lever moves for a positive input, in the glTF model frame (+X left, +Y
+ * up, +Z forward): pull aft, roll right to the right, more throttle forward. The exported rig
+ * (f35i_rig.json from the Blender rig, scripts/f35/rig.py, where the Stick and Throttle bones'
+ * roll points their X axis fore and aft) turns the stick about swapped axes (a pull slides it to
+ * the right) and swings the throttle sideways into the left wall. Where the rig's own motion
+ * disagrees with this table, the hinge is rebuilt from it: the same angles about the axis that
+ * moves the top the right way, through the lever's pivot. A corrected export is used as it is.
+ */
+const LEVER_MOTION = { stick_pitch: [0, 0, -1], stick_roll: [-1, 0, 0], throttle: [0, 0, 1] };
 
 /** Materials of the glb this module takes over, by name (interior.js lists the repainted ones). */
 export const COCKPIT_MATERIALS = {
@@ -93,9 +113,12 @@ export class Cockpit {
     this.interior.start().then((s) => { this.interiorStats = s; })
       .catch((e) => console.warn('Cockpit: interior:', e.message));
     this.canopy = new CanopyGlass({ root: visual.root, detail: this.detail });
-    // the side-stick and the pedals from the pilot's inputs (rig nodes, re-posed after the rig)
-    this._inceptors = visual.player ? visual.player.nodes.filter((n) => n.name in INCEPTORS && !n.hinge) : [];
-    this._inp = { stick_pitch: 0, stick_roll: 0, pedals: 0 };
+    // the side-stick, the throttle, the hands on them and the pedals from the pilot's inputs (rig
+    // nodes, re-posed after the rig); inceptorFix lists the controls whose hinge was rebuilt
+    const inc = visual.player && visual.rig ? buildInceptors(visual.rig, visual.player) : { nodes: [], fixed: [] };
+    this._inceptors = inc.nodes;
+    this.inceptorFix = inc.fixed;
+    this._inp = { stick_pitch: 0, stick_roll: 0, pedals: 0, throttle: 0 };
   }
 
   /** Meshes of the player's model by material name. */
@@ -217,19 +240,23 @@ export class Cockpit {
   }
 
   /**
-   * The side-stick, the hand on it and the pedals where the pilot holds them (input frame of this
-   * tick, test inputs included; a stick has some mass: 50 ms), posed as RigPlayer.apply does.
+   * The side-stick, the throttle, the hands on them and the pedals where the pilot holds them
+   * (input frame of this tick, test inputs included; a stick has some mass: 50 ms; the throttle is
+   * the lever, Input.levers), posed as RigPlayer.apply does.
    */
   _poseInceptors(dt) {
-    const f = this.app && this.app.input ? this.app.input.frame : null;
+    const input = this.app && this.app.input;
+    const f = input ? input.frame : null;
     if (!f || !this._inceptors.length) return;
     // (the test API's inputs override the frame's, as main.js applies them)
-    const t = this.app.testInput || {};
+    const t = this.app.testInput || _none;
     const pick = (k) => clamp1(t[k] != null ? t[k] : f[k]);
     const I = this._inp, k = 1 - Math.exp(-Math.max(0, dt) / 0.05);
     I.stick_pitch += (pick('pitch') - I.stick_pitch) * k;
     I.stick_roll += (pick('roll') - I.stick_roll) * k;
     I.pedals += (pick('yaw') - I.pedals) * k;
+    const thr = input.levers ? input.levers.throttle : f.throttle;
+    I.throttle = Number.isFinite(thr) ? Math.min(1, Math.max(0, thr)) : 0;
     for (const n of this._inceptors) {
       _rq.identity();
       _rt.copy(n.rest);
@@ -285,6 +312,75 @@ export class Cockpit {
 const _t = new THREE.Vector3();
 const _rq = new THREE.Quaternion(), _hq = new THREE.Quaternion();
 const _rt = new THREE.Vector3(), _ht = new THREE.Vector3();
+const _none = {};
+const v3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
+
+/**
+ * The inceptor nodes and how each moves with its controls (glTF model frame, relative to the
+ * node's rest position, as RigPlayer keeps them): [{name, object, rest, parts}], parts outermost
+ * first, a part {control, kind: 'hinge', pivot, axis, xs, a} or {control, kind: 'trs', xs, q, t}.
+ * The levers' hinges are checked against LEVER_MOTION and rebuilt where the rig moves them the
+ * wrong way (fixed: the controls rebuilt); a hand then turns about the corrected lever's pivot.
+ */
+export function buildInceptors(rig, player) {
+  const entries = new Map(player.nodes.map((n) => [n.name, n]));
+  const order = new Map((rig.compose || []).map((c, i) => [c, i]));
+  /** The rig's hinge of node `name` for control `c` (a node-wide hinge or the control's own). */
+  const rigHinge = (name, c) => {
+    const nd = rig.nodes && rig.nodes[name];
+    const d = nd && nd.controls && nd.controls[c];
+    const ctl = rig.controls && rig.controls[c];
+    if (!d || !d.a || !ctl) return null;
+    const h = nd.hinge || (d.axis ? d : null);
+    if (!h || !h.axis) return null;
+    return { control: c, kind: 'hinge', pivot: v3(h.pivot || [0, 0, 0]), axis: v3(h.axis).normalize(), xs: ctl.x, a: d.a };
+  };
+  // the levers: does a full positive input move the top (15 cm above the pivot) the right way?
+  const levers = new Map();
+  const fixed = [];
+  for (const [name, def] of Object.entries(INCEPTORS)) {
+    if (def.base) continue;
+    for (const c of def.controls) {
+      const want = LEVER_MOTION[c];
+      const h = rigHinge(name, c);
+      if (!want || !h) continue;
+      const a1 = interp(h.xs, h.a, h.xs[h.xs.length - 1]);
+      const top = new THREE.Vector3(0, 0.15, 0).add(h.pivot);
+      const moved = top.clone().sub(h.pivot).applyAxisAngle(h.axis, a1).add(h.pivot).sub(top);
+      const w = v3(want);
+      if (moved.lengthSq() > 1e-10 && moved.normalize().dot(w) > 0.9) { levers.set(`${name}/${c}`, { ...h, fixed: false }); continue; }
+      // rebuilt: rotating by a about u moves the up vector along u x Y, so u = sign(a) (Y x w)
+      const axis = new THREE.Vector3(0, 1, 0).cross(w).normalize().multiplyScalar(Math.sign(a1) || 1);
+      levers.set(`${name}/${c}`, { ...h, axis, fixed: true });
+      fixed.push(c);
+    }
+  }
+  const nodes = [];
+  for (const [name, def] of Object.entries(INCEPTORS)) {
+    const e = entries.get(name);
+    if (!e) continue;
+    const parts = [];
+    for (const c of def.controls) {
+      const L = levers.get(`${def.base || name}/${c}`);
+      if (L && !def.base) parts.push(L);
+      else if (L && def.base) {
+        // a hand: about the lever's pivot (the base's rest + its pivot, from the hand's rest)
+        const own = rigHinge(name, c);
+        const b = entries.get(def.base);
+        if (!L.fixed && own) parts.push(own);
+        else if (b && own) parts.push({ ...own, axis: L.axis, pivot: b.rest.clone().add(L.pivot).sub(e.rest) });
+      } else {
+        // no lever hinge (the pedals: a slide), the rig's own part
+        const p = e.parts.find((q) => q.control === c);
+        if (p) parts.push(p);
+      }
+    }
+    if (!parts.length) continue;
+    parts.sort((p, q) => (order.get(q.control) ?? 999) - (order.get(p.control) ?? 999));    // outermost first
+    nodes.push({ name, object: e.object, rest: e.rest, parts });
+  }
+  return { nodes, fixed: [...new Set(fixed)] };
+}
 
 /**
  * The display's canvas as an affine map of the glass mesh's uv (glTF: v = 0 at the top): the
