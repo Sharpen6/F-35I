@@ -49,20 +49,39 @@ const SCENES = {
   tn36f2: { kind: 'air', icao: 'LLEK', end: '36', s: -2000, time: NOON, view: 'cockpit' },
   tn36f2low: { kind: 'air', icao: 'LLEK', end: '36', s: -2000, time: LOW, view: 'cockpit' },
   tn36f1: { kind: 'air', icao: 'LLEK', end: '36', s: -900, time: NOON, view: 'cockpit' },
+  // the pilot's view on the 3 deg path 2 km out (and 1 km), through a longer lens (the runway is
+  // small and low in the cockpit view)
+  tn36f2z: { kind: 'cam', icao: 'LLEK', end: '36', pos: [-2000, 0, 120], look: [700, 0, 0], fov: 22, time: NOON },
+  tn36f2zlow: { kind: 'cam', icao: 'LLEK', end: '36', pos: [-2000, 0, 120], look: [700, 0, 0], fov: 22, time: LOW },
+  tn36f1z: { kind: 'cam', icao: 'LLEK', end: '36', pos: [-1000, 0, 67], look: [600, 0, 0], fov: 30, time: NOON },
   tn3000: { kind: 'cam', icao: 'LLEK', end: '36', pos: [600, -2600, 914], look: [1200, 0, 0], fov: 50, time: NOON },
   tn3000low: { kind: 'cam', icao: 'LLEK', end: '36', pos: [600, -2600, 914], look: [1200, 0, 0], fov: 50, time: LOW },
   tntower: { kind: 'ground', spawn: 'telnof_36', time: NOON, view: 'tower' },
+  tnrottw: { kind: 'takeoff', spawn: 'telnof_36', until: 'rotate', time: NOON, view: 'tower' },
+  // as from the tower but in the clear (the tower camera sees the jet past a hangar at Tel Nof):
+  // 30 m up beside the runway's west side, the touchdown zone through a long lens
+  tnside: { kind: 'cam', icao: 'LLEK', end: '36', pos: [1300, -330, 30], look: [600, 0, 0], fov: 22, time: NOON },
+  tnsidelow: { kind: 'cam', icao: 'LLEK', end: '36', pos: [1300, -330, 30], look: [600, 0, 0], fov: 22, time: LOW },
   // close-ups from a free camera: the touchdown zone, the threshold, mid-runway, an arresting cable
   tntdz: { kind: 'cam', icao: 'LLEK', end: '36', pos: [250, -30, 6], look: [520, 5, 0], fov: 50, time: NOON },
   tnmid: { kind: 'cam', icao: 'LLEK', end: '36', pos: [1150, 18, 4], look: [1250, 0, 0], fov: 55, time: NOON },
   tnend: { kind: 'cam', icao: 'LLEK', end: '18', pos: [-120, 25, 8], look: [60, 0, 0], fov: 55, time: NOON },
+  // the concrete end of 33R: from above the blast pad, over the threshold to the concrete's end
+  tnconc: { kind: 'cam', icao: 'LLEK', end: '33R', pos: [-150, -12, 14], look: [200, 4, 0], fov: 55, time: NOON },
+  // an arresting cable across 36 (460 m past the threshold), its discs and signs
+  tncable: { kind: 'cam', icao: 'LLEK', end: '36', pos: [400, -28, 3], look: [470, 0, 0], fov: 50, time: NOON },
   tn33: { kind: 'ground', spawn: 'telnof_33r', time: NOON, view: 'cockpit' },
   tnapron: { kind: 'cam', icao: 'LLEK', end: '36', pos: [1300, -330, 60], look: [1300, -180, 0], fov: 55, time: NOON },
+  // an apron (Tel Nof and Hatzor have none mapped): Ben Gurion's, among its floodlight masts
+  bgapron: { kind: 'cam', icao: 'LLBG', end: '26', pos: [-300, -1900, 70], look: [-480, -2250, 0], fov: 50, time: NOON },
   // the other fields
   bg26c: { kind: 'ground', spawn: 'bengurion_26', time: NOON, view: 'cockpit' },
   bg26f2: { kind: 'air', icao: 'LLBG', end: '26', s: -2000, time: NOON, view: 'cockpit' },
   bg12f2: { kind: 'air', icao: 'LLBG', end: '12', s: -2000, time: NOON, view: 'cockpit' },
   bg3000: { kind: 'cam', icao: 'LLBG', end: '26', pos: [800, -2800, 914], look: [1400, 0, 0], fov: 50, time: NOON },
+  bg26f2z: { kind: 'cam', icao: 'LLBG', end: '26', pos: [-2000, 0, 120], look: [700, 0, 0], fov: 22, time: NOON },
+  hz29f2z: { kind: 'cam', icao: 'LLHS', end: '29R', pos: [-2000, 0, 120], look: [700, 0, 0], fov: 22, time: NOON },
+  pm21f2z: { kind: 'cam', icao: 'LL59', end: '21', pos: [-2000, 0, 120], look: [700, 0, 0], fov: 22, time: NOON },
   hz29f2: { kind: 'air', icao: 'LLHS', end: '29R', s: -2000, time: NOON, view: 'cockpit' },
   hz23f2: { kind: 'air', icao: 'LLHS', end: '23', s: -2000, time: NOON, view: 'cockpit' },
   hz3000: { kind: 'cam', icao: 'LLHS', end: '23', pos: [700, -2600, 914], look: [1200, 0, 0], fov: 50, time: NOON },
@@ -71,8 +90,9 @@ const SCENES = {
 };
 const SETS = {
   base: 'tn36c,tn36,tn36rot,tn36f2,tn3000,tntower,tn36low,tn36f2low,bg26c,hz29f2,pm21f2',
-  quick: 'tn36c,tn36f2,tn3000',
-  close: 'tntdz,tnmid,tnend,tnapron',
+  quick: 'tn36c,tn36f2z,tn3000',
+  close: 'tntdz,tnmid,tnconc,tncable,bgapron',
+  fields: 'bg26f2z,hz29f2z,pm21f2z,bg3000,hz3000',
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
