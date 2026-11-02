@@ -28,6 +28,10 @@
 
 import * as THREE from 'three';
 import { ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
+import { skyIlluminance, pointLightThreshold } from '../env/Environment.js';
+
+// (the sky's light by the sun's elevation lives with the rule for lights at night in js/env)
+export { skyIlluminance };
 
 const DEG = Math.PI / 180;
 // aviation colours (linear RGB): halogen white, yellow, green, red, blue, floodlight (4000 K), xenon strobe
@@ -65,22 +69,78 @@ float erfA(float x) {
 }
 `;
 
-/** Outdoor illuminance (lux) for a sun elevation (deg): daylight, civil / nautical twilight, night. */
-export function skyIlluminance(el) {
-  const H = [-18, -12, -9, -6, -4, -2, 0, 2, 5, 10, 20, 40, 90];
-  const L = [-3, -2.1, -1, 0.53, 1.48, 2.18, 2.85, 3.3, 3.78, 4.3, 4.7, 4.95, 5.08];
-  if (el <= H[0]) return 10 ** L[0];
-  for (let i = 1; i < H.length; i++) {
-    if (el <= H[i]) return 10 ** (L[i - 1] + (L[i] - L[i - 1]) * (el - H[i - 1]) / (H[i] - H[i - 1]));
-  }
-  return 10 ** L[L.length - 1];
+/**
+ * The rule for point lights seen from afar (js/env/README.md "Lights at night"), shared by the
+ * airfield lights, the street lamps and the cars (here) and the buildings' obstruction lights
+ * (js/world/buildingShaders.js). Uniforms: uThreshold (lux at the eye at which a point light is
+ * just seen: env.pointThreshold), uExposure (the renderer's), uPxAngle (radians per pixel of the
+ * drawing buffer), uGain (scene irradiance per lux: env.lightGain / LUX_PER_UNIT).
+ *   vertex:   pointLightSprite(I, c, d): intensity I (cd), colour c (through the atmosphere), d (m);
+ *             sets vColor, vSigma, vSize and gl_PointSize
+ *   fragment: pointLightRadiance(): this pixel's radiance (discards the empty corners)
+ */
+export const POINT_LIGHT_VERT_GLSL = /* glsl */ `
+${ERF_GLSL}
+uniform float uThreshold;  // lux: threshold of a point source on the background
+uniform float uExposure;
+uniform float uPxAngle;    // radians per pixel of the drawing buffer
+uniform float uGain;       // scene irradiance per lux, times the night eye's adaptation (env.lightGain)
+varying vec3 vColor;       // irradiance at the eye (scene units), per channel
+varying float vSigma;      // Gaussian radius (px)
+varying float vSize;       // point size (px)
+void pointLightSprite(float I, vec3 c, float d) {
+  float cl = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-6);
+  float E = I * cl / (d * d);                                  // lux (luminance-weighted)
+  // Seen against its background (Allard / Blondel-Rey threshold E_t = 10^(0.64 log B - 5.7)):
+  float V = E / uThreshold;
+  float lv = log2(max(V, 1e-6));
+  // Physical: the light's irradiance spread over a Gaussian of sigma px. A display cannot show
+  // a point as bright as the eye sees it, so a light the eye sees well (by day: PAPI against a
+  // sunlit field; at night: a lamp many km away) is at least as bright as its excess over the
+  // threshold says (as star magnitudes), up to a little under white: only a light that is
+  // physically brighter than that saturates the display (near ones: depth, not a flat carpet).
+  float Om = uPxAngle * uPxAngle;
+  float ePhys = E * uGain * smoothstep(0.5, 2.0, V);
+  float fc0 = erfA(0.5439) * erfA(0.5439);                     // centre pixel's share at sigma 0.65
+  float peakP = clamp(lv / 3.0, 0.0, 1.0) * min(0.35 + 0.06 * max(lv - 3.0, 0.0), 0.85);
+  float e = max(ePhys, peakP / max(uExposure, 1e-4) * Om / fc0);
+  // never under 0.65 px (a sub-pixel Gaussian twinkles as it crosses pixel centres); wider when
+  // bright, as glare
+  float peak = e * fc0 / Om * uExposure;                        // display value of the centre pixel
+  vSigma = clamp(0.65 * (1.0 + 0.12 * max(log2(max(peak, 1e-6)) - 2.0, 0.0)), 0.65, 1.6);
+  vColor = c / cl * e;
+  vSize = e > 0.0 && I > 0.0 ? 2.0 * ceil(3.5 * vSigma) + 1.0 : 0.0;
+  gl_PointSize = vSize;
 }
+`;
+
+export const POINT_LIGHT_FRAG_GLSL = /* glsl */ `
+${ERF_GLSL}
+uniform float uPxAngle;
+uniform float uExposure;
+varying vec3 vColor;
+varying float vSigma;
+varying float vSize;
+vec3 pointLightRadiance() {
+  // this pixel's share of the light: the Gaussian integrated over the pixel's square, so the sum
+  // over the pixels stays the light's whole energy wherever its centre falls (no twinkling)
+  vec2 p = (gl_PointCoord - 0.5) * vSize;                    // pixel centre - light centre (px)
+  float k = 0.70710678 / vSigma;
+  float f = 0.25 * (erfA((p.x + 0.5) * k) - erfA((p.x - 0.5) * k)) * (erfA((p.y + 0.5) * k) - erfA((p.y - 0.5) * k));
+  if (f < 2e-5) discard;
+  // radiance: the share of the irradiance over the pixel's solid angle, at most 64 on the display
+  // (where a bloom chain clamps)
+  vec3 L = vColor * f / (uPxAngle * uPxAngle);
+  float m = max(L.r, max(L.g, L.b)) * uExposure;
+  return L * min(1.0, 64.0 / max(m, 1e-6));
+}
+`;
 
 const VERT = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
 ${ATMOSPHERE_CORE}
-${ERF_GLSL}
+${POINT_LIGHT_VERT_GLSL}
 #ifdef STREET_LAMPS
 // street lamps (their own material, 16 bytes a lamp): position and rank, flags
 attribute vec4 aLamp;      // rank 0..255 (thinning with distance); flags: 1 LED, 2 a minor road; -; -
@@ -94,14 +154,7 @@ uniform vec4 uOn;          // runway, approach, taxiway, floodlights: intensity 
 uniform float uPapiOn;
 uniform float uClock;      // seconds
 #endif
-uniform float uThreshold;  // lux: threshold of a point source on the background
-uniform float uExposure;
-uniform float uPxAngle;    // radians per pixel of the drawing buffer
-uniform float uGain;       // scene irradiance per lux, times the night eye's adaptation (Roads.js)
 uniform vec3 uRange;       // road ribbons' range, group 0 and 1; street lamps' range (m)
-varying vec3 vColor;       // irradiance at the eye (scene units), per channel
-varying float vSigma;      // Gaussian radius (px)
-varying float vSize;       // point size (px)
 
 void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
@@ -163,29 +216,7 @@ void main() {
 #endif
   // illuminance at the eye through the atmosphere
   vec3 T = atmoPathTransmittance(uCamAltitude, hLight, d);
-  vec3 c = rgb * T;
-  float cl = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-6);
-  float E = I * cl / (d * d);                                  // lux (luminance-weighted)
-  // Seen against its background (Allard / Blondel-Rey threshold E_t = 10^(0.64 log B - 5.7)):
-  float V = E / uThreshold;
-  float lv = log2(max(V, 1e-6));
-  // Physical: the light's irradiance spread over a Gaussian of sigma px. A display cannot show
-  // a point as bright as the eye sees it, so a light the eye sees well (by day: PAPI against a
-  // sunlit field; at night: a lamp many km away) is at least as bright as its excess over the
-  // threshold says (as star magnitudes), up to a little under white: only a light that is
-  // physically brighter than that saturates the display (near ones: depth, not a flat carpet).
-  float Om = uPxAngle * uPxAngle;
-  float ePhys = E * uGain * smoothstep(0.5, 2.0, V);
-  float fc0 = erfA(0.5439) * erfA(0.5439);                     // centre pixel's share at sigma 0.65
-  float peakP = clamp(lv / 3.0, 0.0, 1.0) * min(0.35 + 0.06 * max(lv - 3.0, 0.0), 0.85);
-  float e = max(ePhys, peakP / max(uExposure, 1e-4) * Om / fc0);
-  // never under 0.65 px (a sub-pixel Gaussian twinkles as it crosses pixel centres); wider when
-  // bright, as glare
-  float peak = e * fc0 / Om * uExposure;                        // display value of the centre pixel
-  vSigma = clamp(0.65 * (1.0 + 0.12 * max(log2(max(peak, 1e-6)) - 2.0, 0.0)), 0.65, 1.6);
-  vColor = c / cl * e;
-  vSize = e > 0.0 && I > 0.0 ? 2.0 * ceil(3.5 * vSigma) + 1.0 : 0.0;
-  gl_PointSize = vSize;
+  pointLightSprite(I, rgb * T, d);
   // towards the camera, so the coarse terrain far away does not hide lights on the ground
   float pull = min(0.012 * d, d * 0.5);
   vec3 relP = rel * (1.0 - pull / d);
@@ -197,26 +228,10 @@ void main() {
 const FRAG = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_fragment>
-${ERF_GLSL}
-uniform float uPxAngle;
-uniform float uExposure;
-varying vec3 vColor;
-varying float vSigma;
-varying float vSize;
+${POINT_LIGHT_FRAG_GLSL}
 void main() {
   #include <logdepthbuf_fragment>
-  // this pixel's share of the light: the Gaussian integrated over the pixel's square, so the sum
-  // over the pixels stays the light's whole energy wherever its centre falls (no twinkling)
-  vec2 p = (gl_PointCoord - 0.5) * vSize;                    // pixel centre - light centre (px)
-  float k = 0.70710678 / vSigma;
-  float f = 0.25 * (erfA((p.x + 0.5) * k) - erfA((p.x - 0.5) * k)) * (erfA((p.y + 0.5) * k) - erfA((p.y - 0.5) * k));
-  if (f < 2e-5) discard;
-  // radiance: the share of the irradiance over the pixel's solid angle, at most 64 on the display
-  // (where a bloom chain clamps)
-  vec3 L = vColor * f / (uPxAngle * uPxAngle);
-  float m = max(L.r, max(L.g, L.b)) * uExposure;
-  L *= min(1.0, 64.0 / max(m, 1e-6));
-  gl_FragColor = vec4(L, 1.0);
+  gl_FragColor = vec4(pointLightRadiance(), 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
@@ -543,10 +558,9 @@ export class AirportLights {
     const U = this.uniforms;
     U.uOn.value.set(dusk * nightStep, dusk * nightStep, dusk, flood);
     U.uPapiOn.value = el > 8 ? 1 : nightStep;
-    // background luminance of the ground (albedo 0.15, a little city glow at night) -> threshold
-    const lux = skyIlluminance(el) + 0.05;
-    const B = 0.15 * lux / Math.PI;
-    U.uThreshold.value = Math.max(10 ** (0.64 * Math.log10(B) - 5.7), 1e-7);
+    // the threshold of a point light on the ground's luminance (albedo 0.15, a little city glow
+    // at night): js/env "Lights at night"
+    U.uThreshold.value = env.pointThreshold ?? pointLightThreshold(el);
     U.uExposure.value = this.renderer.toneMappingExposure || 1;
     // radians per pixel of the drawing buffer (device pixels: the pixel ratio is in it once)
     const cam = (f && f.camera) || this.camera;

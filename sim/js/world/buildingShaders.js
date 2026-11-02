@@ -27,6 +27,7 @@
 // building: the box's shadow on its ground plane, multiplied into what is drawn).
 
 import { ATMOSPHERE_PARS, ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
+import { POINT_LIGHT_VERT_GLSL, POINT_LIGHT_FRAG_GLSL } from './AirportLights.js';
 
 // wall styles, roof styles, roof shapes, surface kinds: sim/tools/world/buildings.py, BuildingsWorker.js
 export const WALL = { plaster: 0, stone: 1, glass: 2, office: 3, industrial: 4, house: 5, greenhouse: 6, concrete: 7, public: 8, tower: 9, oldstone: 10, stack: 11, hangar: 12, frame: 13 };
@@ -614,19 +615,22 @@ void main() {
 `;
 
 // ---------------------------------------------------------------------------- obstruction lights
-// Red lights on the tops of tall structures, as points (Buildings.js: one THREE.Points per tile).
-// aLight: x = 1 flashing (medium intensity, structures >= 150 m and stacks) / 0 steady (low
-// intensity), y = phase (s). Steady lights 2.5 px, flashing ones 3.5 px at their peak; brightness
-// falls with distance (a point source: 1 / d^2, kept above a floor so far ones stay a dot).
+// Red lights on the tops of tall structures, as points (Buildings.js: one THREE.Points per tile),
+// drawn by the rule every point light follows (js/world/AirportLights.js POINT_LIGHT_VERT_GLSL,
+// js/env/README.md "Lights at night"): the illuminance at the eye through the air, I T / d^2,
+// against the threshold of a point source on the night's ground, never fainter than its excess
+// over the threshold says. ICAO Annex 14 intensities (night setting): low-intensity type B, steady,
+// 32 cd; medium-intensity type B, red flashing 20-60 a minute, 2,000 cd.
+// aLight: x = 1 flashing (structures >= 150 m and stacks) / 0 steady, y = phase (s).
+export const OBSTRUCTION_CD = { steady: 32, flashing: 2000 };
 export const LIGHT_VERT = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
 ${ATMOSPHERE_CORE}
+${SAFE_H}
+${POINT_LIGHT_VERT_GLSL}
 attribute vec2 aLight;
-uniform vec3 uLightOn;         // darkness (0 day .. 1 night), time (s), pixels per metre at 1 m (viewport)
-varying vec3 vRel;
-varying float vH;
-varying float vI;
+uniform vec3 uLightOn;         // on (0 day .. 1 night), time (s), -
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vec3 rel = wp.xyz - uCameraPos;
@@ -635,37 +639,26 @@ void main() {
   mv.xyz -= drop * viewMatrix[1].xyz;
   gl_Position = projectionMatrix * mv;
   #include <logdepthbuf_vertex>
-  vRel = rel - vec3(0.0, drop, 0.0);
-  vH = wp.y;
+  rel.y -= drop;
   float d = max(length(rel), 1.0);
-  // flashing: 40 a minute, 0.5 s on with soft edges (type B); steady: always on (type C)
+  // flashing: 40 a minute, 0.5 s on with soft edges (type B); steady: always on
   float ph = fract(uLightOn.y / 1.5 + aLight.y);
-  float on = aLight.x > 0.5 ? smoothstep(0.0, 0.06, ph) * (1.0 - smoothstep(0.30, 0.36, ph)) : 1.0;
-  float near = clamp(1800.0 / d, 0.25, 1.0);
-  vI = uLightOn.x * on * near * near * (aLight.x > 0.5 ? 2.2 : 1.0);
-  gl_PointSize = (aLight.x > 0.5 ? 3.5 : 2.5) * clamp(uLightOn.z, 0.6, 2.0) * mix(0.7, 1.0, on);
-  if (vI <= 0.001) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  float flash = aLight.x > 0.5 ? smoothstep(0.0, 0.06, ph) * (1.0 - smoothstep(0.30, 0.36, ph)) : 1.0;
+  float I = uLightOn.x * flash * (aLight.x > 0.5 ? ${OBSTRUCTION_CD.flashing.toFixed(1)} : ${OBSTRUCTION_CD.steady.toFixed(1)});
+  // the air between dims the light (added light: the haze in front is the world's, drawn already)
+  vec3 T = atmoPathTransmittance(uCamAltitude, atmoSafeH(wp.y), d);
+  pointLightSprite(I, vec3(1.0, 0.07, 0.025) * T, d);
+  if (vSize <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 }
 `;
 
 export const LIGHT_FRAG = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_fragment>
-${ATMOSPHERE_CORE}
-${SAFE_H}
-varying vec3 vRel;
-varying float vH;
-varying float vI;
+${POINT_LIGHT_FRAG_GLSL}
 void main() {
   #include <logdepthbuf_fragment>
-  vec2 q = gl_PointCoord * 2.0 - 1.0;
-  float r2 = dot(q, q);
-  if (r2 > 1.0) discard;
-  float dist = max(length(vRel), 1.0);
-  vec3 L = vec3(1.0, 0.07, 0.025) * 0.9 * vI * exp(-2.5 * r2);
-  // the air between dims the light (added light: the haze in front is the world's, drawn already)
-  vec3 c = L * atmoPathTransmittance(uCamAltitude, atmoSafeH(vH), dist);
-  gl_FragColor = vec4(max(c, 0.0), 1.0);
+  gl_FragColor = vec4(pointLightRadiance(), 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
