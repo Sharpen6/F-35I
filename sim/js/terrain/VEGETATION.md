@@ -138,7 +138,7 @@ Placement starts at once in the worker; trees appear when the atlas is done.
 | near meshes | 70 m | 110 m | 160 m |
 | impostors to | 2,000 m | 3,000 m | 4,200 m |
 | ground shadows to | 900 m | 1,600 m | 2,400 m |
-| instance buffer | 260,000 | 520,000 | 900,000 |
+| instance buffer | 260,000 | 520,000 | 1,200,000 |
 | atlas frame | 64 px (4.5 MB) | 128 px (18 MB) | 128 px (18 MB) |
 
 The near meshes shorten their range by themselves if a dense forest overflows their buffers.
@@ -147,10 +147,29 @@ Tuning at run time (console): `app.modules.find((m) => m.isScatter).tuning`
 
 ## Cost
 
-See the numbers in the track's report (renderInfo / gpuMemory before and after, per quality).
-Draw calls: 2 (impostors, ground shadows) + up to 18 near meshes (+ up to 18 into the shadow
-map). Memory: the atlas (18 MB at medium / high), the instance buffer (20 bytes a slot: 10 MB
-at medium, 18 MB at high), the near meshes' buffers (about 2 MB).
+Draw calls: 2 (impostors, ground shadows; 1 above the shadow range) + one per species and
+variant with trees within the mesh range (+ the same into the sun's shadow map when it covers
+them). GPU memory: the atlas (4.5 MB at low, 18 MB at medium / high), the instance buffer
+(20 bytes a slot: 5.2 / 10.4 / 24 MB), the near meshes' buffers (1-4 MB): about 12 / 31 / 47 MB.
+The app's estimate (`gpuMemory()`) at medium: 684.9 MB without the module, 715.4 MB with it.
+
+`tests/vegetation_shots.mjs --ab` (the same frame with and without the trees, 960 x 540):
+
+| scene | quality | trees in range | draw calls | triangles (three's count) |
+| --- | --- | --- | --- | --- |
+| Tel Nof 36, chase | low / medium / high | 7,700 / 27,800 / 98,800 | +4 / +5 / +15 | +0.03 / +0.12 / +0.47 M |
+| citrus blocks, 150 m | low / medium / high | 20,000 / 66,500 / 153,700 | +2 | +0.08 / +0.27 / +0.62 M |
+| Ben Shemen, 600 m | low / medium / high | 25,000 / 93,500 / 235,300 | +2 | +0.10 / +0.37 / +0.94 M |
+| Jerusalem forest, 600 m | low / medium / high | 78,300 / 270,800 / 693,600 | +2 | +0.31 / +1.08 / +2.77 M |
+| sunset over the hills, 200 m | low / medium / high | 99,500 / 306,900 / 864,700 | +2 / +2 / +13 | +0.40 / +1.23 / +3.55 M |
+| cruise, 3,000 m | medium | 39,600 | +1 | +0.16 M |
+
+The triangles are 2 per slot of the buffer for the impostors and 2 for the ground shadows: the
+vertex shader drops the trees outside the view, beyond their range or drawn as meshes before
+any lighting work, so most of them never reach the rasteriser. SwiftShader (a CPU rasteriser)
+takes 0.8-1.6 times as long for the whole frame with the trees at medium, up to 2.4 times at
+high in the densest forests; on a desktop GPU the module should cost a fraction of a
+millisecond (`?bench=1` with `vegetation=0` and without gives the real number).
 
 ## Tests
 
@@ -158,5 +177,7 @@ at medium, 18 MB at high), the near meshes' buffers (about 2 MB).
 [--tag t1]` takes the scenes (Tel Nof 36 cockpit and chase, the citrus blocks west of Tel Nof
 at 150 m, Ben Shemen and the Jerusalem forest at 600 m, 3,000 m cruise, Tel Aviv at 300 m,
 Kalia's palms, sunset over the hills) with the frame statistics and the module's own
-(`statsJSON()`), waiting until the module is idle (`idle()`). `--params vegetation=0` gives the
-same scenes without trees. The placement rules run in node too (`placement.js` has no DOM).
+(`statsJSON()`), waiting until the module is idle (`idle()`). `--ab` draws every scene with and
+without the trees in the same page (draw calls, triangles, time; `<scene>_off.png`);
+`--params vegetation=0` loads the app without the module. The placement rules run in node too
+(`placement.js` has no DOM).

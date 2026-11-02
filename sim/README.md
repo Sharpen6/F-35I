@@ -198,7 +198,9 @@ at run time from the terrain's own land cover (ESA WorldCover), imagery and heig
 orchards in rows on the coastal plain, the KKL pine forests, olives on the hill terraces, garden
 and street trees in the towns, eucalyptus windbreaks, date palms in the rift; nothing on runways,
 roads, roofs or water. Near trees are meshes, far ones impostors (one draw), with ground shadows.
-Off with `vegetation=0` or the menu option; range and density follow the quality.
+Off with `vegetation=0` or the menu option; range and density follow the quality. Cost: 2 draw
+calls in the air (up to 18 more for the meshes near the ground), about 31 MB of GPU memory at
+medium (12 MB low, 47 MB high).
 
 ## Files (the app shell)
 

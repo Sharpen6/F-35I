@@ -37,7 +37,7 @@ import { CELL_M, CELLS, TILES, CORE_HALF, REC_U8 } from './vegetation/placement.
 export const VEG_QUALITY = {
   low: { density: 0.45, mesh: 70, band: 12, far: 2000, shadow: 900, capacity: 260000, meshCap: 3000, atlas: 64, shrubs: false },
   medium: { density: 0.7, mesh: 110, band: 16, far: 3000, shadow: 1600, capacity: 520000, meshCap: 6000, atlas: 128, shrubs: true },
-  high: { density: 1.0, mesh: 160, band: 22, far: 4200, shadow: 2400, capacity: 900000, meshCap: 10000, atlas: 128, shrubs: true },
+  high: { density: 1.0, mesh: 160, band: 22, far: 4200, shadow: 2400, capacity: 1200000, meshCap: 10000, atlas: 128, shrubs: true },
 };
 
 const MAX_INFLIGHT = 2;
