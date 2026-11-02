@@ -41,7 +41,10 @@
 // The glow inside the nozzle, seen from behind: rays that pass the exit and the throat reach the
 // turbine's exit deep inside (NOZZLE_GLSL): a hot annulus round the tail cone with the flame
 // holder's struts across it, the nozzle's wall between the throat and the exit dimly lit by it
-// (parallax, a cavity: never a disc at the exit). Its light is the engine's heat plus the burner.
+// (parallax, a cavity: never a disc at the exit). That is the night look, where the glow is the
+// brightest thing in the nozzle; the day look keeps the soft disc on the throat plane it was tuned
+// with (throatDisc: noon draws as before), the two blended by uDay through the dusk. Its light is
+// the engine's heat plus the burner.
 // The heat follows the rule for lights at night (js/env/README.md): the luminance of a body at
 // ~930 K at idle (a dim dark red, ~0.06 on the display at night) to ~1030 K at MIL (orange-red,
 // ~0.7) x lightGain / LUX_PER_UNIT, so the dusk shows next to nothing of it; by day the day
@@ -87,6 +90,24 @@ const NOZZLE_GLSL = /* glsl */`
     float cone = (1.0 - smoothstep(0.32, 0.42, r)) * (0.22 + 0.18 * (1.0 - r / 0.42));
     // the throat's edge, a little soft
     return mix(wall, ann * strut + cone, 1.0 - smoothstep(0.9, 1.0, rt));
+  }
+  // the day look's glow, as it was tuned (a faint heat and the burner's yellow-orange against a
+  // sunlit nozzle): a soft disc on the throat plane, seen along rays through the exit and the throat
+  float throatDisc(vec3 ro, vec3 rd) {
+    if (rd.z > -1e-4) return 0.0;
+    float te = -ro.z / rd.z;
+    if (te < 0.0) return 0.0;
+    float tt = (uNoz.y - ro.z) / rd.z;
+    float re = length(ro.xy + rd.xy * te) / uNoz.x;
+    float rt = length(ro.xy + rd.xy * tt) / uNoz.z;
+    if (re > 1.0 || rt > 1.0) return 0.0;
+    return exp(-rt * rt * 2.5) * (1.0 - smoothstep(0.85, 1.0, rt));
+  }
+  // what the glow shows: the cavity at night, the day look's disc by day (exactly it at day 1),
+  // the two blended through the dusk as the looks are
+  float nozzleGlow(vec3 ro, vec3 rd, float day) {
+    float disc = throatDisc(ro, rd);
+    return day >= 1.0 ? disc : mix(nozzleView(ro, rd), disc, day);
   }
 `;
 
@@ -233,7 +254,7 @@ const PLUME_FRAG = /* glsl */`
     vec3 flame = uSat * (vec3(1.0) - exp(-acc / uSat));
     // the glow inside the nozzle seen through the flame: summed before the shoulder, so the two
     // never add up to white
-    flame += uGlow * nozzleView(ro, rd) * (1.0 - alpha);
+    flame += uGlow * nozzleGlow(ro, rd, uDay) * (1.0 - alpha);
     vec3 disp = shoulder(flame * uDisp);
     vec3 col = disp * uInvExp;
     gl_FragColor = vec4(col, alpha);
@@ -265,6 +286,7 @@ const GLOW_FRAG = /* glsl */`
   uniform vec3 uColour;       // display-referred (x uDisp by day)
   uniform float uDisp;
   uniform float uInvExp;
+  uniform float uDay;         // 1 against a daylight sky, 0 at night (the plume's uDay)
   uniform vec3 uCamLocal;     // camera position in the plume frame
   varying vec3 vLocal;
   ${FOG_PARS_GLSL}
@@ -273,7 +295,7 @@ const GLOW_FRAG = /* glsl */`
   void main() {
     #include <logdepthbuf_fragment>
     vec3 ro = uCamLocal;
-    float g = nozzleView(ro, normalize(vLocal - ro));
+    float g = nozzleGlow(ro, normalize(vLocal - ro), uDay);
     if (g <= 0.0) discard;
     vec3 disp = uColour * g * uDisp;
     gl_FragColor = vec4(disp * uInvExp, 1.0);
@@ -465,7 +487,7 @@ export class Afterburner {
     // inside it) facing aft, that looks into the nozzle (GLOW_FRAG)
     const glowZ = -0.03;
     this.glowUniforms = { ...fogUniforms(), uColour: { value: new THREE.Color(0, 0, 0) }, uDisp: { value: 1 }, uInvExp: { value: 1 },
-      uCamLocal: this.uniforms.uCamLocal, uNoz: this.noz, uZ: { value: glowZ } };
+      uDay: { value: 1 }, uCamLocal: this.uniforms.uCamLocal, uNoz: this.noz, uZ: { value: glowZ } };
     this.glow = new THREE.Mesh(
       new THREE.CircleGeometry(this.r0 * 1.02, 48),
       emitterBlending(new THREE.ShaderMaterial({
@@ -480,7 +502,9 @@ export class Afterburner {
     this.glow.onBeforeRender = (renderer) => {
       const e = Math.max(0.05, fxExposure.get(renderer));
       this._exposure = e;
-      this.glowUniforms.uDisp.value = blend(1, flameDisplayGain(e), flameDayLook(fxEnv.logLux));
+      const day = flameDayLook(fxEnv.logLux);
+      this.glowUniforms.uDay.value = day;
+      this.glowUniforms.uDisp.value = blend(1, flameDisplayGain(e), day);
       this.glowUniforms.uInvExp.value = 1 / e;
     };
     this.group.add(this.glow);
