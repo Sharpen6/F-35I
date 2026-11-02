@@ -524,6 +524,9 @@ calls, programs, samplers and the GPU memory estimate are unchanged.
   terrain and the clouds get the moon's light, the night sky's glow and the cities' light from
   below, but no moonlight reflected off the clouds onto the ground. The phase and the position
   are for 21 June of `env.year` only (the sim has no other date).
+* Inside a moonlit deck the eye adapts as in a cloud's shade by day (`env.lightScale`), so the
+  exposure goes to its night ceiling (285) and the nearest moonlit cloud reads sRGB ~86-91 under
+  a grey sky (~[50, 49, 53]), a little brighter than the same deck seen from above (~75-85).
 * The light pollution model has 19 sources and ten domes at a time; small towns, the villages
   and the roads' own glow are folded into the larger sources. The domes are smooth (no
   structure from the haze layers or the terrain in front of a city); the sea reflects their mean.
