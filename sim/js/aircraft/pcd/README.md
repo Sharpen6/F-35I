@@ -255,6 +255,37 @@ frame on average in the cockpit, worst 13.5 ms, the same as with the module off 
 11 ms); with the canvas still an sRGB texture it was 5.3 ms, with ten frames a second of 55-65 ms
 (each canvas upload).
 
+The rebuilt parts (`parts.js`): 36,052 triangles and 24,415 vertices in eight meshes, in place of
+two glb meshes (the bow, the pads) and 492 triangles dropped from the cockpit's and the seat's
+merged meshes; 0.8 MB of buffers (positions, normals, the index, the occlusion byte; `gpuMemory()`
+691.4 -> 692.2 MB at low). Each of the eight is drawn once in every pass that draws the jet: the
+view, the sun's shadow map (the environment makes every mesh of the jet a caster) and the cockpit's
+own shadow map when it is redrawn: 6 draws more a pass. Measured at Tel Nof 36 at noon in one page,
+the glb's parts (`cockpit.parts.setEnabled(false)`) -> the rebuilt ones, the fewest calls and
+triangles of four frames (high: one frame, the calls only):
+
+| quality | view | draw calls | triangles |
+| --- | --- | --- | --- |
+| low | ahead | 289 -> 297 | 1,688,961 -> 1,713,337 |
+| low | looking down | 314 -> 326 | 1,205,598 -> 1,275,502 |
+| low | looking back | 375 -> 387 | 1,493,653 -> 1,563,173 |
+| low | down and left | 318 -> 330 | 1,296,719 -> 1,366,623 |
+| medium | ahead | 296 -> 298 | 1,753,909 -> 1,797,520 |
+| medium | looking down | 338 -> 347 | 1,452,121 -> 1,499,485 |
+| medium | looking back | 398 -> 410 | 1,718,803 -> 1,788,323 |
+| medium | down and left | 340 -> 352 | 1,566,989 -> 1,636,893 |
+| high | ahead | 298 -> 310 | |
+| high | looking down | 319 -> 331 | |
+
+No new shader program at any quality: the eight draw with the program of six glb cockpit meshes
+(read from each material's program at low and high), so nothing compiles when they first come
+into view; no texture, so no new sampler. CPU: nothing a frame; built once at start-up on the
+main thread before the interior's worker starts: 0.2-0.3 s in the browser here (the code cold,
+four shared cores at a load of 30), 32 ms in node warm (the sills' sections 7 ms, the consoles
+6 ms). Expected on an RTX 3070 at 1080p: under 0.05 ms a frame (6-12 more draws of a program
+already in use, about 36 k triangles a pass on pixels the glb's parts mostly covered already),
+30-80 ms once at start-up.
+
 ## How it was checked
 
 Screenshots through the test API (`?test=1`, 960 x 540) at Tel Nof 36 on the runway and in
@@ -274,6 +305,20 @@ sparkle) 4.2 before the mip levels, 3.5 with them on the high canvas, 4.9 and 2.
 `tests/e2e.mjs` checks the interior analysis (over 3,000 inner faces, no gap), the display
 redrawn in the cockpit and not from the chase view, the cockpit shadow on, and the stick (a pull
 aft, roll right to the right) and the throttle (MIL forward) moving the right way; it passes.
+
+The rebuilt parts were checked in node on the glb's own primitives (`CockpitParts` on a scene made
+from the glb, no browser): every triangle wound along its normals (none wrong of 36,052), the
+hood's edge seen from the design eye against the helmet's `COAMING` line (a dense sweep over the
+hood and the pads: at most 0.02 deg above it, at the rounded corners), each part's box against the
+glb part it replaces, the build's time per part. Then in screenshots (`?test=1`, 960 x 540) at Tel
+Nof 36 at noon, over the Jerusalem hills at 1,500 m at 07:00 (into the sun) and at sunset (the sun
+behind), at Ben Gurion 26 at dusk, over Tel Aviv at 3,000 m at noon and at night: ahead, left,
+right, down, back and at both wings; zoomed on the bow's crest and leg, the coaming, the display's
+bezel, the consoles, the seat and the sills; from outside at 6-7 m (front quarter, side, from
+behind); A/B with `?ckparts=0` and the same frame with `cockpit.parts.setEnabled(false)`. The
+draws were counted per part and pass (`onBeforeRender`, `onBeforeShadow`) and the programs read
+from `renderer.properties`; `tests/e2e.mjs` passes with the parts (78 of 78 checks: the flight
+path marker held above the coaming at 22 deg AoA, the interior analysis 3,827 faces, no gap).
 
 ## Credits and licences
 
@@ -304,3 +349,10 @@ it was copied.
   vision (above); until then a dark-adapted night greys the PCD's darker colours like the scene.
 * The rig's Stick and Throttle hinges are rebuilt at run time; the export
   (`scripts/f35/rig.py`: the bones' roll) should give them the right axes.
+* The rebuilt parts are made at start-up on the main thread (0.2-0.3 s here with the code cold);
+  the export (`scripts/f35/canopy.py`, `cockpit.py`) could make the same shapes, and the matching
+  builders in `parts.js` would go. The wingmen keep the glb's (`parts.js` works on the player's
+  jet only). A part whose glb source moves out of its box (`SHIELD_BOX`, `SEAT_BOXES`) or whose
+  sections no longer match stays as exported, with a console warning.
+* No rear-view mirrors or handholds on the bow (no public evidence on the F-35) and no legends on
+  the console panels.

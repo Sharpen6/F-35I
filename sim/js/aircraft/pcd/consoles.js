@@ -27,8 +27,8 @@ export const CONSOLE = {
 
 /**
  * A console's panels. c: {x0, x1 (its top's x extent, root frame), z0, z1, y (the top)}, rows:
- * the switch rows' z (sorted), holes: [{x0, x1, z0, z1}] (features standing on the top).
- * Returns {base, plates, fasteners} (MeshBuilders filled, root frame) and the panel count.
+ * the switch rows' z (sorted), holes: [{x0, x1, z0, z1}] (features standing on the top), out:
+ * the MeshBuilders {base, plates, fasteners} it adds to (root frame). Returns the panel count.
  */
 export function buildConsole(c, rows, holes, out) {
   const K = CONSOLE;

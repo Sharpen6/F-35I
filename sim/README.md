@@ -191,6 +191,12 @@ chain's night vision to leave them in colour. All procedural, no new data (the m
 the terrain imagery credited below). Design, overridden materials and costs:
 `js/aircraft/pcd/README.md`.
 
+The canopy bow, the coaming, the display's bezel, the side consoles, the seat's headbox and beams,
+the canopy's side frame and the sills are rebuilt at start-up from the glb's own parts, in their
+places and sizes: a machined bow section with sealant and fastener rows, a hooded anti-glare
+coaming, Dzus-fastened console panels, a lined canopy frame with its bolts and seal, a rounded
+sill cap (`js/aircraft/pcd/parts.js`; `?ckparts=0` shows the glb's).
+
 ## Helmet display
 
 Green symbology as in the F-35's helmet, drawn crisp at the screen's resolution. In the

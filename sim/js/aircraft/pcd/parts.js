@@ -61,13 +61,13 @@ export class CockpitParts {
       this.stats.off = true;
       return;
     }
+    const t0 = performance.now();
     this.root.traverse((o) => {
       if (!o.isMesh || !o.material || Array.isArray(o.material)) return;
       const n = o.material.name || '';
       if (!this.byMat.has(n)) this.byMat.set(n, []);
       this.byMat.get(n).push(o);
     });
-    const t0 = performance.now();
     this.root.updateMatrixWorld(true);
     this._rootInv = new THREE.Matrix4().copy(this.root.matrixWorld).invert();
     const proto = ((this.byMat.get('F35_cockpit_panel') || this.byMat.get('F35_cockpit') || [])[0] || {}).material;
@@ -97,7 +97,10 @@ export class CockpitParts {
     }
   }
 
-  /** A new mesh next to `like` (same parent, transform, material unless given, shadow flags). */
+  /**
+   * A new mesh next to `like` (same parent, transform, material unless given, shadow flags; the
+   * environment makes every mesh of the jet a caster of the sun's shadow and a receiver anyway).
+   */
   _add(geometry, like, name, material = like.material) {
     const m = new THREE.Mesh(geometry, material);
     m.name = name;
@@ -312,7 +315,7 @@ export class CockpitParts {
     const L = new MeshBuilder(), LM = new MeshBuilder();
     const lined = buildLiner(st, L, LM);
     const inv = Mf.clone().invert();
-    const bow = this.materials.get('F35_canopy_bow') || (this.byMat.get('F35_canopy_bow') || [])[0]?.material;
+    const bow = (this.byMat.get('F35_canopy_bow') || [])[0]?.material;
     let tris = 0;
     if (lined > 0 && bow) {
       for (const [g, mat, name] of [[L.geometry(), bow, 'Canopy_Frame_Liner'], [LM.geometry(), this.materials.get('F35_canopy_fastener'), 'Canopy_Frame_Bolts']]) {
