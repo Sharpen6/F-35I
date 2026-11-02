@@ -508,8 +508,10 @@ export class Buildings {
     const h = Math.max(t.maxTop - t.minBase, 1);
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(TILE / 2, (t.maxTop + t.minBase) / 2, TILE / 2),
       Math.hypot(TILE / 2 + MARGIN, TILE / 2 + MARGIN, h / 2) + 20);
-    const material = this._boxMaterialProto && !this._boxMaterialProto.userData.used ? this._boxMaterialProto : this._material(true);
-    material.userData.used = true;
+    // a material of its own (its uFade is per tile); never the prototype, which keeps the program
+    // alive when every tile has gone (a teleport): handed out, it went with its tile and the next
+    // tile's material compiled the program again in a frame (the 110-160 ms Dead Sea start)
+    const material = this._material(true);
     material.uniforms.uFade.value.forEach((v) => v.set(0, 0, 0, 0));
     t.boxMat = material;
     t.fade = material.uniforms.uFade;
@@ -589,7 +591,6 @@ export class Buildings {
     if (t.mesh) {
       this.group.remove(t.mesh);
       t.mesh.geometry.dispose();
-      if (t.boxMat === this._boxMaterialProto) this._boxMaterialProto = null;
       t.boxMat.dispose();
       t.boxDither?.dispose();
       t.mesh = null;
