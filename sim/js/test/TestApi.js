@@ -175,7 +175,10 @@ export function installTestApi(app, { H, KT, DEG }) {
      */
     async settle(ms = 1500) {
       const t0 = performance.now();
-      while (performance.now() - t0 < ms) {
+      // then go on (up to 20 s more) while terrain tiles still stream in or a terrain quality tier
+      // still compiles in the background, so a screenshot or a film frame never catches them
+      const busy = () => { const T = app.terrain; return !!T && ((T.stats?.tilesLoading || 0) > 0 || !!T.qualityPending); };
+      while (performance.now() - t0 < ms || (busy() && performance.now() - t0 < ms + 20000)) {
         app._render(0.016, app.input.update(0), 1, false);
         app.env.update(app.camera, 0.04);
         await new Promise((r) => setTimeout(r, 40));

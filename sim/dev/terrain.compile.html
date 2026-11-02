@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Terrain shader check</title>
+<!--
+  Compiles the terrain's programs (base and L0 tile material, each at the three ground detail
+  tiers GROUND_DETAIL 0 / 1 / 2 of the low / medium / high qualities, with and without the
+  sun's shadow map) on the GPU this page runs on, without any terrain data, and lists per program:
+  compile / link status with the driver's log, and the sampler units it uses (vertex +
+  fragment; ANGLE on D3D11 allows 16). Then builds the generated ground textures
+  (detailTextures.js) and checks each material layer: it wraps without a seam, and its coarse
+  mips are flat (a tile whose coarse mips vary shows its repetition as a grid from a distance).
+  Open it from the local server: /dev/terrain.compile.html
+  The result is also in window.__terrainCheck (for scripts).
+-->
+<script type="importmap">{ "imports": { "three": "../vendor/three/build/three.module.js" } }</script>
+<style>
+  body { font: 14px/1.4 ui-monospace, Consolas, monospace; background: #15171a; color: #d8dadc; padding: 16px; }
+  .ok { color: #7fd37f; } .bad { color: #ff7a7a; } pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h3>Terrain shaders on this GPU</h3>
+<pre id="out">compiling...</pre>
+<script type="module">
+import * as THREE from 'three';
+import { TERRAIN_VERT, TERRAIN_FRAG, MAX_RWY } from '../js/terrain/terrainShaders.js';
+import { makeDetailArray, DETAIL_LAYERS, DETAIL_SIZE } from '../js/terrain/detailTextures.js';
+
+const out = document.getElementById('out');
+const lines = [];
+const say = (s, cls) => { lines.push(cls ? `<span class="${cls}">${s}</span>` : s); out.innerHTML = lines.join('\n'); };
+
+const canvas = document.createElement('canvas');
+canvas.width = canvas.height = 64;
+const renderer = new THREE.WebGLRenderer({ canvas });
+const gl = renderer.getContext();
+const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+say(`GPU: ${dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)}`);
+say(`texture units: ${gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS)} fragment, ${gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS)} vertex, `
+  + `${gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS)} combined; max anisotropy ${renderer.capabilities.getMaxAnisotropy()}`);
+
+function material(l0, gd) {
+  // uniforms are irrelevant for compiling; the light uniforms are needed because lights: true
+  const uniforms = THREE.UniformsUtils.clone(THREE.UniformsLib.lights);
+  if (l0) uniforms.uRwyA = { value: Array.from({ length: MAX_RWY }, () => new THREE.Vector4()) };
+  return new THREE.ShaderMaterial({
+    name: `${l0 ? 'TerrainL0' : 'Terrain'} GROUND_DETAIL ${gd}`, uniforms, vertexShader: TERRAIN_VERT, fragmentShader: TERRAIN_FRAG,
+    defines: { ...(l0 ? { USE_L0: 1 } : {}), GROUND_DETAIL: gd }, lights: true, fog: false,
+  });
+}
+
+const SAMPLERS = new Set([gl.SAMPLER_2D, gl.SAMPLER_3D, gl.SAMPLER_CUBE, gl.SAMPLER_2D_SHADOW, gl.SAMPLER_2D_ARRAY,
+  gl.SAMPLER_2D_ARRAY_SHADOW, gl.SAMPLER_CUBE_SHADOW, gl.INT_SAMPLER_2D, gl.INT_SAMPLER_3D, gl.INT_SAMPLER_CUBE,
+  gl.INT_SAMPLER_2D_ARRAY, gl.UNSIGNED_INT_SAMPLER_2D, gl.UNSIGNED_INT_SAMPLER_3D, gl.UNSIGNED_INT_SAMPLER_CUBE,
+  gl.UNSIGNED_INT_SAMPLER_2D_ARRAY]);
+
+const result = { ok: true, programs: [] };
+const errors = [];
+const origError = console.error;
+console.error = (...a) => { errors.push(a.join(' ')); origError(...a); };
+const camera = new THREE.PerspectiveCamera(60, 1, 1, 1000);
+for (const shadows of [false, true]) {
+  const scene = new THREE.Scene();
+  renderer.shadowMap.enabled = shadows;
+  const sun = new THREE.DirectionalLight(0xffffff, 1);
+  sun.castShadow = shadows;
+  scene.add(sun);
+  const geo = new THREE.PlaneGeometry(1, 1);
+  for (const l0 of [false, true]) {
+    for (const gd of [0, 1, 2]) {
+      const m = new THREE.Mesh(geo, material(l0, gd));
+      m.receiveShadow = shadows;
+      m.frustumCulled = false;
+      scene.add(m);
+    }
+  }
+  const t0 = performance.now();
+  try { renderer.compile(scene, camera); renderer.render(scene, camera); } catch (e) { errors.push(String(e)); }
+  say(`${shadows ? 'with' : 'without'} the shadow map: compiled in ${(performance.now() - t0).toFixed(0)} ms`);
+}
+console.error = origError;
+
+for (const p of renderer.info.programs || []) {
+  if (!/Terrain/.test(p.name)) continue;
+  const prog = p.program;
+  const linked = gl.getProgramParameter(prog, gl.LINK_STATUS);
+  const names = [];
+  if (linked) {
+    const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) {
+      const u = gl.getActiveUniform(prog, i);
+      if (SAMPLERS.has(u.type)) names.push(u.name);
+    }
+  }
+  const ok = linked && !p.diagnostics && names.length <= 16;
+  result.ok &&= ok;
+  result.programs.push({ name: p.name, linked, samplers: names.length, names, diagnostics: p.diagnostics || null });
+  say(`${ok ? 'OK ' : 'BAD'} ${p.name}: ${linked ? 'linked' : 'NOT LINKED'}, ${names.length} samplers (${names.join(', ')})`, ok ? 'ok' : 'bad');
+  if (p.diagnostics) say(JSON.stringify(p.diagnostics, null, 1).slice(0, 4000), 'bad');
+}
+if (!result.programs.length) { result.ok = false; say('no terrain program was built', 'bad'); }
+
+// ---- the generated ground textures ----
+say('\nground texture layers (std of the albedo pattern B and mask A in 8-bit steps: of the texels, of the'
+  + ' means over the layer\'s flattening blocks and over blocks twice that size; seam = step across the tile edge / largest step inside):');
+console.error = (...a) => { errors.push(a.join(' ')); origError(...a); };
+let detail = null;
+const t1 = performance.now();
+try { detail = makeDetailArray(renderer, 1); } catch (e) { errors.push(String(e)); }
+console.error = origError;
+if (detail) {
+  say(`built in ${(performance.now() - t1).toFixed(0)} ms`);
+  const N = DETAIL_SIZE;
+  const px = new Uint8Array(N * N * 4);
+  // std over the box means of k x k texel blocks (k = 1: the texels themselves), channel ch
+  const blockStd = (ch, k) => {
+    const n = N / k, m = new Float64Array(n * n);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) m[(y / k | 0) * n + (x / k | 0)] += px[(y * N + x) * 4 + ch];
+    let s = 0, s2 = 0;
+    for (const v of m) { s += v / (k * k); s2 += (v / (k * k)) ** 2; }
+    return Math.sqrt(Math.max(0, s2 / m.length - (s / m.length) ** 2));
+  };
+  // seams: the mean |step| between neighbouring columns (rows) across the wrap, over the largest
+  // such step between any two neighbouring columns (rows) inside the tile, channel ch
+  const seam = (ch) => {
+    let worst = 0;
+    for (const [sx, sy] of [[4, N * 4], [N * 4, 4]]) {          // columns, then rows
+      const step = new Float64Array(N);                        // step[j]: between j - 1 and j (0: the wrap)
+      for (let j = 0; j < N; j++) {
+        const jm = (j + N - 1) % N;
+        for (let i = 0; i < N; i++) step[j] += Math.abs(px[j * sx + i * sy + ch] - px[jm * sx + i * sy + ch]);
+      }
+      let inner = 1e-6;
+      for (let j = 1; j < N; j++) inner = Math.max(inner, step[j]);
+      worst = Math.max(worst, step[0] / inner);
+    }
+    return worst;
+  };
+  result.layers = [];
+  for (const [name, L] of Object.entries(DETAIL_LAYERS)) {
+    if (!L.flat) continue;
+    renderer.setRenderTarget(detail, L.index);
+    gl.readPixels(0, 0, N, N, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    renderer.setRenderTarget(null);
+    const r = { name, seam: Math.max(seam(0), seam(1), seam(2), seam(3)) };
+    for (const ch of [2, 3]) {
+      const c = ch === 2 ? 'B' : 'A';
+      r[c] = [blockStd(ch, 1), blockStd(ch, L.flat), blockStd(ch, 2 * L.flat)];
+    }
+    // flat: over blocks twice the flattening size both patterns vary by less than 2 steps or
+    // a tenth of their own variation (the mask is clamped to 0..1, so it keeps a little)
+    r.ok = r.seam < 1.1 && ['B', 'A'].every((c) => r[c][2] < Math.max(2, 0.1 * r[c][0]));
+    result.ok &&= r.ok;
+    result.layers.push(r);
+    const f = (v) => v.map((x) => x.toFixed(1).padStart(5)).join(' ');
+    say(`${r.ok ? 'OK ' : 'BAD'} ${name.padEnd(7)} B ${f(r.B)}   A ${f(r.A)}   seam ${r.seam.toFixed(2)}`, r.ok ? 'ok' : 'bad');
+  }
+  detail.dispose();
+} else {
+  result.ok = false;
+  say('the ground textures were not built', 'bad');
+}
+
+for (const e of errors) say(e.slice(0, 4000), 'bad');
+result.errors = errors;
+result.ok &&= errors.length === 0;
+say(result.ok ? '\nall terrain programs compile and fit the sampler budget; the ground textures tile cleanly' : '\nPROBLEMS above', result.ok ? 'ok' : 'bad');
+window.__terrainCheck = result;
+</script>
+</body>
+</html>

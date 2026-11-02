@@ -35,6 +35,12 @@ NAMES = {  # friendlier display names
     'IL-0023': 'Jerusalem Atarot (closed)', 'IL-0007': 'Rishon LeZion',
 }
 TYPES = ('small_airport', 'medium_airport', 'large_airport')
+# Paved overruns the saturation test below measures too short: it stops where the extension is
+# paler, more yellow concrete than the runway. Found by overrun_check.py (luminance strip in line
+# with the runway, 2021 imagery) and confirmed by eye on its contact sheet; keyed (ICAO, end).
+# Used as a lower bound, so the heights stage flattens the whole blast pad and airports.json
+# carries it (the runtime's Surface.js OVERRUN_FIX only covers data sets built before this).
+OVERRUN_CONFIRMED_M = {('LLEK', '36'): 390.0, ('LLEK', '15R'): 390.0, ('LL59', '21'): 300.0}
 
 
 def log(*a):
@@ -369,6 +375,16 @@ def run(cache, out):
             fr2 = Frame(float(xa2), float(za2), float(xb2), float(zb2))
             ext, sat_stats = paved_extent(samp, fr2, width)
             (ov_a, ct_a), (ov_b, ct_b) = ext
+            for k in (0, 1):
+                conf = OVERRUN_CONFIRMED_M.get((entry['icao'], ids[k]))
+                ov_k = ov_a if k == 0 else ov_b
+                if conf is not None and conf > ov_k:
+                    notes.append(f'overrun beyond {ids[k]}: {ov_k:.0f} m measured, {conf:.0f} m confirmed '
+                                 '(paler concrete extension, overrun_check.py): confirmed length used')
+                    if k == 0:
+                        ov_a = conf
+                    else:
+                        ov_b = conf
             if rot_note:
                 notes.insert(0, rot_note)
             if amb_note:

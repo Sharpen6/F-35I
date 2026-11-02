@@ -148,3 +148,39 @@ of +-64 km (the core plus a 12.8 km ring) so the core edges and the far area joi
 `build.py` (CLI and stage order), `grid.py` (projection, grids, height encoding), `fetch.py`,
 `landcover.py`, `colorgrade.py`, `color.py`, `runways.py`, `heights.py`, `outputs.py` (airports,
 spawns, manifest), `osmcheck.py`, `previews.py`.
+
+`overrun_check.py` is a separate check of a built set (it writes nothing into it): it follows
+the pavement beyond every runway end in the colour tiles and flags ends where it runs well past
+the painted overrun (`overrun_m`), with a contact sheet to look at
+(`/home/claude/simdata/terrain_extra/overrun_check.jpg` by default). The `runways` stage's
+saturation test stops early where an overrun is paler, yellower concrete than the runway; the
+cases confirmed on that sheet (Tel Nof 36 and 15R 390 m, Palmachim 21 300 m) are applied by the
+`runways` stage itself (`OVERRUN_CONFIRMED_M`, a lower bound, with a note in the report), so
+the `heights` stage flattens the whole blast pad and `airports.json` carries it. Data sets built
+before that (the delivered one: 145 / 195 / 25 m) get the lengths from the runtime fallback in
+`sim/js/terrain/Surface.js` (`OVERRUN_FIX`); their ground under the outer part of those pads is
+the DEM, up to 0.8 m off a straight grade with up to 2.3 % cross slope, which a rebuild of the
+`runways,heights,json,previews,manifest` stages removes (0.07 m, 0.02 %; measured by
+re-running the flattening on the delivered tiles).
+
+## Field data (`fields.py`, optional)
+
+`fields.py` adds `data/terrain_extra/fields/` next to a built set (it only reads the set): per
+10 m texel of every core tile the land cover class (WorldCover, plus orchards, vineyards and
+greenhouses mapped in OpenStreetMap), the row direction and a random number of the field the
+texel lies in; the terrain shader draws crop rows, orchards, vineyards and greenhouses from it.
+
+    python3 sim/tools/terrain/fields.py [--data sim/data/terrain] [--out DIR] [--cache DIR]
+                                        [--stages fetch,prepare,segment,check]
+
+`fetch` reads OpenStreetMap land use for the core from Overture Maps (anonymous HTTPS range
+requests, a few tens of MB); `prepare` makes mosaics of the whole core (~0.5 GB in the cache);
+`segment` (`fields_segment.mjs`, node) segments the whole core in tile windows with 800 m of
+context and stitches the regions across tile edges, so a field cut by a tile edge keeps its rows
+(over the whole core, neighbouring crop texels more than 15 deg apart in row direction: 7.5 % of
+the pairs across tile edges, 5.2 % inside the tiles; 44-56 % across the edges when every tile is
+analysed on its own; `sim/dev/terrain.analysis.test.mjs` checks it); `check` writes `check.txt`
+(statistics) and previews. The delivered run took ~4 min on 4 cores and wrote 19 MB (256 gzip tiles,
+`index.json` with the attribution and the Overture release). Field outlines, orchards, vineyards
+and greenhouses: © OpenStreetMap contributors, ODbL 1.0, via Overture Maps Foundation. Without
+the folder the app analyses each imagery tile on its own in the browser.

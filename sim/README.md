@@ -29,7 +29,8 @@ MIME types and no caching of the code. Any other static web server works too; op
 `index.html` as a file does not (browsers block ES modules from `file://`).
 
 **The data.** `sim/data/` is generated and not in git: `data/terrain/` comes from
-`sim/tools/terrain` (Copernicus DEM, ESA WorldCover imagery, OurAirports; see its README) and
+`sim/tools/terrain` (Copernicus DEM, ESA WorldCover imagery, OurAirports; see its README;
+its `fields.py` adds the optional field data in `data/terrain_extra/fields/`) and
 `data/aircraft/` from `sim/tools/aircraft` (the Blender model exported to glTF; see its README).
 Without it the loading screen says what is missing; `index.html?stubs=1` runs the app with
 stand-ins (a flat field with one runway, a box-and-wings jet and simple kinematics) to try the
@@ -241,6 +242,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `acfx=0` | none of the aircraft's effects (vapour, contrail, tyre smoke, landing-light pool); `vapour=0`, `tyresmoke=0`, `landingpool=0` one each |
 | `roads=0` / `airportlights=0` / `traffic=0` | no roads, railways and airfield surfaces / no airfield lights / no night traffic (see Roads) |
 | `bshadows=0` / `blights=0` | no ground shadows of the buildings / no obstruction lights |
+| `terrainDetail=0` / `terrainShadows=0` / `cityLights=0` | terrain: near ground materials, hill shadows, city lights off (`js/terrain/README.md`) |
 
 ## Vegetation
 
@@ -542,6 +544,13 @@ vapour first shows.
   Microsoft ML Buildings, ODbL 1.0, via Overture Maps Foundation); the tree and palm meshes and
   their impostor textures are made procedurally at start-up (`js/terrain/vegetation`), no model
   or image files.
+* **Field data** (`data/terrain_extra/fields/`, from `sim/tools/terrain/fields.py`): field
+  outlines, orchards, vineyards and greenhouses © OpenStreetMap contributors, ODbL 1.0, via
+  Overture Maps Foundation (base theme, land use); the fields themselves are segmented from the
+  imagery above. Optional: without it each imagery tile is analysed in the browser.
+* **Terrain detail** (field rows, crops, orchards, vineyards, greenhouses, terraces, sand,
+  salt, the runway digits), the terrain's hill shadows and the city lights are procedural,
+  made in the browser from the data above; no other textures or data.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here. The sky, stars, moon and clouds are procedural (formulas: Hillaire 2020

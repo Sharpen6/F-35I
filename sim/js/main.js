@@ -149,7 +149,8 @@ class App {
       // the HDR frame and its output transform (the canvas has no MSAA or depth of its own then)
       if (POST && !STUBS) this.post = new (await import('./env/Post.js')).Post({ renderer: this.renderer, env: this.env, quality: this.settings.quality });
       this.effects = new Effects(this.scene);
-      this.terrain = new Terrain({ renderer: this.renderer, scene: this.scene, env: this.env, baseUrl: 'data/terrain/' });
+      // quality: compile only the tier in use at load (Terrain.js TERRAIN_QUALITY)
+      this.terrain = new Terrain({ renderer: this.renderer, scene: this.scene, env: this.env, baseUrl: 'data/terrain/', quality: this.settings.quality });
       // lighting: ground albedo around the camera (land cover), lowest ground nearby (Dead Sea)
       this.env.setTerrain?.(this.terrain);
       this.visual = new AircraftVisual({ scene: this.scene, baseUrl: 'data/aircraft/' });
@@ -269,13 +270,16 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+    // terrain quality tiers (ground detail, terrain shadow map size): Terrain.js TERRAIN_QUALITY
+    if (this.terrain.module) this.addModule(this.terrain.module);
     // cockpit track; app.cockpit only while it is on (?cockpit=0: the glb's cockpit as exported, and
     // modules that would drive its displays do not step aside for a module that is not there)
     if (!STUBS) { const ck = new Cockpit(ctx); if (ck.enabled) this.cockpit = this.addModule(ck); }
     this.addModule(new Buildings(ctx));
     if (!STUBS) this.addModule(new Clouds(ctx));          // lighting: clouds (?clouds=, menu Weather), drawn by Post
     this.addModule(new AircraftFX(ctx));      // aircraft: vapour, contrail, tyre smoke, landing-light pool, burner quality
-    this.addModule(new Roads(ctx));                      // js/world/Roads.js (owns js/world/AirportLights.js)
+    // js/world/Roads.js (owns js/world/AirportLights.js); the terrain draws only the far city glow beyond its lamps
+    this.terrain.lampSource = this.addModule(new Roads(ctx));
     if (!STUBS) this.addModule(new DisplayLevels(ctx));   // lighting fix: PCD, tablet, LEDs = level / exposure (steps aside for app.cockpit)
     this.addModule(new Scatter(ctx));                      // vegetation: js/terrain/Scatter.js
   }

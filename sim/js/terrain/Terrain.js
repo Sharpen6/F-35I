@@ -5,38 +5,114 @@
 //   // every frame, after env.update(camera, dt):
 //   terrain.update(camera);
 //   terrain.heightAt(x, z); terrain.normalAt(x, z, v3); terrain.surfaceAt(x, z);
+//   terrain.sunVisibilityAt(x, y, z);      // 0 = in the shadow of the hills, 1 = sunlit
+//   app.addModule(terrain.module);         // quality settings
 //
 // Rendering: one CDLOD quadtree over the whole 409.6 km far area (js/terrain/QuadTree.js),
 // drawn as instanced 64 x 64 grid patches whose vertex shader reads the heights from
 // integer textures, morphs between levels and bends with the earth's curvature. Patches
 // near the camera (6.4 km and smaller) are drawn with a material for their L0 colour tile
 // (6.25 m / px); at most MAX_TILES tiles are resident, streamed in by distance and faded in.
+// Tiles are fetched, decoded and analysed (field and row directions, fieldAnalysis.js) in
+// workers (tileWorker.js). The terrain's shadows come from horizon maps (horizonMap.js).
 
 import * as THREE from 'three';
 import {
-  HeightField, CORE_HALF, FAR_HALF, TILE_M, TILES, CORE_N, FAR_N, CORE_SPACING, FAR_SPACING, LEVELS,
+  HeightField, CORE_HALF, FAR_HALF, TILE_M, TILES, CORE_N, FAR_N, CORE_SPACING, FAR_SPACING,
 } from './HeightField.js';
 import { QuadTree, GRID, RANGE0, MORPH_START, MORPH_END } from './QuadTree.js';
 import { Runways, LandCover, surfaceType } from './Surface.js';
 import {
-  makeHeightTexture, makeCodeTexture, makeColorTexture, renderNormalMap, makeDetailTexture,
-  makeWaterNormalTexture, makeDigitTexture, floatTargetsSupported,
+  makePackedHeightTexture, makePackedCodeTexture, makeColorTexture, makeTileDataTexture, releasePacked,
+  renderNormalMap, floatTargetsSupported, FAR_HEIGHT_X,
 } from './textures.js';
+import { makeDetailArray } from './detailTextures.js';
 import { TERRAIN_VERT, TERRAIN_FRAG, MAX_RWY } from './terrainShaders.js';
+import { HorizonMap } from './horizonMap.js';
+import { packCodes, DATA_N } from './fieldAnalysis.js';
 import { fetchJSON, fetchU16, fetchBitmap, fetchCodes, runPool } from './loaders.js';
 
-/** Most L0 colour tiles kept on the GPU at once (each ~6 MB with mipmaps). */
+/** Most L0 colour tiles kept on the GPU at once (each ~6 MB with mipmaps, + 0.8 MB data). */
 export const MAX_TILES = 64;
 /** L0 tiles are wanted within this 3D distance of the camera. */
 const TILE_RANGE = 17000;
 const MAX_INFLIGHT = 4;
+const TILE_WORKERS = 2;
 const BASE_CAPACITY = 1024;
 const TILE_CAPACITY = 64;
 const FADE_MS = 700;
 const DEFAULT_ATTRIBUTION = 'Copernicus DEM GLO-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018, '
   + 'provided under COPERNICUS by the European Union and ESA | ESA WorldCover 2021 (CC BY 4.0) | OurAirports (public domain)';
 
+/**
+ * Per quality: near ground materials (the GROUND_DETAIL define of terrainShaders.js: 0 none,
+ * 1 without imagery-guided field edges, bicubic imagery, the second texture layers, single
+ * orchard crowns (hedgerow bands instead) and bales, 2 all), horizon map size (horizonMap.js).
+ */
+export const TERRAIN_QUALITY = {
+  low: { groundDetail: 0, horizon: 'low' },
+  medium: { groundDetail: 1, horizon: 'medium' },
+  high: { groundDetail: 2, horizon: 'high' },
+};
+
+/**
+ * The city lights' brightness: the share of built-up land (WorldCover 50) around every 100 m
+ * cell of the core and every 400 m cell of the far area, over a triangle about 3 km wide on
+ * either side (two box blurs), as 0..255 in the free corner of the packed land cover texture
+ * (x 2048..3071 core, 3072..4095 far, y 4096..5119; textures.js), for urbanShare() in the shader.
+ */
+function writeUrbanShare(dst, W, ov, ovN, far, farN) {
+  const N = 1024;
+  const share = (codes, n, k) => {
+    const out = new Float32Array(N * N);
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        let s = 0;
+        for (let b = 0; b < k; b++) {
+          const row = (j * k + b) * n + i * k;
+          for (let a = 0; a < k; a++) if (codes[row + a] === 50) s++;
+        }
+        out[j * N + i] = s / (k * k);
+      }
+    }
+    return out;
+  };
+  // box blur of radius r along rows then columns (edges: mean of the cells inside)
+  const blur = (src, r) => {
+    const tmp = new Float32Array(N * N), out = new Float32Array(N * N);
+    for (let pass = 0; pass < 2; pass++) {
+      const a = pass ? tmp : src, b = pass ? out : tmp;
+      const at = pass ? (p, q) => q * N + p : (p, q) => p * N + q;   // (line, index along it)
+      for (let line = 0; line < N; line++) {
+        let s = 0, c = 0;
+        for (let q = 0; q < r; q++) { s += a[at(line, q)]; c++; }
+        for (let q = 0; q < N; q++) {
+          if (q + r < N) { s += a[at(line, q + r)]; c++; }
+          if (q - r - 1 >= 0) { s -= a[at(line, q - r - 1)]; c--; }
+          b[at(line, q)] = s / c;
+        }
+      }
+    }
+    return out;
+  };
+  const put = (v, x0) => {
+    for (let j = 0; j < N; j++) {
+      const row = (4096 + j) * W + x0;
+      for (let i = 0; i < N; i++) dst[row + i] = Math.round(255 * Math.min(1, v[j * N + i]));
+    }
+  };
+  if (ovN === 4 * N) put(blur(blur(share(ov, ovN, 4), 15), 15), 2048);
+  if (farN === 2 * N) put(blur(blur(share(far, farN, 2), 4), 4), 3072);
+}
+
 const tileKey = (ix, iz) => `${ix},${iz}`;
+
+function urlSwitch(name) {
+  try {
+    const p = new URLSearchParams(globalThis.location?.search || '');
+    return p.has(name) ? p.get(name) !== '0' : null;
+  } catch (e) { return null; }
+}
 
 function gridTemplate(n) {
   const pos = new Float32Array((n + 1) * (n + 1) * 3);
@@ -122,12 +198,83 @@ class PatchGroup {
   }
 }
 
+/** Loads, decodes and analyses L0 tiles in module workers; falls back to the main thread. */
+class TileLoader {
+  constructor(count) {
+    this.workers = [];
+    this.jobs = new Map();
+    this._id = 0;
+    this._next = 0;
+    if (typeof Worker === 'undefined') return;
+    try {
+      for (let i = 0; i < count; i++) {
+        const w = new Worker(new URL('./tileWorker.js', import.meta.url), { type: 'module' });
+        w.onmessage = (e) => this._done(e.data);
+        w.onerror = (e) => { console.warn('terrain: tile worker error', e.message || e); this._fail(w); };
+        this.workers.push(w);
+      }
+    } catch (e) {
+      console.warn('terrain: no tile workers, loading on the main thread', e);
+      this.workers = [];
+    }
+  }
+
+  /**
+   * fieldsUrl: the data build's field data of the tile (null: analyse the tile in the worker).
+   * -> Promise<{bitmap, codes: {codes, width, height}, data: Uint16Array}>
+   */
+  load(colorUrl, lcUrl, fieldsUrl = null) {
+    if (!this.workers.length) return this._mainThread(colorUrl, lcUrl);
+    const id = ++this._id;
+    const w = this.workers[this._next++ % this.workers.length];
+    return new Promise((resolve, reject) => {
+      this.jobs.set(id, { resolve, reject, worker: w, colorUrl, lcUrl });
+      w.postMessage({ id, colorUrl, lcUrl, fieldsUrl });
+    });
+  }
+
+  async _mainThread(colorUrl, lcUrl) {
+    // no workers (very old browsers): land cover only, rows along x
+    const [bitmap, lc] = await Promise.all([fetchBitmap(colorUrl), fetchCodes(lcUrl)]);
+    return { bitmap, codes: lc, data: packCodes(lc.codes, lc.width) };
+  }
+
+  _done(m) {
+    const job = this.jobs.get(m.id);
+    if (!job) { m.bitmap?.close?.(); return; }
+    this.jobs.delete(m.id);
+    if (m.error) job.reject(new Error(m.error));
+    else job.resolve({ bitmap: m.bitmap, codes: { codes: m.codes, width: m.width, height: m.width }, data: m.data });
+  }
+
+  _fail(w) {
+    // a worker that cannot start (e.g. no module workers): finish its jobs on the main thread
+    this.workers = this.workers.filter((x) => x !== w);
+    w.terminate();
+    for (const [id, job] of this.jobs) {
+      if (job.worker !== w) continue;
+      this.jobs.delete(id);
+      this._mainThread(job.colorUrl, job.lcUrl).then(job.resolve, job.reject);
+    }
+  }
+
+  dispose() { for (const w of this.workers) w.terminate(); this.workers = []; }
+}
+
 export class Terrain {
-  constructor({ renderer, scene, env, baseUrl = 'data/terrain/' }) {
+  /**
+   * fieldsUrl: the field data of the data build (sim/tools/terrain/fields.py), by default
+   * data/terrain_extra/fields/ beside data/terrain/; '' = none (each tile is analysed on its own).
+   * quality: the one to load with (setQuality later works too, but the load then compiles the
+   * programs of 'high' first).
+   */
+  constructor({ renderer, scene, env, baseUrl = 'data/terrain/', fieldsUrl, quality = 'high' }) {
     this.renderer = renderer;
     this.scene = scene;
     this.env = env;
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
+    this.fieldsUrl = fieldsUrl ?? '../terrain_extra/fields/';
+    this.fields = null;           // index.json of the field data when it is there
     this.group = new THREE.Group();
     this.group.name = 'Terrain';
     this.group.matrixAutoUpdate = false;
@@ -149,12 +296,33 @@ export class Terrain {
     // ground at noon comes out about as the imagery looks and keeps its relief shading.
     this.albedoGain = 0.7;
     /**
+     * Switches (also ?terrainDetail=0, ?terrainShadows=0, ?cityLights=0 in the URL):
+     * groundDetail: the near ground materials (rows, furrows, rocks ...) and the smooth
+     * (bicubic) magnification of the imagery; shadows: the terrain's shadows on itself;
+     * cityLights: street lights at night (a gain, 0 = off).
+     */
+    this.groundDetail = urlSwitch('terrainDetail') ?? true;
+    this.shadows = urlSwitch('terrainShadows') ?? true;
+    this.cityLights = urlSwitch('cityLights') === false ? 0 : 1;
+    this.quality = TERRAIN_QUALITY[quality] ? quality : 'high';
+    // The ground materials' tier the materials are compiled with (GROUND_DETAIL), and per tier
+    // compiled so far two materials that are never drawn nor disposed: they keep its programs
+    // (with and without the sun's shadow map) linked, so a quality change back, or new L0 tiles
+    // after every tile was evicted (a teleport), never compile the app's largest shader again.
+    this._gd = TERRAIN_QUALITY[this.quality].groundDetail;
+    this._tiers = new Map();
+    this._tierJob = 0;
+    /** true while the programs of a new quality compile in the background (the old ones draw) */
+    this.qualityPending = false;
+    /**
      * lod: LOD level colours; wireframe; runways: false hides the procedural runway paint;
      * heightProbe: the terrain writes (height, x, z) of its surface instead of colour, for
-     * tests that compare the rendered surface with heightAt (render into a float target).
+     * tests that compare the rendered surface with heightAt (render into a float target);
+     * view: false colours: 1 land cover classes, 2 row directions, 3 near detail weight (r),
+     * pattern fade (g), detail sun visibility (b), 4 crop state (stubble r, green g, ploughed b).
      */
-    this.debug = { lod: false, wireframe: false, runways: true, heightProbe: false };
-    this.stats = { patches: 0, triangles: 0, groups: 0, tilesResident: 0, tilesLoading: 0, tilesWanted: 0 };
+    this.debug = { lod: false, wireframe: false, runways: true, heightProbe: false, view: 0 };
+    this.stats = { patches: 0, triangles: 0, groups: 0, tilesResident: 0, tilesLoading: 0, tilesWanted: 0, horizonComputes: 0, horizonMs: 0 };
 
     this.tiles = new Map();
     this._tileGroupPool = [];
@@ -166,6 +334,35 @@ export class Terrain {
     this._projScreen = new THREE.Matrix4();
     this._box = new THREE.Box3();
     this._maxAniso = renderer.capabilities.getMaxAnisotropy();
+    this.horizon = new HorizonMap();
+    this.horizon.setQuality(TERRAIN_QUALITY[this.quality].horizon);
+    this.horizon.setRenderer(renderer);
+    this._loader = null;
+    /**
+     * For app.addModule(): the quality setting, and the terrain's shadow on the aircraft's sun
+     * light (Terrain.update itself is called by main.js before the modules).
+     */
+    this.module = {
+      name: 'terrain',
+      setQuality: (q) => this.setQuality(q),
+      update: (f) => this._shadeSunLight(f),
+      reset: () => { this._sunVisInit = false; },
+      setTime: () => { this._sunVisInit = false; },
+    };
+    this.sunOcclusion = 1;          // terrain shadow on the aircraft (sunVisibilityAt at the jet), smoothed
+    this._sunVisInit = false;
+    this._sunLightBase = 1;         // the sun light's intensity as Environment wrote it
+    this._sunLightOut = NaN;        // and as this module left it (see _shadeSunLight)
+    this._lightDir = new THREE.Vector3();
+    // 3D trees drawn by another module within this range: no painted crowns there
+    this._treeCover = new THREE.Vector2(0, 1);
+    /**
+     * A module that draws the real street lamps near the camera (the roads track's Roads: any
+     * object with a lampRange getter, in metres): the city lights start beyond that range,
+     * fading in over its last 20 % (where its lamps fade out), so no lamp is drawn twice.
+     */
+    this.lampSource = null;
+    this._cityNear = new THREE.Vector2(0, 0);
   }
 
   // -------------------------------------------------------------------------------------
@@ -201,6 +398,7 @@ export class Terrain {
     this.hf.setFar(await fetchU16(B + 'height/far.bin'));
     progress(0.5, 'terrain: imagery');
     this.hf.buildMinMax();
+    this._hMax = this.hf.nodeMinMax(8, 0, 0)[1];            // highest point of the whole area
 
     // overview / far colour and land cover
     const [ovBmp, farBmp, lcOv, lcFar] = await Promise.all([
@@ -213,9 +411,29 @@ export class Terrain {
     this.landCover.farN = lcFar.width;
     progress(0.85, 'terrain: GPU');
 
+    // field data (rows, orchards, vineyards, greenhouses per field) from the data build
+    if (this.fieldsUrl) {
+      const fb = new URL(this.fieldsUrl, new URL(B, globalThis.location?.href ?? 'http://localhost/')).href;
+      try {
+        const idx = await fetchJSON(fb + 'index.json');
+        if (idx && idx.n === DATA_N) {
+          this.fields = { url: fb, index: idx };
+          // the field outlines and mapped orchards come from OpenStreetMap (ODbL): credited
+          // with the terrain data in the app's credits
+          if (idx.attribution && !this.attribution.includes(idx.attribution)) {
+            this.attribution = [this.attribution, idx.attribution].filter(Boolean).join(' | ');
+          }
+        }
+      } catch (e) {
+        console.warn(`terrain: no field data at ${fb} (sim/tools/terrain/fields.py); each tile is analysed on its own`);
+      }
+    }
     this._buildGpu(ovBmp, farBmp, lcOv, lcFar);
     progress(0.95, 'terrain: shaders');
-    this._precompile();
+    await this._tier(this._gd).ready;
+    this._loader = new TileLoader(TILE_WORKERS);
+    // the horizon worker reads the heights again (from the HTTP cache) in the background
+    this.horizon.start(new URL(B, globalThis.location?.href ?? 'http://localhost/').href);
     this.loaded = true;
     progress(1, 'terrain: ready');
     return this;
@@ -224,27 +442,32 @@ export class Terrain {
   _buildGpu(ovBmp, farBmp, lcOv, lcFar) {
     const r = this.renderer, aniso = this._maxAniso;
     const tex = {};
-    tex.hCore = makeHeightTexture(this.hf.core, CORE_N);
-    tex.hFar = makeHeightTexture(this.hf.far, FAR_N);
-    r.initTexture(tex.hCore);
-    r.initTexture(tex.hFar);
-    this._normalCoreRT = renderNormalMap(r, tex.hCore, CORE_N, CORE_SPACING, aniso);
-    this._normalFarRT = renderNormalMap(r, tex.hFar, FAR_N, FAR_SPACING, aniso);
+    // texelFetch grids share textures (sampler budget, see textures.js)
+    tex.heights = makePackedHeightTexture(this.hf.core, this.hf.far);
+    // The name other modules know (the vegetation's Scatter.js reads terrain.textures.hCore with
+    // texelFetch(clamp(p, 0, 4096))): the core sits at x 0..4096, y 0..4096 of the packed
+    // texture with the same encoding, so those reads return the same values.
+    tex.hCore = tex.heights;
+    r.initTexture(tex.heights);
+    this._normalCoreRT = renderNormalMap(r, tex.heights, CORE_N, CORE_SPACING, aniso, 0);
+    this._normalFarRT = renderNormalMap(r, tex.heights, FAR_N, FAR_SPACING, aniso, FAR_HEIGHT_X);
+    releasePacked(tex.heights);
     tex.overview = makeColorTexture(ovBmp, aniso);
     tex.far = makeColorTexture(farBmp, aniso);
-    tex.lcOverview = makeCodeTexture(lcOv.codes, lcOv.width, lcOv.height);
-    tex.lcFar = makeCodeTexture(lcFar.codes, lcFar.width, lcFar.height);
-    this._detailRT = makeDetailTexture(r, aniso);
-    this._waterRT = makeWaterNormalTexture(r, aniso);
-    tex.digits = makeDigitTexture(aniso);
-    for (const k of ['overview', 'far', 'lcOverview', 'lcFar', 'digits']) r.initTexture(tex[k]);
+    tex.lc = makePackedCodeTexture(lcOv.codes, lcFar.codes);
+    writeUrbanShare(tex.lc.image.data, tex.lc.image.width, lcOv.codes, lcOv.width, lcFar.codes, lcFar.width);
+    r.initTexture(tex.lc);
+    releasePacked(tex.lc);
+    this._detailRT = makeDetailArray(r, aniso);
+    for (const k of ['overview', 'far']) r.initTexture(tex[k]);
     this.textures = tex;
 
     this._shared = {
-      uHCore: { value: tex.hCore },
-      uHFar: { value: tex.hFar },
+      uHeights: { value: tex.heights },
       uCamHiU: { value: new THREE.Vector2() },
       uCamLo: { value: new THREE.Vector3() },
+      uCamMod: { value: new THREE.Vector2() },
+      uCamMod1280: { value: new THREE.Vector2() },
       uRange0: { value: RANGE0 },
       uMorphStart: { value: MORPH_START },
       uMorphEnd: { value: MORPH_END },
@@ -252,15 +475,18 @@ export class Terrain {
       uFarColor: { value: tex.far },
       uNormalCore: { value: this._normalCoreRT.texture },
       uNormalFar: { value: this._normalFarRT.texture },
-      uLcOverview: { value: tex.lcOverview },
-      uLcFar: { value: tex.lcFar },
-      uDetail: { value: this._detailRT.texture },
-      uWaterNormal: { value: this._waterRT.texture },
-      uDigits: { value: tex.digits },
+      uLc: { value: tex.lc },
+      uDetailArr: { value: this._detailRT.texture },
       uDetailStrength: { value: this.detailStrength },
+      uGroundDetail: { value: 1 },
       uAlbedoGain: { value: this.albedoGain },
+      uCityLights: { value: this.cityLights },
+      uCityNear: { value: this._cityNear },
+      uTreeCover: { value: this._treeCover },
       uDebugLod: { value: 0 },
       uDebugHeight: { value: 0 },
+      uDebugView: { value: 0 },
+      ...this.horizon.uniforms,
     };
     this._defines = floatTargetsSupported(r) ? {} : { NORMAL_UNORM: 1 };
     this._templates = [gridTemplate(GRID), gridTemplate(GRID / 2)];
@@ -274,7 +500,7 @@ export class Terrain {
     const uniforms = { ...lights, ...this.env.uniforms, ...this._shared };
     if (l0) {
       uniforms.uL0Color = { value: null };
-      uniforms.uL0Lc = { value: null };
+      uniforms.uL0Data = { value: null };
       uniforms.uL0Origin = { value: new THREE.Vector2() };
       uniforms.uL0Fade = { value: 0 };
       uniforms.uRwyA = { value: Array.from({ length: MAX_RWY }, () => new THREE.Vector4()) };
@@ -287,7 +513,7 @@ export class Terrain {
       uniforms,
       vertexShader: TERRAIN_VERT,
       fragmentShader: TERRAIN_FRAG,
-      defines: l0 ? { ...this._defines, USE_L0: 1 } : { ...this._defines },
+      defines: { ...this._defines, ...(l0 ? { USE_L0: 1 } : {}), GROUND_DETAIL: this._gd },
       lights: true,
       fog: false,
     });
@@ -295,20 +521,104 @@ export class Terrain {
     return m;
   }
 
-  /** Compiles both terrain programs now instead of on first sight (avoids a hitch). */
-  _precompile() {
+  /**
+   * The programs of a ground detail tier (GROUND_DETAIL): compiled once, in the background, by
+   * two materials (base and L0) that stay (see the constructor). Every material of the tier
+   * made later finds the programs in three.js's cache. Returns { mats, ready }.
+   */
+  _tier(gd) {
+    let t = this._tiers.get(gd);
+    if (!t) {
+      const cur = this._gd;
+      this._gd = gd;
+      const mats = [this._makeMaterial(false), this._makeMaterial(true)];
+      this._gd = cur;
+      t = { mats, ready: this._compile(mats) };
+      this._tiers.set(gd, t);
+    }
+    return t;
+  }
+
+  /**
+   * Compiles terrain programs now instead of on first sight: the terrain shader is the largest
+   * in the app and its first compile is the slowest one on ANGLE / Direct3D. Lights come from
+   * the real scene (targetScene), so the program variants match; the sun casts its shadow only
+   * while it is up (Environment.update), so both variants are built: with the shadow map (day)
+   * and without (night). Resolves once the driver's parallel compile has linked them
+   * (KHR_parallel_shader_compile), or after 4 s at most: a program not linked by then is
+   * finished on first use.
+   */
+  async _compile(mats) {
     const tmp = new THREE.Scene();
     const cam = new THREE.PerspectiveCamera(60, 1, 1, 1000);
-    const l0 = this._makeMaterial(true);
-    for (const mat of [this.baseMaterial, l0]) {
+    for (const mat of mats) {
       const m = new THREE.Mesh(this._baseGroup.meshes[0].geometry, mat);
       m.receiveShadow = true;
       m.frustumCulled = false;
       tmp.add(m);
     }
-    // lights come from the real scene (targetScene), so the program variants match
-    try { this.renderer.compile(tmp, cam, this.scene); } catch (e) { console.warn('terrain precompile', e); }
-    this._tileMaterialProto = l0;
+    const sun = this.env?.sunLight;
+    const cast = sun ? sun.castShadow : false;
+    let ready = null;
+    try {
+      // the other variant first; the switch is undone before any frame can see it
+      if (sun) { sun.castShadow = !cast; this.renderer.compile(tmp, cam, this.scene); sun.castShadow = cast; }
+      if (this.renderer.compileAsync) ready = this.renderer.compileAsync(tmp, cam, this.scene);
+      else this.renderer.compile(tmp, cam, this.scene);
+    } catch (e) {
+      console.warn('terrain: precompile', e);
+    } finally {
+      if (sun) sun.castShadow = cast;
+    }
+    if (ready) await Promise.race([ready.catch(() => {}), new Promise((r) => setTimeout(r, 4000))]);
+  }
+
+  // -------------------------------------------------------------------------------------
+  // settings
+
+  /**
+   * 'low' | 'medium' | 'high' (TERRAIN_QUALITY). The ground materials' tier is compiled in
+   * (GROUND_DETAIL), so the cheaper tiers really cost less: a new tier's programs compile in the
+   * background while the current ones go on drawing (qualityPending), then the materials switch,
+   * so no frame waits for the compile. The horizon maps change size at once.
+   */
+  setQuality(q) {
+    this.quality = TERRAIN_QUALITY[q] ? q : 'high';
+    this.horizon.setQuality(TERRAIN_QUALITY[this.quality].horizon);
+    const gd = TERRAIN_QUALITY[this.quality].groundDetail;
+    const job = ++this._tierJob;
+    if (!this.baseMaterial) {             // before the load, which compiles this tier
+      this._gd = gd;
+      this.qualityPending = false;
+      return;
+    }
+    this.qualityPending = true;
+    this._tier(gd).ready.then(() => {
+      if (job !== this._tierJob) return;  // changed again meanwhile
+      this._applyTier(gd);
+      this.qualityPending = false;
+    });
+  }
+
+  /** Switches the materials in use to the tier (whose programs are compiled). */
+  _applyTier(gd) {
+    this._gd = gd;
+    const mats = new Set([this.baseMaterial]);
+    for (const t of this.tiles.values()) if (t.material) mats.add(t.material);
+    for (const m of mats) {
+      if (m.defines.GROUND_DETAIL === gd) continue;
+      m.defines.GROUND_DETAIL = gd;
+      m.needsUpdate = true;
+    }
+  }
+
+  /**
+   * For a module that draws 3D trees on the tree class (ESA 10) within `range` metres of the
+   * camera: there the ground shows soil and litter instead of painted crowns and their
+   * shadows, blending back to painted crowns over `fade` metres. range 0 turns it off.
+   */
+  setVegetationCover({ range = 0, fade = 300 } = {}) {
+    this._treeCover.set(Math.max(0, range), Math.max(1, fade));
   }
 
   // -------------------------------------------------------------------------------------
@@ -330,6 +640,64 @@ export class Terrain {
     return surfaceType(this.runways, this.landCover, x, z, this.heightAt(x, z));
   }
 
+  /**
+   * How much of the sun the terrain lets through to the point (x, y, z), at any height: 1 lit,
+   * 0 behind a hill or below the horizon, soft over the sun's disc (+-0.43 deg, as the ground's
+   * shadows). A ray march toward the sun over the height field, out to 40 km, with the earth's
+   * curvature: about 120 height lookups (a few microseconds). dir: unit vector toward the light
+   * (default: the sun). The terrain module uses it every frame for the sun light on the aircraft
+   * (Terrain.module.update); the ground itself uses the horizon maps.
+   */
+  sunVisibilityAt(x, y, z, dir = this.env?.sunDirection) {
+    const sun = dir;
+    if (!sun || !this.loaded || !this.shadows) return 1;
+    const hl = Math.hypot(sun.x, sun.z);
+    if (hl < 1e-4) return sun.y > 0 ? 1 : 0;                   // overhead
+    const el = Math.atan2(sun.y, hl);
+    const SOFT = 0.0075, R = 6371000;
+    // the sea horizon (dip below the level for the height) and the highest any hill can reach
+    // in elevation seen from here (the march starts at 15 m)
+    if (el < -Math.sqrt(2 * Math.max(y, 0) / R) - SOFT) return 0;
+    const reach = y < this._hMax ? Math.atan2(this._hMax - y, 15) : -Math.sqrt(2 * (y - this._hMax) / R);
+    if (el > reach + SOFT) return 1;
+    const ax = sun.x / hl, az = sun.z / hl;
+    const lim = Math.tan(el + SOFT);
+    const inv2R = 1 / (2 * R);
+    let s = -Infinity;
+    for (let t = 15; t < 40000; t += Math.max(15, t * 0.045)) {
+      const k = (this.hf.heightAt(x + ax * t, z + az * t) - y) / t - t * inv2R;
+      if (k > s) { s = k; if (s >= lim) return 0; }
+    }
+    const ang = Math.atan(s);
+    const u = Math.min(1, Math.max(0, (el - ang + SOFT) / (2 * SOFT)));
+    return u * u * (3 - 2 * u);
+  }
+
+  /**
+   * Per frame (module update, after Environment.update): the directional light that lights the
+   * aircraft (and the wingmen: standard three.js materials; the terrain, roads, buildings and
+   * trees take their sunlight from the atmosphere uniforms and are not affected) is dimmed when
+   * the hills hide it from the point it is aimed at (the shadow target, i.e. the jet). Its own
+   * direction is used, so a moonlit night works the same. The sky light stays. Smoothed over
+   * ~0.15 s. Environment writes the light's intensity (1) every drawn frame; the factor scales
+   * the value it wrote last, so it never compounds, even on a frame it did not write.
+   */
+  _shadeSunLight(f) {
+    const L = this.env?.sunLight;
+    // only on drawn frames: Environment.update runs only on those
+    if (!L || !this.loaded || f?.draw === false) return;
+    const p = L.target.position;
+    const d = this._lightDir.subVectors(L.position, p);
+    const v = this.shadows && d.lengthSq() > 1e-6 ? this.sunVisibilityAt(p.x, p.y, p.z, d.normalize()) : 1;
+    const k = 1 - Math.exp(-Math.max(0, f?.dt ?? 1 / 60) / 0.15);
+    this.sunOcclusion = this._sunVisInit ? this.sunOcclusion + (v - this.sunOcclusion) * k : v;
+    this._sunVisInit = true;
+    if (L.intensity !== this._sunLightOut) this._sunLightBase = L.intensity;   // a new value from Environment
+    L.intensity = this._sunLightBase * this.sunOcclusion;
+    this._sunLightOut = L.intensity;
+    this.stats.sunVisibility = Math.round(this.sunOcclusion * 1000) / 1000;
+  }
+
   // -------------------------------------------------------------------------------------
   // per frame
 
@@ -346,10 +714,27 @@ export class Terrain {
     const hiX = Math.floor(ux / 64) * 64, hiZ = Math.floor(uz / 64) * 64;
     S.uCamHiU.value.set(hiX, hiZ);
     S.uCamLo.value.set(cam.x - (hiX * CORE_SPACING - FAR_HALF), cam.y, cam.z - (hiZ * CORE_SPACING - FAR_HALF));
+    // camera modulo 256 m in double precision: the periodic ground textures use
+    // camera-relative position + this, exact near the camera
+    S.uCamMod.value.set(cam.x - 256 * Math.floor(cam.x / 256), cam.z - 256 * Math.floor(cam.z / 256));
+    // and modulo 1280 m for the layers turned by the 3-4-5 rotation (ROT * 1280 / 256 is integer)
+    S.uCamMod1280.value.set(cam.x - 1280 * Math.floor(cam.x / 1280), cam.z - 1280 * Math.floor(cam.z / 1280));
     S.uDetailStrength.value = this.detailStrength;
     S.uAlbedoGain.value = this.albedoGain;
+    S.uGroundDetail.value = this.groundDetail && TERRAIN_QUALITY[this.quality].groundDetail ? 1 : 0;
+    S.uCityLights.value = this.cityLights;
+    const lampR = Math.max(0, +(this.lampSource?.lampRange) || 0);
+    this._cityNear.set(0.8 * lampR, lampR);
     S.uDebugLod.value = this.debug.lod ? 1 : 0;
     S.uDebugHeight.value = this.debug.heightProbe ? 1 : 0;
+    S.uDebugView.value = this.debug.view || 0;
+
+    // terrain shadows: new horizon maps when the sun or the camera moved
+    this.horizon.setEnabled(this.shadows);
+    if (this.env?.sunDirection) this.horizon.update(cam, this.env.sunDirection);
+    this.horizon.uploadStep();
+    this.stats.horizonComputes = this.horizon.stats.computes;
+    this.stats.horizonMs = this.horizon.stats.lastMs;
 
     // LOD selection with frustum culling (boxes include the curvature drop)
     this._projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -452,11 +837,15 @@ export class Terrain {
     this.tiles.set(key, entry);
     this._inflight++;
     const B = this.baseUrl;
-    Promise.all([fetchBitmap(`${B}color/L0/tile_${ix}_${iz}.jpg`), fetchCodes(`${B}landcover/tile_${ix}_${iz}.png`)])
-      .then(([bmp, lc]) => {
-        if (this.tiles.get(key) !== entry) { bmp.close(); return; }
-        entry.bitmap = bmp;
-        entry.codes = lc;
+    // absolute URLs: the workers resolve relative ones against their own location
+    const abs = (u) => new URL(u, globalThis.location?.href ?? 'http://localhost/').href;
+    const fields = this.fields ? `${this.fields.url}tile_${ix}_${iz}.u16.gz` : null;
+    this._loader.load(abs(`${B}color/L0/tile_${ix}_${iz}.jpg`), abs(`${B}landcover/tile_${ix}_${iz}.png`), fields)
+      .then(({ bitmap, codes, data }) => {
+        if (this.tiles.get(key) !== entry) { bitmap.close(); return; }
+        entry.bitmap = bitmap;
+        entry.codes = codes;
+        entry.data = data;
         entry.state = 'decoded';
         this._pending.push(entry);
       })
@@ -466,18 +855,19 @@ export class Terrain {
 
   _activateTile(t, now) {
     const color = makeColorTexture(t.bitmap, this._maxAniso);
-    const lc = makeCodeTexture(t.codes.codes, t.codes.width, t.codes.height);
+    const n = t.codes.width;
+    const data = makeTileDataTexture(t.data && t.data.length === n * n ? t.data : packCodes(t.codes.codes, n), n);
     this.renderer.initTexture(color);
-    this.renderer.initTexture(lc);
+    this.renderer.initTexture(data);
+    releasePacked(data);
     t.bitmap.close();
     t.bitmap = null;
-    const material = this._tileMaterialProto && !this._tileMaterialProto.userData.used
-      ? this._tileMaterialProto : this._makeMaterial(true);
-    material.userData.used = true;
-    material.wireframe = this.debug.wireframe;
+    t.data = null;
+    // its programs are the tier's (compiled, kept by _tier): nothing to compile here
+    const material = this._makeMaterial(true);
     const U = material.uniforms;
     U.uL0Color.value = color;
-    U.uL0Lc.value = lc;
+    U.uL0Data.value = data;
     const x0 = -CORE_HALF + t.ix * TILE_M, z0 = -CORE_HALF + t.iz * TILE_M;
     U.uL0Origin.value.set(x0, z0);
     U.uL0Fade.value = 0;
@@ -492,7 +882,7 @@ export class Terrain {
     const group = this._tileGroupPool.pop() || new PatchGroup(this._templates, TILE_CAPACITY, material, -10);
     group.setMaterial(material);
     for (const m of group.meshes) if (!m.parent) this.group.add(m);
-    t.textures = [color, lc];
+    t.textures = [color, data];
     t.material = material;
     t.group = group;
     t.state = 'ready';
@@ -514,10 +904,7 @@ export class Terrain {
       this._tileGroupPool.push(t.group);
       t.group = null;
     }
-    if (t.material) {
-      if (t.material === this._tileMaterialProto) this._tileMaterialProto = null;
-      t.material.dispose();
-    }
+    if (t.material) t.material.dispose();
     if (t.textures) for (const x of t.textures) x.dispose();
     t.state = 'evicted';
   }
@@ -525,12 +912,17 @@ export class Terrain {
   dispose() {
     for (const t of [...this.tiles.values()]) this._evictTile(t);
     this.scene.remove(this.group);
+    this._loader?.dispose();
+    this.horizon.dispose();
     if (!this.textures) return;
-    for (const x of Object.values(this.textures)) x.dispose?.();
+    for (const x of new Set(Object.values(this.textures))) x.dispose?.();   // (hCore is an alias)
     this._normalCoreRT.dispose();
     this._normalFarRT.dispose();
     this._detailRT.dispose();
-    this._waterRT.dispose();
     this.baseMaterial.dispose();
+    for (const t of this._tiers.values()) for (const m of t.mats) m.dispose();
+    this._tiers.clear();
   }
 }
+
+export { DATA_N };
