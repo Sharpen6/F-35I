@@ -32,6 +32,7 @@ import {
 } from './atmosphereGLSL.js';
 import { sunDirection as solarDirection } from './sun.js';
 import { moonDirection, celestialFrame } from './moon.js';
+import { installCloudShadowChunk, CLOUD_SHADOW_LAYER, CLOUD_SHADOW_WIND } from './cloudShadowChunk.js';
 
 export { ATMOSPHERE_PARS, ATMOSPHERE_CORE, ATMOSPHERE_SKYVIEW };
 
@@ -174,6 +175,8 @@ export class Environment {
     if (!renderer.extensions.has('EXT_color_buffer_float')) {
       console.warn('Environment: EXT_color_buffer_float missing, sky LUT precision reduced');
     }
+    // the cumulus' shadow on three's own lit materials (js/env/cloudShadowChunk.js), before any compile
+    installCloudShadowChunk();
 
     this.params = makeAtmosphereParams(visibilityKm);
     const P = this.params;
@@ -763,6 +766,9 @@ export class Environment {
     // the artificial lights tuned for the old night exposure keep their brightness on screen
     this.nightLightGain = Math.min(1, NIGHT_LIGHTS_EXPOSURE / Math.max(this.exposure, 1e-3));
     U.uNight.value = (this.nightFade ?? 0) * this.nightLightGain;
+    // the cumulus layer for the cloud shadows on three's materials (js/env/cloudShadowChunk.js)
+    U.uCloudLayer.value.toArray(CLOUD_SHADOW_LAYER);
+    U.uCloudWind.value.toArray(CLOUD_SHADOW_WIND);
   }
 
   dispose() {

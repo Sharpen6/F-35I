@@ -24,9 +24,9 @@
 //                covers its plume.
 //
 // The terrain gets the clouds' shadows without a texture (atmoSunIrradianceAt evaluates the same
-// field where the sun's ray crosses the layer); the jet and the standard materials get the shadow
-// at the jet's position (the directional light dimmed on the CPU). Inside a cloud the exposure
-// meter sees less light (env.lightScale).
+// field where the sun's ray crosses the layer); three's own materials (the jet, buildings) get them
+// per fragment from js/env/cloudShadowChunk.js. Inside a cloud the exposure meter sees less light
+// (env.lightScale).
 
 import * as THREE from 'three';
 import { ATMOSPHERE_PARS } from './atmosphereGLSL.js';
@@ -543,13 +543,8 @@ export class Clouds {
     if (!this.layer || !this.enabled) return;
     const L = this.layer;
     const dir = env.lightDirection || env.sunDirection;
-    // the shadow on the jet (and on everything the directional light reaches). Only on drawn
-    // frames: env.update, which resets the light, runs only on those, and the dimming would pile up
-    if (f.draw !== false) {
-      const jet = this.ctx.visual?.object3d;
-      const at = jet ? jet.getWorldPosition(_v) : f.camera.getWorldPosition(_v);
-      env.sunLight.color.multiplyScalar(shadowAt(at.x, at.y, at.z, dir, L, this.wind));
-    }
+    // (the shadows on the jet and the other standard materials are per fragment now:
+    // js/env/cloudShadowChunk.js; the directional light itself is left alone)
     // what the exposure meter sees (the eye adapts a little): less in a cloud's shadow, much less
     // inside a cloud. On every frame: the test API's settle() adapts the exposure between frames
     // that are not drawn
