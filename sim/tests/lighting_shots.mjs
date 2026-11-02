@@ -2,7 +2,7 @@
 // several times of day, through the automation API window.__sim (index.html?test=1).
 //
 //   node sim/tests/lighting_shots.mjs [--port 8148] [--out DIR] [--size 960x540] [--quality high]
-//        [--set times|quick|clouds|night|twilight|flicker|all] [--only name1,name2]
+//        [--set times|quick|clouds|night|twilight|flicker|glare|nightsky|all] [--only name1,name2]
 //        [--params "clouds=few&post=1"] [--frames 10]
 //        [--resume]   (skip the shots already in --out: to finish a run whose browser was killed)
 //

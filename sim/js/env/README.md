@@ -236,6 +236,10 @@ arcsec^2 = 174 ucd/m^2; near the horizon the airglow and scattered starlight mak
   geometric mean of the base and the zenith (`gain x sqrt(base x zenith)`: ~4 x the sky over
   central Tel Aviv, not ~15 x), as the eye would not adapt to a deck it only glances at. See the
   clouds below.
+* Shots: `node sim/tests/lighting_shots.mjs --set nightsky` takes the night sky and the clouds
+  over Tel Aviv, Ben Gurion, the coast and the Dead Sea at 20:00, 21:30 and 03:00, moonless
+  (2028; 2026 at 03:00), under the first quarter (2026) and a near-full moon (2024 in the evening,
+  2027 at 03:00), from below, in and above a deck, and the blue hour at 19:36 and 19:45.
 
 ## The HDR frame (`Post.js`)
 
@@ -303,7 +307,10 @@ wide, and drawn in the cockpit too: at Ben Gurion at sunset three orange discs l
 half of the chase view (one large at the edge), and over the HUD and the instrument panel in the
 cockpit. The bloom (a physical threshold at ~2 x a white surface in the sun, 8 %) is the same for
 both: it only spreads what is far brighter than the scene, so the scene round the sun keeps its
-contrast.
+contrast. `node --import ./sim/tests/node-three.mjs sim/tests/sky_optics.test.mjs` checks the
+eye's glare against CIE 135 and each ghost against what two coated surfaces can carry;
+`node sim/tests/lighting_shots.mjs --set glare` shoots the cockpit and the outside views into the
+sun and away from it at 07:00, 18:45, 19:00 and noon.
 
 **Transparent things near the camera that do not write depth** (bounds < 150 m within 800 m:
 the burner plume, canopy glass, light sprites, smoke; not decals, which have `polygonOffset`) are
