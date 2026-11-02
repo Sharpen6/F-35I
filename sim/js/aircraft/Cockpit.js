@@ -29,6 +29,7 @@ import { makeDetailTexture, makeGlassTexture } from './pcd/detail.js';
 import { Interior, DISPLAY_ALPHA } from './pcd/interior.js';
 import { CanopyGlass } from './pcd/canopy.js';
 import { CockpitShadow } from './pcd/shadow.js';
+import { CockpitParts } from './pcd/parts.js';
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const clamp1 = (x) => (x > 1 ? 1 : x < -1 ? -1 : x || 0);
@@ -120,6 +121,9 @@ export class Cockpit {
     this._setupPcdMaterial();
     this.pcd.setMaps(terrain).catch(() => {});
     this.detail = makeDetailTexture(512);
+    // the glb's bow, coaming and sills rebuilt (pcd/parts.js): before the interior, whose analysis
+    // takes them in
+    this.parts = new CockpitParts({ visual });
     this.interior = new Interior({ visual, detail: this.detail });
     // the cockpit's own sun shadow, on the interior's analysis box (the pilot's head, hidden at the
     // eye, still casts)
@@ -412,6 +416,7 @@ gl_FragColor.a = ${DISPLAY_ALPHA.toFixed(1)};`);
     this.pcd.dispose();
     this.pcdMaterial?.dispose();
     this.interior?.dispose();
+    this.parts?.dispose();
     this.canopy?.dispose();
     this.shadow?.dispose();
     this.detail?.dispose();

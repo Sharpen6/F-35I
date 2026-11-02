@@ -39,8 +39,12 @@ import { SHADOW_GLSL } from './shadow.js';
 export const INTERIOR_PAINT = {
   F35_cockpit: { color: 0x45484b, roughness: 0.6, metalness: 0, detail: 1 },
   F35_cockpit_panel: { color: 0x3a3c40, roughness: 0.52, metalness: 0, detail: 0.8 },
-  F35_canopy_bow: { color: 0x2a2b2e, roughness: 0.86, metalness: 0, detail: 1 },
-  F35_glare_pad: { color: 0x2c2d30, roughness: 0.95, metalness: 0, detail: 0.6 },
+  // the bow (pcd/frame.js): a dark satin frame whose rounded edges catch the sky, its fastener heads
+  F35_canopy_bow: { color: 0x323437, roughness: 0.5, metalness: 0, detail: 0.4 },
+  F35_canopy_fastener: { color: 0x7a7d80, roughness: 0.35, metalness: 0.6, detail: 0.2 },
+  F35_glare_pad: { color: 0x57534b, roughness: 0.85, metalness: 0, detail: 0.6 },
+  // the coaming's hood (pcd/parts.js): a flat black anti-glare finish
+  F35_glare_shield: { color: 0x1e1f21, roughness: 0.93, metalness: 0, detail: 0.8 },
   F35_seat: { color: 0x45484a, roughness: 0.72, metalness: 0, detail: 0.7 },
   F35_seat_cushion: { color: 0x575b4e, roughness: 0.92, metalness: 0, detail: 0.5 },
 };
@@ -225,7 +229,7 @@ export class Interior {
     const box = new THREE.Box3(new THREE.Vector3(...this.box.min), new THREE.Vector3(...this.box.max));
     const wb = new THREE.Box3();
     root.traverse((o) => {
-      if (!o.isMesh || !o.material || Array.isArray(o.material) || inHead(o)) return;
+      if (!o.isMesh || !o.material || Array.isArray(o.material) || inHead(o) || o.userData.ckSkip) return;
       const mat = o.material, name = mat.name || '';
       if (name.endsWith('_reflect') || name.startsWith('F35_Decal_')) return;
       const g = o.geometry;
@@ -302,10 +306,13 @@ export class Interior {
   _apply(list, res) {
     // ambient occlusion and interior share attributes first (the interior meshes share the skin's)
     const done = new Set();
+    // (parts.js's meshes carry a fixed occlusion for the creases the voxels miss: multiplied in)
     list.forEach((m, id) => {
       const a = res.ao[id];
       const g = m.mesh.geometry;
       if (!a || done.has(g)) return;
+      const cav = g.userData.ckCavity;
+      if (cav && cav.length === a.length) for (let i = 0; i < a.length; i++) a[i] = Math.round(a[i] * cav[i] / 255);
       g.setAttribute('ckAO', new THREE.BufferAttribute(a, 1, true));
       done.add(g);
     });
@@ -320,7 +327,11 @@ export class Interior {
     this.root.traverse((o) => {
       if (!o.isMesh || !mats.has(o.material)) return;
       const g = o.geometry;
-      if (!g.attributes.ckAO) g.setAttribute('ckAO', new THREE.BufferAttribute(new Uint8Array(g.attributes.position.count).fill(255), 1, true));
+      if (!g.attributes.ckAO) {
+        const a = new Uint8Array(g.attributes.position.count).fill(255);
+        if (g.userData.ckCavity && g.userData.ckCavity.length === a.length) a.set(g.userData.ckCavity);
+        g.setAttribute('ckAO', new THREE.BufferAttribute(a, 1, true));
+      }
       if (o.material === this.skinMaterial && !g.attributes.ckIn) g.setAttribute('ckIn', new THREE.BufferAttribute(new Uint8Array(g.attributes.position.count).fill(255), 1, true));
     });
     for (const m of mats) this._patch(m);
