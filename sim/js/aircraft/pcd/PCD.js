@@ -89,7 +89,13 @@ export class PCD {
       const t = new THREE.CanvasTexture(this.canvas);
       t.name = 'PCD_live';
       t.flipY = false;                        // glTF uv: v = 0 is the top of the glass
-      t.colorSpace = THREE.SRGBColorSpace;
+      // Stored as plain RGBA8 and decoded from sRGB by the shaders that read it (Cockpit.js
+      // PCD_DECODE_GLSL, canopy.js), as three.js does for video. As an sRGB texture (SRGB8_ALPHA8)
+      // every upload of the canvas stalled the main thread ~55-65 ms in Chrome on Windows (ANGLE /
+      // D3D11, RTX 3070, measured with the canvas at 1024 and 2048 px, with and without mip
+      // levels): at 10 redraws a second the cockpit view juddered. The RGBA8 upload costs nothing
+      // measurable.
+      t.colorSpace = THREE.NoColorSpace;
       t.anisotropy = this.maxAnisotropy;
       t.minFilter = THREE.LinearMipmapLinearFilter;
       t.magFilter = THREE.LinearFilter;

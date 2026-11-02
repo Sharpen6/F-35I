@@ -27,7 +27,11 @@ redrawn only while it can be read: from the seat, or in view and over ~60 px wid
 imagery would be minified 3-6:1 at the long ranges, where a canvas's smoothing skips texels and
 the map sparkled as it turned: the imagery has its own mip levels (2048 down to 256 px, made
 once) and the TSD draws the one minified at most ~1.4:1. No garbage per frame (the systems'
-messages, the fuel split and the wingmen's symbols are kept objects).
+messages, the fuel split and the wingmen's symbols are kept objects). The canvas texture is stored
+as plain RGBA8 and the display material and the canopy decode its sRGB in their shaders (as
+three.js does for video): as an sRGB texture every upload of the canvas stalled the main thread
+for 55-65 ms in Chrome on Windows (ANGLE / D3D11, measured on an RTX 3070 at both canvas sizes,
+with and without mip levels), ten times a second, and the cockpit view juddered.
 
 **The interior** (`interior.js`, `interiorWorker.js`, `shadow.js`, `detail.js`). The glb's light
 greys become the real tub's dark grey: a satin #45484b, the panels a shade darker, the canopy bow
@@ -187,7 +191,9 @@ compiled once by the first render after the analysis, normally behind the menu. 
 3070 at 1080p: about 0.3-0.5 ms a frame in the cockpit view (the canopy pass over most of the
 screen from inside, the five shadow taps and the detail on the cockpit, the canvas upload a few
 times a second), and when the shadow map is redrawn 0.1-0.3 ms of GPU and 0.3-0.6 ms of CPU for its
-~100 draws.
+~100 draws. Measured there (PC trial 3, tlv_3000, 1080p high, uncapped): 4.2 ms a frame on average
+in the cockpit, 4.4 ms with the cockpit module off; with the canvas still an sRGB texture it was
+5.3 ms, with ten frames a second of 55-65 ms (each canvas upload).
 
 ## How it was checked
 

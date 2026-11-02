@@ -76,6 +76,15 @@ export const COCKPIT_MATERIALS = {
  */
 const PCD_LIGHT_MAX = 1000 / 25000;
 
+/**
+ * The display material's emissive map: the PCD's live canvas, stored as plain RGBA8 (PCD.js: an sRGB
+ * texture made every upload stall Chrome on Windows), decoded from sRGB here.
+ */
+const PCD_DECODE_GLSL = `#ifdef USE_EMISSIVEMAP
+	vec4 emissiveColor = sRGBTransferEOTF( texture2D( emissiveMap, vEmissiveMapUv ) );
+	totalEmissiveRadiance *= emissiveColor.rgb;
+#endif`;
+
 /** Per graphics quality (the PCD's own table is in PCD.js). */
 export const COCKPIT_QUALITY = {
   low: { canopy: false, detail: 0 },
@@ -166,13 +175,16 @@ export class Cockpit {
       emissiveIntensity: 1,
       side: THREE.DoubleSide,
     });
-    // a display: alpha 0 in the frame (interior.js DISPLAY_ALPHA: a post chain can keep it in colour
-    // when its night vision greys the dark scene)
+    // the live canvas decoded from sRGB (PCD_DECODE_GLSL), and a display: alpha 0 in the frame
+    // (interior.js DISPLAY_ALPHA: a post chain can keep it in colour when its night vision greys the
+    // dark scene)
     this.pcdMaterial.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>', `#include <dithering_fragment>
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <emissivemap_fragment>', PCD_DECODE_GLSL)
+        .replace('#include <dithering_fragment>', `#include <dithering_fragment>
 gl_FragColor.a = ${DISPLAY_ALPHA.toFixed(1)};`);
     };
-    this.pcdMaterial.customProgramCacheKey = () => 'ckDisplay';
+    this.pcdMaterial.customProgramCacheKey = () => 'ckDisplayRGBA8';
     for (const m of this.pcdMeshes) m.material = this.pcdMaterial;
     this._pcdRect = pcdRectangle(this.pcdMeshes[0]);
   }

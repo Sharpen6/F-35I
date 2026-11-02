@@ -143,7 +143,8 @@ void main() {
   // otherwise), a little softer than sharp (the acrylic is not optically flat)
   vec2 dx = dFdx( uv ) * uPcdSize, dy = dFdy( uv ) * uPcdSize;
   float lod = clamp( 0.5 * log2( max( dot( dx, dx ), dot( dy, dy ) ) ) + 1.0, 1.5, 8.0 );
-  vec3 pcd = textureLod( uPcd, clamp( uv, 0.0, 1.0 ), lod ).rgb;
+  // (the canvas is stored as plain RGBA8, PCD.js: decoded from sRGB here)
+  vec3 pcd = sRGBTransferEOTF( textureLod( uPcd, clamp( uv, 0.0, 1.0 ), lod ) ).rgb;
   // both surfaces of the acrylic reflect (x2); an LCD is dimmer off its axis (the light that
   // reaches the canopy leaves it steeply)
   col += pcd * ( 2.0 * uPcdGain * F * inner * hit * sqrt( clamp( - den, 0.0, 1.0 ) ) );
