@@ -11,10 +11,13 @@
 //   });
 //
 // Cockpit: the camera sits at the pilot's eye, rigid with the jet, turned by head look (mouse
-// drag, hat, numpad) and shifted a little by the g load. Chase: a spring camera behind the jet
-// that follows its attitude with a lag. Orbit: mouse drag and wheel around the jet. Fly-by: the
-// camera waits ahead of the jet and watches it pass. Tower: a camera above the nearest airfield
-// that tracks the jet with a zoom lens.
+// drag, hat, numpad: rates that build up and die away, the view smoothed a little). The head turns
+// about the neck and the torso twists to look back, so the eye moves as a pilot's does; the g
+// load shifts it; the seat vibrates on the runway (slab joints, roughness), drops at the
+// touchdown, shakes in the high-AoA buffet (?shake=0: off). The wheel zooms (20-80 deg).
+// Chase: a spring camera behind the jet that follows its attitude with a lag. Orbit: mouse drag
+// and wheel around the jet. Fly-by: the camera waits ahead of the jet and watches it pass. Tower:
+// a camera above the nearest airfield that tracks the jet with a zoom lens.
 
 import * as THREE from 'three';
 
@@ -29,11 +32,11 @@ const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion();
-const _q2 = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const _e = new THREE.Euler(0, 0, 0, 'YXZ');
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
-const X_AXIS = new THREE.Vector3(1, 0, 0);
+/** The pilot's eyes from the neck's pivot (body frame, m): the head turns about the neck. */
+const NECK_TO_EYE = new THREE.Vector3(0, 0.07, -0.09);
 
 /** Cheap smooth noise: sum of sines with incommensurate frequencies (deterministic). */
 function wobble(t, seed) {
@@ -47,13 +50,23 @@ export class CameraRig {
     this.mode = 'chase';
     this.defaultFov = { cockpit: 60, chase: 55, orbit: 50, flyby: 45, tower: 40 };
     this.fov = { ...this.defaultFov };
-    // cockpit: the default view looks this far below the rig's design eye line (6 deg down), so
-    // the canopy bow (9-17 deg above the eye, 0.5 m ahead) sits along the top of the picture with
-    // the clear view over the glare shield below it, as in F-35 cockpit videos
+    /** Cockpit zoom: the wheel's range of the vertical field of view (deg). */
+    this.cockpitFovRange = [20, 80];
+    // cockpit: the default view looks this far below the rig's design eye line (itself 6 deg below
+    // the jet's axis): the view centre 8.5 deg below the axis puts the canopy bow (9-17 deg above
+    // the axis, 0.5 m ahead) 18-26 deg above the centre along the top of the picture, and the glare
+    // shield (14.6 deg below the axis) 11.6 deg below the horizon in cruise (3 deg AoA)
     this.cockpitLookDown = 2.5 * DEG;
-    // cockpit head
-    this.head = { yaw: 0, pitch: 0, centering: false };
+    // cockpit head: yaw / pitch are where the pilot wants to look (+ = left / up; the test API and
+    // the inputs write them), the view follows them through a short smoothing (ay / ap)
+    this.head = { yaw: 0, pitch: 0, centering: false, ay: 0, ap: 0, vy: 0, vp: 0 };
     this.gShift = new THREE.Vector3();
+    // cockpit vibration: runway rumble, touchdown, buffet (a damped spring per axis: seat height,
+    // pitch, roll), and the state it needs; `vibration` scales it (0 off: ?shake=0)
+    this.vibration = typeof location !== 'undefined' && new URLSearchParams(location.search).get('shake') === '0' ? 0 : 1;
+    this._jolt = { y: 0, vy: 0, p: 0, vp: 0, r: 0, vr: 0 };
+    this._wasOnGround = null;
+    this._roll = 0;                    // m rolled on the ground (the runway's slab joints)
     // chase
     this.chase = { q: new THREE.Quaternion(), yaw: 0, pitch: 0, idle: 0, zoom: 1, init: false, vel: new THREE.Vector3() };
     // orbit
@@ -91,10 +104,15 @@ export class CameraRig {
     this.orbit.init = false;
     this.flyby.valid = false;
     this.tower.valid = false;
-    this.head.yaw = this.head.pitch = 0;
+    const H = this.head;
+    H.yaw = H.pitch = H.ay = H.ap = H.vy = H.vp = 0;
     this.gShift.set(0, 0, 0);
     this._prevVel.set(0, 0, 0);
+    this._velInit = false;
     this._accBody.set(0, 0, 0);
+    const J = this._jolt;
+    J.y = J.vy = J.p = J.vp = J.r = J.vr = 0;
+    this._wasOnGround = null;
   }
 
   get isCockpit() { return this.mode === 'cockpit'; }
@@ -110,13 +128,18 @@ export class CameraRig {
     this.time += dt;
     const cam = this.camera;
     const look = ctx.look || {};
-    // body acceleration felt by the pilot (for the head shift): from the velocity change
+    // body acceleration felt by the pilot (for the head shift): from the velocity change (none on
+    // the first frame after a spawn: the jump from rest would read as a huge acceleration)
     if (ctx.velocity && dt > 0) {
-      _v1.copy(ctx.velocity).sub(this._prevVel).divideScalar(Math.max(dt, 1e-3));
+      this._vyPrev = this._velInit ? this._prevVel.y : ctx.velocity.y;
+      if (this._velInit) {
+        _v1.copy(ctx.velocity).sub(this._prevVel).divideScalar(Math.max(dt, 1e-3));
+        _q1.copy(ctx.quaternion).invert();
+        _v1.applyQuaternion(_q1);
+        this._accBody.lerp(_v1, damp(dt, 0.25));
+      }
       this._prevVel.copy(ctx.velocity);
-      _q1.copy(ctx.quaternion).invert();
-      _v1.applyQuaternion(_q1);
-      this._accBody.lerp(_v1, damp(dt, 0.25));
+      this._velInit = true;
     }
     switch (this.mode) {
       case 'cockpit': this._cockpit(dt, ctx, look); break;
@@ -140,7 +163,10 @@ export class CameraRig {
   _cockpit(dt, ctx, look) {
     const cam = this.camera;
     const H = this.head;
+    // yaw / pitch set from outside since the last frame (the test API, a script): the view jumps there
+    if (H.yaw !== H._ty || H.pitch !== H._tp) { H.ay = H.yaw; H.ap = H.pitch; H.vy = H.vp = 0; }
     if (look.lookCenter) H.centering = true;
+    // mouse drag: the head follows the hand (the view a moment later, below)
     const dragging = look.dragButton >= 0;
     if (dragging && (look.dragX || look.dragY)) {
       const k = 0.0042 * (this.fov.cockpit / 62);
@@ -148,31 +174,53 @@ export class CameraRig {
       H.pitch -= look.dragY * k;
       H.centering = false;
     }
-    if (look.lookX || look.lookY) {
-      H.yaw -= look.lookX * 110 * DEG * dt;
-      H.pitch += look.lookY * 80 * DEG * dt;
-      H.centering = false;
+    // hat and numpad: a turn rate that builds up and dies away over ~0.15 s (not a jump to full rate)
+    const a = damp(dt, 0.15);
+    H.vy += ((look.lookX || 0) * -110 * DEG - H.vy) * a;
+    H.vp += ((look.lookY || 0) * 80 * DEG - H.vp) * a;
+    if (Math.abs(H.vy) + Math.abs(H.vp) > 1e-4) {
+      H.yaw += H.vy * dt;
+      H.pitch += H.vp * dt;
+      if (look.lookX || look.lookY) H.centering = false;
     }
     if (H.centering) {
-      const a = damp(dt, 0.12);
-      H.yaw += (0 - H.yaw) * a;
-      H.pitch += (0 - H.pitch) * a;
+      const c = damp(dt, 0.12);
+      H.yaw += (0 - H.yaw) * c;
+      H.pitch += (0 - H.pitch) * c;
       if (Math.abs(H.yaw) < 0.002 && Math.abs(H.pitch) < 0.002) { H.yaw = H.pitch = 0; H.centering = false; }
     }
     H.yaw = clamp(H.yaw, -165 * DEG, 165 * DEG);
     H.pitch = clamp(H.pitch, -60 * DEG, 88 * DEG);
-    if (look.wheel) this.fov.cockpit = clamp(this.fov.cockpit * Math.pow(1.08, look.wheel), 22, 95);
+    // the view: smoothed (a head has mass; it also takes the jitter out of mouse steps)
+    const s = damp(dt, 0.045);
+    H.ay += (H.yaw - H.ay) * s;
+    H.ap += (H.pitch - H.ap) * s;
+    H._ty = H.yaw;
+    H._tp = H.pitch;
+    // zoom: the wheel sets a target field of view, reached smoothly
+    const [f0, f1] = this.cockpitFovRange;
+    if (look.wheel) this._zoomTarget = clamp((this._zoomTarget ?? this.fov.cockpit) * Math.pow(1.1, look.wheel), f0, f1);
+    if (this._zoomTarget != null) {
+      this.fov.cockpit += (this._zoomTarget - this.fov.cockpit) * damp(dt, 0.07);
+      if (Math.abs(this.fov.cockpit - this._zoomTarget) < 0.05) { this.fov.cockpit = this._zoomTarget; this._zoomTarget = null; }
+    }
 
     // eye point, base direction (the pilot's straight ahead) and head rotation
     const eye = ctx.eye || _v3.set(0, 1.08, -4.47);
     const fwd = ctx.eyeForward;
     const basePitch = (fwd ? Math.atan2(fwd.y, Math.hypot(fwd.x, fwd.z)) : -6 * DEG) - this.cockpitLookDown;
-    // head moves when looking around: lean to the side to look back, forward to look down
-    const lean = _v1.set(
-      -Math.sin(H.yaw) * 0.09 * Math.min(1, Math.abs(H.yaw) / (90 * DEG)),
-      Math.max(0, H.pitch) * 0.03,
-      -Math.max(0, -H.pitch) * 0.08 * Math.cos(H.yaw),
-    );
+    // the head turns about the neck (the eyes 7 cm above and 9 cm ahead of it): looking aside
+    // moves the eyes aside, looking down moves them forward and down; beyond ~60 deg the torso
+    // twists and leans out to see behind, and leans forward to look down into the consoles
+    const yaw = H.ay, pitch = H.ap;
+    // (the neck turns up to ~90 deg and tips back less than forward; the torso does the rest)
+    _e.set(pitch > 0 ? pitch * 0.6 : pitch, clamp(yaw, -90 * DEG, 90 * DEG), 0, 'YXZ');
+    _q1.setFromEuler(_e);
+    const lean = _v1.copy(NECK_TO_EYE).applyQuaternion(_q1).sub(NECK_TO_EYE);
+    const twist = THREE.MathUtils.smoothstep(Math.abs(yaw), 60 * DEG, 150 * DEG);
+    lean.x += -Math.sign(yaw) * 0.08 * twist;
+    lean.z += -0.06 * twist;
+    lean.z += -0.07 * THREE.MathUtils.smoothstep(-pitch, 20 * DEG, 60 * DEG) * Math.max(0, Math.cos(yaw));
     // g load pushes the head down / sideways; acceleration pushes it back
     const g = ctx.gLoad != null ? ctx.gLoad : 1;
     const target = _v2.set(
@@ -182,22 +230,76 @@ export class CameraRig {
     );
     if (ctx.onGround) target.y = clamp(target.y, -0.01, 0.01);
     this.gShift.lerp(target, damp(dt, 0.12));
+    const J = this._vibration(dt, ctx);
     const local = _v3.copy(eye).add(lean).add(this.gShift);
+    local.y += J.y;
     cam.position.copy(local).applyQuaternion(ctx.quaternion).add(ctx.position);
 
-    // orientation: jet attitude * head yaw (about body up) * pitch (about the head's right)
-    _e.set(basePitch + H.pitch, H.yaw, 0, 'YXZ');
+    // orientation: jet attitude * head yaw (about body up) * pitch (about the head's right), and
+    // the vibration's small pitch and roll
+    _e.set(basePitch + pitch + J.p, yaw, J.r, 'YXZ');
     _q1.setFromEuler(_e);
-    // shake: runway rumble and high-AoA buffet (small, in radians)
-    const gs = ctx.onGround ? Math.min(1, (ctx.groundSpeed || 0) / 90) : 0;
-    const aoa = ctx.alpha ? Math.max(0, ctx.alpha / DEG - 16) / 12 : 0;
-    const amp = 0.0011 * gs + 0.0022 * Math.min(1, aoa) * Math.min(1, (ctx.qbar || 0) / 6000) + this.shake;
-    if (amp > 0) {
-      _e.set(wobble(this.time, 1.3) * amp, wobble(this.time, 5.1) * amp * 0.6, wobble(this.time, 9.7) * amp * 0.5, 'YXZ');
-      _q2.setFromEuler(_e);
-      _q1.multiply(_q2);
-    }
     cam.quaternion.copy(ctx.quaternion).multiply(_q1);
+  }
+
+  /**
+   * The cockpit's vibration: a damped spring per axis (seat height m, pitch and roll rad) driven by
+   * the runway (the slab joints every ~6 m and the surface's roughness, growing with ground speed),
+   * the touchdown (an impulse from the sink rate) and the buffet at high angle of attack. Subtle:
+   * millimetres and hundredths of a degree, a few tenths at a hard landing or deep in the buffet.
+   */
+  _vibration(dt, ctx) {
+    const J = this._jolt;
+    if (!(dt > 0)) return J;
+    const onGround = !!ctx.onGround;
+    const gs = ctx.groundSpeed || 0;
+    const t = this.time;
+    const s = this.vibration;
+    // touchdown: the seat (and the pilot) drop with the sink rate, the nose dips a little
+    if (this._wasOnGround === false && onGround) {
+      // the sink rate of the frame before (the gear may have taken it already)
+      const sink = ctx.velocity ? Math.max(0, -ctx.velocity.y, -(this._vyPrev ?? 0)) : 0;
+      J.vy -= clamp(sink * 0.12, 0, 0.45) * s;
+      J.vp -= clamp(sink * 0.03, 0, 0.1) * s;
+    }
+    this._wasOnGround = onGround;
+    // forcing (accelerations of the springs): the runway's roughness, the buffet
+    let fy = 0, fp = 0, fr = 0;
+    if (onGround && gs > 0.5) {
+      const v = Math.min(1, gs / 80);
+      // a slab joint every 6 m: a knock (an impulse), some harder than others
+      const j0 = Math.floor(this._roll / 6);
+      this._roll += gs * dt;
+      const j1 = Math.floor(this._roll / 6);
+      if (j1 !== j0) {
+        const k = (0.5 + 0.5 * Math.abs(Math.sin(j1 * 12.9898))) * v * s;
+        J.vy -= 0.035 * k;
+        J.vp += 0.03 * k * (Math.sin(j1 * 78.233) > 0 ? 1 : -1);
+      }
+      fy += wobble(t * 1.6, 2.2) * 350 * v * v;
+      fp += wobble(t * 1.3, 7.7) * 0.5 * v * v;
+      fr += wobble(t * 1.1, 4.4) * 0.3 * v;
+    }
+    const aoa = ctx.alpha ? Math.max(0, ctx.alpha / DEG - 16) / 12 : 0;
+    const buffet = Math.min(1, aoa) * Math.min(1, (ctx.qbar || 0) / 6000) + this.shake;
+    if (buffet > 0) {
+      fp += wobble(t, 3.3) * 2.5 * buffet;
+      fr += wobble(t * 0.9, 8.1) * 1.8 * buffet;
+      fy += wobble(t * 1.2, 1.9) * 400 * buffet;
+    }
+    fy *= s; fp *= s; fr *= s;
+    // springs: seat ~4.5 Hz, head pitch / roll ~6 Hz, damping 0.35 (semi-implicit Euler, sub-steps)
+    const n = Math.max(1, Math.ceil(dt / 0.004)), h = dt / n;
+    const wy = 2 * Math.PI * 4.5, wa = 2 * Math.PI * 6, z = 0.35;
+    for (let i = 0; i < n; i++) {
+      J.vy += (fy * 0.001 - wy * wy * J.y - 2 * z * wy * J.vy) * h; J.y += J.vy * h;
+      J.vp += (fp - wa * wa * J.p - 2 * z * wa * J.vp) * h; J.p += J.vp * h;
+      J.vr += (fr - wa * wa * J.r - 2 * z * wa * J.vr) * h; J.r += J.vr * h;
+    }
+    J.y = clamp(J.y, -0.05, 0.05);
+    J.p = clamp(J.p, -0.02, 0.02);
+    J.r = clamp(J.r, -0.02, 0.02);
+    return J;
   }
 
   // ------------------------------------------------------------------------------ chase

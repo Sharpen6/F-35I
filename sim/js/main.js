@@ -30,6 +30,7 @@ import { Buildings } from './world/Buildings.js';       // graphics module: 3D b
 import { Clouds } from './env/Clouds.js';      // lighting: cumulus and cirrus, weather presets
 import { AircraftFX } from './aircraft/AircraftFX.js';     // graphics module: vapour, tyre smoke, landing-light pool
 import { Roads } from './world/Roads.js';                 // roads, railways, airfield surfaces and lights (roads track)
+import { Cockpit } from './aircraft/Cockpit.js';      // cockpit track: live PCD, interior, canopy glass
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -265,6 +266,9 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
+    // cockpit track; app.cockpit only while it is on (?cockpit=0: the glb's cockpit as exported, and
+    // modules that would drive its displays do not step aside for a module that is not there)
+    if (!STUBS) { const ck = new Cockpit(ctx); if (ck.enabled) this.cockpit = this.addModule(ck); }
     this.addModule(new Buildings(ctx));
     if (!STUBS) this.addModule(new Clouds(ctx));          // lighting: clouds (?clouds=, menu Weather), drawn by Post
     this.addModule(new AircraftFX(ctx));      // aircraft: vapour, contrail, tyre smoke, landing-light pool, burner quality
