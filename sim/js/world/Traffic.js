@@ -19,8 +19,9 @@
 // one that falls behind the radius and the surplus after a quality change come back elsewhere on
 // the lanes in reach, fading in. Right-hand traffic.
 //
-// Per frame: the cars' positions and fades on the CPU (no allocation), uploaded for the slots in
-// use only. A car keeps its slot (and so its lamps' colour and intensity) for its whole drive.
+// Per frame: the cars' positions and fades on the CPU (under 1 KB of garbage a frame: three's
+// upload ranges and the few cars that change road), uploaded for the slots in use only. A car
+// keeps its slot (and so its lamps' colour and intensity) for its whole drive.
 
 import * as THREE from 'three';
 import { TILE_M, CORE_HALF } from './roadMesh.js';
