@@ -308,7 +308,8 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   PROJ), `terrain_lod.test.mjs` (coverage, cracks, morph, budget), `terrain_surface.test.mjs`
   (runways, water, surface types, airports.json consistency).
 * `node sim/dev/terrain.analysis.test.mjs`: horizon maps against brute force (with earth
-  curvature), field analysis on synthetic fields, the overrun corrections.
+  curvature), field analysis on synthetic fields, the built field data's tile edges against
+  the tiles' insides (when `data/terrain_extra/fields/` is there), the overrun corrections.
 * `/dev/terrain.compile.html` (served `sim/`, any GPU): compiles the twelve terrain programs
   (base and L0 material, `GROUND_DETAIL` 0 / 1 / 2, with and without the sun's shadow map)
   and lists their sampler units (at most 16 on ANGLE / D3D11), then builds the generated
@@ -317,8 +318,14 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
 * `node sim/dev/terrain.shots.mjs [--port 8146] [--out DIR] [--scenes a,b] [--view 1,5]`:
   look-development screenshots of the terrain brief's scenes (Tel Nof 36, fields at 120 m and
   40 m, Judean hills at sunset, Jerusalem from 1.5 km, the coast at 300 m, 3,000 m cruise, the
-  Dead Sea, dunes, Tel Aviv at night) with draw calls, triangles, GPU memory and the sampler
-  count of every terrain program.
+  Dead Sea, dunes, Tel Aviv at night; the mapped orchards, vineyards and greenhouses; the
+  Dead Sea at 05:06 with the jet in and above the Moab plateau's shadow) with draw calls,
+  triangles, GPU memory, `stats.sunVisibility` and the sampler count of every terrain program;
+  `--perf` adds the frame time with each terrain feature switched off in turn.
+* `node sim/dev/terrain.waterpop.mjs [--port 8146] [--out DIR]`: the sea from two camera
+  positions 2 cm apart across a 256 m and a 1280 m wrap line of the periodic texture
+  coordinates, against a control pair away from any line; fails if a wrap pair differs more
+  than the control pair (the wave layers would jump as the camera crosses the line).
 * `node sim/tests/terrain_screens.mjs [--out DIR] [--only a,b]` (Playwright, SwiftShader,
   960 x 540; serves `sim/` itself or takes `--base`): the GPU height / surface checks, then
   screenshots: Tel Nof runway from 30 m, the Tel Aviv coast from 3 km and at sunset, the
