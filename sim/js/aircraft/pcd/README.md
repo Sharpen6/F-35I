@@ -35,7 +35,7 @@ with and without mip levels), ten times a second, and the cockpit view juddered.
 
 **The interior** (`interior.js`, `interiorWorker.js`, `shadow.js`, `detail.js`). The glb's light
 greys become the real tub's dark grey: a satin #45484b, the panels a shade darker, the canopy bow
-and the two pads on the glare shield a near-black matte. The airframe and canopy meshes are one
+and the glare shield near-black (both rebuilt below). The airframe and canopy meshes are one
 skin, painted outside grey: a worker finds the skin's faces that the pilot sees (a voxel flood
 fill of the cockpit air from the eye, then exact rays against a triangle grid: towards the eye
 points, through the glass, out of the tub) and an interior mesh draws them with the interior
@@ -117,11 +117,68 @@ aft, roll right to the right, more throttle forward) and rebuilt about the right
 same pivot when it disagrees, the hands turning with it (`cockpit.inceptorFix` lists what was
 rebuilt; a corrected export is used as it is).
 
+**The frame, coaming, display bezel, consoles, seat and sills** (`parts.js`, built from
+`frame.js`, `coaming.js`, `bezel.js`, `consoles.js`, `seat.js`, `sills.js` on `shapes.js`). The
+glb (`scripts/f35/canopy.py`, `cockpit.py`) makes the pilot's surroundings from boxes: the canopy
+bow a slab under the glass, 8.5 cm wide and 2.6 cm deep with square edges (from the seat, 35-50 cm
+away, a thick matte black arch over the forward view), the glare shield a 3 cm slab with two boxes
+on it ("a flat box with two bumps"), the display in four square bars, the consoles two flat slabs,
+the seat's headbox and beams blocks, the canopy's side frame a bare strip. At start-up, before the
+interior analysis (so that the worker's occlusion, the cockpit shadow and the paint take them like
+the glb's own parts), each is rebuilt from the glb's own geometry, in its place and at its size:
+
+* the bow (`frame.js`): the glb's arch kept exactly (its rings walked off the glb mesh: seen from
+  outside through the glass it does not move), swept with the section of a machined frame bonded
+  under the one-piece transparency: a flange as wide as the glb's band (8.5 cm) against the glass
+  with a black sealant fillet along both edges, a body 5 cm wide and 3 cm deep whose 5 mm rounded
+  edges catch the sky, a row of fastener heads on each flange every 3.2 cm; satin dark grey
+  (#323437, roughness 0.5), the fasteners bare metal;
+* the coaming (`coaming.js`): the F-35 has no HUD; a low hood in the glb slab's box: a bull-nosed
+  lip 2 cm high over the display, the top sloping 10 deg down to a rounded front edge, the
+  underside rising from the front as a brow over the display, the corners rounded in plan (4 cm),
+  a flat black anti-glare finish (#1e1f21, roughness 0.93); the two pads as low rounded housings
+  (#57534b). Its edge seen from the eye stays on or under the helmet's `COAMING` line
+  (`js/ui/HMD.js`, which holds the flight path marker above it): at most 0.02 deg over it at the
+  hood's rounded corners, measured on a dense silhouette; the helmet and its e2e check are
+  unchanged;
+* the display's bezel (`bezel.js`): a moulded frame round the 20 x 8 in glass, its face 1.8 cm
+  wide and 4.5 mm proud with a chamfered lip down to the glass and rounded corners, a slim mullion
+  between the two halves, eight screws; the glb's bars and divider dropped (the glass, its picture
+  and its mapping are the glb's);
+* the side consoles (`consoles.js`): each console's top (the panel mesh's long boxes out at the
+  sides) cut into Dzus-fastened panels, a fighter's 5.75 in panels held by a quarter-turn fastener
+  at every corner: one panel per row of the glb's switches, blank panels fore and aft, plates round
+  the throttle's track and the stick's base, a black base that reads as the seams between them;
+* the seat (`seat.js`): the headbox and the two main beams of the glb's seat (its islands inside
+  three boxes, sized from their own points) as rounded boxes, the headbox under a lid, the beams
+  with a guide strip and a row of bolts;
+* the canopy's side frame and the sills (`sills.js`): the tub's wall, the canopy frame and the
+  glass are sliced every 2.5 cm from behind the seat to the instrument panel; along the canopy
+  frame's inner face a liner panel with the transparency's retaining strip, a row of bolts and a
+  rubber seal at its foot (built with the canopy shut, in the frame mesh: it moves with the
+  canopy); over the tub wall's crest a rounded cap with screws every 7 cm (the sky catches it as a
+  soft highlight instead of a hard line).
+
+The replaced glb meshes are hidden (and skipped by the analysis, `userData.ckSkip`); in the merged
+cockpit and seat meshes their islands (found inside fixed boxes) are dropped from the index. The
+new meshes take the material of the part they replace or one of three new ones
+(`F35_glare_shield`, `F35_console_panel`, `F35_canopy_fastener`), clones of the cockpit panels'
+material: the same shader program before and after the interior's patch, so nothing compiles when
+they first come into view. A fixed occlusion per vertex (`ckCavity`, multiplied into the
+analysis's) darkens the creases the analysis's 1.5 cm voxels cannot resolve (a fastener's foot, the
+sealant, a panel seam). Fifteen meshes, merged by parent, transform and material into eight;
+36,052 triangles. A part whose glb source is not as expected stays as the glb has it (a console
+warning; `cockpit.parts.stats` says which). `cockpit.parts.setEnabled(false)` puts the glb's parts
+back and `?ckparts=0` leaves them all. Not built: rear-view mirrors and a handhold on the bow, which
+no public photo of the F-35's canopy shows (its view behind is the DAS on the helmet): left out
+rather than guessed; nor legends on the console panels.
+
 ## Switches and quality
 
 | | |
 | --- | --- |
 | `?cockpit=0` | the module off: the glb's cockpit as exported |
+| `?ckparts=0` | the glb's bow, glare shield, display frame, consoles, seat and canopy frame as exported (the rest of the module on) |
 | `?shake=0` | no cockpit vibration (runway, touchdown, buffet); `app.cams.vibration` scales it (0-1) |
 | `quality=low` | PCD 1024 x 410 px at 4 Hz, no canopy pass, no paint detail, no cockpit shadow map |
 | `quality=medium` | PCD 1600 x 640 px at 6 Hz, canopy pass, paint detail, cockpit shadow 1024² (redrawn at a 0.15 deg turn of the light, at 10 Hz with the stick moving) |
@@ -140,9 +197,11 @@ the console: `__sim.app.cockpit` (`.pcd.drawMs`, `.pcd.redraws`, `.interiorStats
 | --- | --- |
 | `F35_PCD_Screen` | replaced by `F35_PCD_Screen_live` (live canvas as emissive map, AR-coated black glass, alpha 0) |
 | `F35_cockpit`, `F35_cockpit_panel` | repainted dark grey satin (#45484b, #3a3c40), detail, occlusion, bounce, sun shadow, glow |
-| `F35_canopy_bow` | matte dark frame (#2a2b2e, roughness 0.86) |
-| `F35_glare_pad` | dark (#2c2d30) |
-| `F35_seat`, `F35_seat_cushion` | dark grey (#45484a), olive-grey cushion (#575b4e) |
+| `F35_canopy_bow` | satin dark grey frame (#323437, roughness 0.5); on the rebuilt bow and the canopy frame's liner |
+| `F35_glare_pad` | the pads' housings (#57534b, roughness 0.85) |
+| `F35_seat`, `F35_seat_cushion` | dark grey (#3a3c3f), olive-grey cushion (#575b4e) |
+| new `F35_glare_shield`, `F35_console_panel`, `F35_canopy_fastener` | clones of `F35_cockpit_panel`: the coaming's hood, the consoles' base and the display's bezel flat black (#1e1f21, roughness 0.93); the console panels (#2b2d30); fasteners, bolts and screws bare metal (#7a7d80, metalness 0.6) |
+| new meshes (`parts.js`) | `Canopy_Bow_Frame+Canopy_Frame_Liner`, `Canopy_Bow_Fasteners+Canopy_Frame_Bolts` (under the canopy), `Coaming_Hood+Console_Base+PCD_Bezel`, `Coaming_Pads`, `Seat_Rebuilt`, `Console_Panels`, `Cockpit_Sill_Cap`, `Seat_Rebuilt_Metal+Console_Fasteners+Cockpit_Sill_Screws+PCD_Bezel_Screws`; the glb's `Canopy` bow and glare pads hidden, the glare shield, the display's frame and the seat's headbox and beams dropped from their merged meshes |
 | `F35_Skin_A` (inner faces) | drawn by the new `F35_cockpit_interior` / `_back` (#45484c) on `Airframe_2_interior`, `Canopy_2_interior`, `*_interior_back`; the paint's edge cut along the interior share |
 | `F35_yellow_black`, `F35_switch_guard`, `F35_switch`, `F35_gear_handle`, `F35_hose`, all `P2_*` | occlusion, bounce, sun shadow and glow only |
 | `F35_SwitchLED`, `P2_TabletScreen` | emission follows the exposure; alpha 0 (displays) |

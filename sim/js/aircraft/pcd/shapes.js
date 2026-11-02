@@ -13,22 +13,41 @@
 
 import * as THREE from 'three';
 
+/** A typed array at least `need` long: `a`, or a copy of it twice as long (or more). */
+function grown(a, need) {
+  if (need <= a.length) return a;
+  const b = new a.constructor(Math.max(need, a.length * 2));
+  b.set(a);
+  return b;
+}
+
 export class MeshBuilder {
+  /** (typed arrays that grow: no garbage per vertex; positions in doubles until geometry()) */
   constructor() {
-    this.p = [];
-    this.n = [];
-    this.c = [];
-    this.i = [];
+    this.p = new Float64Array(3072);
+    this.n = new Float64Array(3072);
+    this.c = new Float32Array(1024);
+    this.i = new Uint32Array(6144);
+    this.nv = 0;
+    this.ni = 0;
   }
 
-  get count() { return this.p.length / 3; }
+  get count() { return this.nv; }
 
   /** A vertex: position, unit normal, cavity (0 closed .. 1 open). Returns its index. */
   v(px, py, pz, nx, ny, nz, cav = 1) {
-    this.p.push(px, py, pz);
-    this.n.push(nx, ny, nz);
-    this.c.push(cav);
-    return this.count - 1;
+    const k = this.nv, o = k * 3;
+    if (o + 3 > this.p.length) {
+      this.p = grown(this.p, o + 3);
+      this.n = grown(this.n, o + 3);
+      this.c = grown(this.c, k + 1);
+    }
+    const P = this.p, N = this.n;
+    P[o] = px; P[o + 1] = py; P[o + 2] = pz;
+    N[o] = nx; N[o + 1] = ny; N[o + 2] = nz;
+    this.c[k] = cav;
+    this.nv = k + 1;
+    return k;
   }
 
   vv(p, n, cav = 1) { return this.v(p.x, p.y, p.z, n.x, n.y, n.z, cav); }
@@ -41,22 +60,58 @@ export class MeshBuilder {
     const gx = uy * wz - uz * wy, gy = uz * wx - ux * wz, gz = ux * wy - uy * wx;
     if (gx * gx + gy * gy + gz * gz < 1e-16) return;
     const s = gx * (N[a * 3] + N[b * 3] + N[c * 3]) + gy * (N[a * 3 + 1] + N[b * 3 + 1] + N[c * 3 + 1]) + gz * (N[a * 3 + 2] + N[b * 3 + 2] + N[c * 3 + 2]);
-    if (s >= 0) this.i.push(a, b, c); else this.i.push(a, c, b);
+    if (this.ni + 3 > this.i.length) this.i = grown(this.i, this.ni + 3);
+    const I = this.i, o = this.ni;
+    I[o] = a;
+    if (s >= 0) { I[o + 1] = b; I[o + 2] = c; } else { I[o + 1] = c; I[o + 2] = b; }
+    this.ni = o + 3;
   }
 
   quad(a, b, c, d) { this.tri(a, b, c); this.tri(a, c, d); }
 
   /** The geometry: position, normal, the index; the cavity in userData.ckCavity (Uint8Array). */
   geometry() {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.n, 3));
-    g.setIndex(this.count > 65535 ? new THREE.Uint32BufferAttribute(this.i, 1) : new THREE.Uint16BufferAttribute(this.i, 1));
-    g.userData.ckCavity = Uint8Array.from(this.c, (x) => Math.round(255 * Math.min(1, Math.max(0, x))));
+    const g = new THREE.BufferGeometry(), nv = this.nv;
+    g.setAttribute('position', new THREE.BufferAttribute(Float32Array.from(this.p.subarray(0, nv * 3)), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(Float32Array.from(this.n.subarray(0, nv * 3)), 3));
+    const I = this.i.subarray(0, this.ni);
+    g.setIndex(new THREE.BufferAttribute(nv > 65535 ? I.slice() : Uint16Array.from(I), 1));
+    const C = new Uint8Array(nv);
+    for (let k = 0; k < nv; k++) C[k] = Math.round(255 * Math.min(1, Math.max(0, this.c[k])));
+    g.userData.ckCavity = C;
     g.computeBoundingBox();
     g.computeBoundingSphere();
     return g;
   }
+}
+
+/**
+ * Geometries made by MeshBuilder (position, normal, index, userData.ckCavity), in one frame, as
+ * one geometry.
+ */
+export function mergeBuilt(list) {
+  let nv = 0, ni = 0;
+  for (const g of list) { nv += g.attributes.position.count; ni += g.index.count; }
+  const P = new Float32Array(nv * 3), N = new Float32Array(nv * 3), C = new Uint8Array(nv).fill(255);
+  const I = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
+  let ov = 0, oi = 0;
+  for (const g of list) {
+    const n = g.attributes.position.count, idx = g.index.array;
+    P.set(g.attributes.position.array, ov * 3);
+    N.set(g.attributes.normal.array, ov * 3);
+    if (g.userData.ckCavity) C.set(g.userData.ckCavity, ov);
+    for (let k = 0; k < idx.length; k++) I[oi + k] = idx[k] + ov;
+    ov += n;
+    oi += idx.length;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+  g.setIndex(new THREE.BufferAttribute(I, 1));
+  g.userData.ckCavity = C;
+  g.computeBoundingBox();
+  g.computeBoundingSphere();
+  return g;
 }
 
 /**
@@ -197,6 +252,13 @@ export function stud(B, o, n, r, h, seg = 8, foot = 0.55) {
     B.quad(r0[k], r0[k1], r1[k1], r1[k]);
     B.tri(r1[k], r1[k1], top);
   }
+}
+
+/** A polygon's corners ([t, n, ...]) in counterclockwise order (reversed if clockwise). */
+export function ccw(c) {
+  let a = 0;
+  for (let k = 0; k < c.length; k++) { const p = c[k], q = c[(k + 1) % c.length]; a += p[0] * q[1] - q[0] * p[1]; }
+  return a < 0 ? c.slice().reverse() : c;
 }
 
 /** Unit vectors and points along a polyline by arc length: positions every `step` metres. */
