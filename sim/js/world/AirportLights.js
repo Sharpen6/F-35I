@@ -21,6 +21,10 @@
 // pulled towards the camera (coarse distant terrain does not swallow lights on the ground).
 // Switched by sun elevation: runway, approach and taxiway lights from sun 8 deg, floodlights
 // from sunset; PAPI always on.
+//
+// Also drawn here: the street lamps (roads/lamps_ix_iz.bin, one THREE.Points per road tile out to
+// LAMP_RANGE, their own program: 16 bytes a lamp), thinned with distance with the light of the
+// lamps left out carried by the ones kept, and the cars' lights (js/world/Traffic.js).
 
 import * as THREE from 'three';
 import { ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
@@ -31,8 +35,35 @@ const C = {
   white: [1.0, 0.86, 0.66], yellow: [1.0, 0.62, 0.1], green: [0.1, 1.0, 0.42], red: [1.0, 0.07, 0.03],
   blue: [0.12, 0.28, 1.0], flood: [1.0, 0.93, 0.82], strobe: [0.9, 0.94, 1.0], off: [0, 0, 0],
 };
-const KIND = { normal: 0, papi: 1, flash: 2, omni: 3 };
+// shader kinds (5: the cars of js/world/Traffic.js; the street lamps have a program of their own)
+const KIND = { normal: 0, papi: 1, flash: 2, omni: 3, vehicle: 5 };
 const GROUP = { runway: 0, approach: 1, taxi: 2, flood: 3, papi: 4 };
+
+// Street lamps (sim/tools/world/roads.py street_lamps: the lamps of the road shader's pools of
+// light): high-pressure sodium on main roads, warm LED in towns, as in js/world/roadShaders.js.
+// Colour: linear RGB, the chromaticity of the lamp a little short of its full saturation
+// (high-pressure sodium, x 0.52 y 0.41, is (1, 0.26, 0.02); LED 3500-4000 K). cd of the luminaire
+// seen from the side (below its horizontal plane), cd of its lit pool seen from above.
+const LAMP = [
+  { rgb: [1.0, 0.36, 0.06], side: 3000, pool: 600 },       // sodium, 12 m poles, 42 m apart
+  { rgb: [1.0, 0.62, 0.32], side: 1200, pool: 250 },       // LED, 9 m, 33 m
+];
+const glslVec3 = (v) => `vec3(${v.map((x) => x.toFixed(4)).join(', ')})`;
+const LAMP_DEFINES = {
+  STREET_LAMPS: 1,
+  LAMP_SODIUM_RGB: glslVec3(LAMP[0].rgb), LAMP_SODIUM_SIDE: LAMP[0].side.toFixed(1), LAMP_SODIUM_POOL: LAMP[0].pool.toFixed(1),
+  LAMP_LED_RGB: glslVec3(LAMP[1].rgb), LAMP_LED_SIDE: LAMP[1].side.toFixed(1), LAMP_LED_POOL: LAMP[1].pool.toFixed(1),
+};
+/** Street lamps are drawn this far (m); the terrain's city lights, where it has them, beyond. */
+export const LAMP_RANGE = { low: 8000, medium: 14000, high: 20000 };
+
+const ERF_GLSL = /* glsl */ `
+// erf to ~1e-4 (Winitzki)
+float erfA(float x) {
+  float t = x * x;
+  return sign(x) * sqrt(1.0 - exp(-t * (1.2732395 + 0.147 * t) / (1.0 + 0.147 * t)));
+}
+`;
 
 /** Outdoor illuminance (lux) for a sun elevation (deg): daylight, civil / nautical twilight, night. */
 export function skyIlluminance(el) {
@@ -49,18 +80,28 @@ const VERT = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_vertex>
 ${ATMOSPHERE_CORE}
+${ERF_GLSL}
+#ifdef STREET_LAMPS
+// street lamps (their own material, 16 bytes a lamp): position and rank, flags
+attribute vec4 aLamp;      // rank 0..255 (thinning with distance); flags: 1 LED, 2 a minor road; -; -
+uniform float uStreetOn;
+#else
 attribute vec4 aColA;      // rgb, cd: seen from the -axis side (e.g. landing on the runway's first end)
 attribute vec4 aColB;      // rgb, cd: seen from the +axis side
-attribute vec4 aDir;       // axis x, z; horizontal beam half width (rad, 0: omnidirectional); kind
-attribute vec3 aExt;       // PAPI angle (rad) / flash phase; omnidirectional share; switch group
+attribute vec4 aDir;       // axis x, z; horizontal beam half width (rad, 0: omnidirectional; cars: fade); kind
+attribute vec3 aExt;       // PAPI angle (rad) / flash phase; omni share; switch group
 uniform vec4 uOn;          // runway, approach, taxiway, floodlights: intensity factor (0: off)
 uniform float uPapiOn;
+uniform float uClock;      // seconds
+#endif
 uniform float uThreshold;  // lux: threshold of a point source on the background
 uniform float uExposure;
-uniform float uPx;         // pixel scale
-uniform float uClock;      // seconds
-varying vec3 vColor;
-varying float vSize;
+uniform float uPxAngle;    // radians per pixel of the drawing buffer
+uniform float uGain;       // scene irradiance per lux, times the night eye's adaptation (Roads.js)
+uniform vec3 uRange;       // road ribbons' range, group 0 and 1; street lamps' range (m)
+varying vec3 vColor;       // irradiance at the eye (scene units), per channel
+varying float vSigma;      // Gaussian radius (px)
+varying float vSize;       // point size (px)
 
 void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
@@ -69,20 +110,38 @@ void main() {
   rel.y -= atmoCurvatureDrop(rel.xz);
   float d = max(length(rel), 0.5);
   vec3 toCam = -rel / d;
+  float I;
+  vec3 rgb;
+#ifdef STREET_LAMPS
+  // The luminaire (cut-off optics: its full intensity from below its horizontal plane, from above
+  // only the glow of its glass, ~8 %) and, beyond the range where the road surface shows its
+  // pool of light, the pool as a point (Lambertian, seen from above).
+  bool led = mod(aLamp.y, 2.0) > 0.5;
+  rgb = led ? LAMP_LED_RGB : LAMP_SODIUM_RGB;
+  float se = toCam.y;                                          // sine of the eye's elevation from the lamp
+  float poolFrom = aLamp.y > 1.5 ? uRange.y : uRange.x;
+  I = (led ? LAMP_LED_SIDE : LAMP_SODIUM_SIDE) * (0.08 + 0.92 * (1.0 - smoothstep(-0.1, 0.1, se)))
+    + (led ? LAMP_LED_POOL : LAMP_SODIUM_POOL) * max(se, 0.0) * smoothstep(0.75 * poolFrom, poolFrom, d);
+  // thinned with distance: (4 km / d)^2 of the lamps, at least 1 in 16, each carrying the light
+  // of those left out; faded out at the end of the range
+  float keep = clamp(16.0e6 / (d * d), 1.0 / 16.0, 1.0);
+  I *= ((aLamp.x + 0.5) / 256.0 < keep ? 1.0 / keep : 0.0) * (1.0 - smoothstep(0.8 * uRange.z, uRange.z, d)) * uStreetOn;
+#else
   float kind = aDir.w;
-  // which side of the axis the eye is on, and the beam
+  // which side of the axis the eye is on, and the beam (a car's is fixed: its aDir.z is its fade)
   float side = dot(toCam.xz, aDir.xy);
   vec4 col = side >= 0.0 ? aColB : aColA;
-  float I = col.a;
-  if (aDir.z > 0.0) {
+  I = col.a;
+  float bw = kind == 5.0 ? 0.55 : aDir.z;
+  if (bw > 0.0) {
     float h = length(toCam.xz);
     float c = h > 1e-4 ? abs(side) / h : 1.0;                 // cos of the horizontal angle off the axis
     float ang = acos(clamp(c, -1.0, 1.0));
     float el = atan(toCam.y, h);
-    float beam = exp(-pow(ang / aDir.z, 2.0)) * exp(-pow((el - 0.07) / 0.2, 2.0));
+    float beam = exp(-pow(ang / bw, 2.0)) * exp(-pow((el - 0.07) / 0.2, 2.0));
     I *= max(beam, aExt.y);
   }
-  vec3 rgb = col.rgb;
+  rgb = col.rgb;
   if (kind == 1.0) {
     // PAPI: white above the unit's angle, red below (3 arc minutes of transition)
     float el = atan(toCam.y, length(toCam.xz));
@@ -90,25 +149,43 @@ void main() {
     rgb = mix(vec3(1.0, 0.07, 0.03), vec3(1.0, 0.9, 0.75), w);
     I *= uPapiOn;
   } else if (kind == 2.0) {
-    // sequenced flasher: one run towards the threshold twice a second
+    // sequenced flasher: one run towards the threshold twice a second; each flash held 40 ms
+    // (two or three frames: a shorter one falls between frames)
     float t = fract(uClock * 2.0 - aExt.x);
-    I *= exp(-t * 60.0) * 3.0;
+    I *= step(t, 0.08) * 1.5;
+  } else if (kind == 5.0) {
+    // a car (js/world/Traffic.js): faded in when it appears, out at a dead end and the radius
+    I *= aDir.z;
   }
   int grp = int(aExt.z + 0.5);
   float on = grp == 0 ? uOn.x : grp == 1 ? uOn.y : grp == 2 ? uOn.z : grp == 3 ? uOn.w : 1.0;
   I *= on;
-  // illuminance at the eye through the atmosphere, against the detection threshold
+#endif
+  // illuminance at the eye through the atmosphere
   vec3 T = atmoPathTransmittance(uCamAltitude, hLight, d);
-  float E = I * T.g / (d * d);
+  vec3 c = rgb * T;
+  float cl = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-6);
+  float E = I * cl / (d * d);                                  // lux (luminance-weighted)
+  // Seen against its background (Allard / Blondel-Rey threshold E_t = 10^(0.64 log B - 5.7)):
   float V = E / uThreshold;
   float lv = log2(max(V, 1e-6));
-  // brightness and size grow with the log of the excess over threshold (as star magnitudes):
-  // a light just above threshold is a faint pixel, a bright one a saturated disc a few px wide
-  float a = clamp(lv / 3.0, 0.0, 1.0);
-  float peak = min(a * (0.5 + 0.15 * max(lv - 3.0, 0.0)), 3.0);
-  vColor = rgb * (T / max(T.g, 1e-4)) * peak / max(uExposure, 1e-4);
-  vSize = clamp(0.9 + 0.12 * max(lv - 2.0, 0.0), 0.9, 3.2) * uPx;
-  gl_PointSize = a > 0.0 ? vSize * 3.5 : 0.0;
+  // Physical: the light's irradiance spread over a Gaussian of sigma px. A display cannot show
+  // a point as bright as the eye sees it, so a light the eye sees well (by day: PAPI against a
+  // sunlit field; at night: a lamp many km away) is at least as bright as its excess over the
+  // threshold says (as star magnitudes), up to a little under white: only a light that is
+  // physically brighter than that saturates the display (near ones: depth, not a flat carpet).
+  float Om = uPxAngle * uPxAngle;
+  float ePhys = E * uGain * smoothstep(0.5, 2.0, V);
+  float fc0 = erfA(0.5439) * erfA(0.5439);                     // centre pixel's share at sigma 0.65
+  float peakP = clamp(lv / 3.0, 0.0, 1.0) * min(0.35 + 0.06 * max(lv - 3.0, 0.0), 0.85);
+  float e = max(ePhys, peakP / max(uExposure, 1e-4) * Om / fc0);
+  // never under 0.65 px (a sub-pixel Gaussian twinkles as it crosses pixel centres); wider when
+  // bright, as glare
+  float peak = e * fc0 / Om * uExposure;                        // display value of the centre pixel
+  vSigma = clamp(0.65 * (1.0 + 0.12 * max(log2(max(peak, 1e-6)) - 2.0, 0.0)), 0.65, 1.6);
+  vColor = c / cl * e;
+  vSize = e > 0.0 && I > 0.0 ? 2.0 * ceil(3.5 * vSigma) + 1.0 : 0.0;
+  gl_PointSize = vSize;
   // towards the camera, so the coarse terrain far away does not hide lights on the ground
   float pull = min(0.012 * d, d * 0.5);
   vec3 relP = rel * (1.0 - pull / d);
@@ -120,15 +197,26 @@ void main() {
 const FRAG = /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_fragment>
+${ERF_GLSL}
+uniform float uPxAngle;
+uniform float uExposure;
 varying vec3 vColor;
+varying float vSigma;
 varying float vSize;
 void main() {
   #include <logdepthbuf_fragment>
-  vec2 p = (gl_PointCoord - 0.5) * vSize * 3.5;      // pixels from the centre
-  float r2 = dot(p, p) / (vSize * vSize);
-  float f = exp(-2.5 * r2) + 0.03 * exp(-0.4 * r2);   // core and a faint halo (bloom adds glare)
-  if (f < 0.004) discard;
-  gl_FragColor = vec4(vColor * f, 1.0);
+  // this pixel's share of the light: the Gaussian integrated over the pixel's square, so the sum
+  // over the pixels stays the light's whole energy wherever its centre falls (no twinkling)
+  vec2 p = (gl_PointCoord - 0.5) * vSize;                    // pixel centre - light centre (px)
+  float k = 0.70710678 / vSigma;
+  float f = 0.25 * (erfA((p.x + 0.5) * k) - erfA((p.x - 0.5) * k)) * (erfA((p.y + 0.5) * k) - erfA((p.y - 0.5) * k));
+  if (f < 2e-5) discard;
+  // radiance: the share of the irradiance over the pixel's solid angle, at most 64 on the display
+  // (where a bloom chain clamps)
+  vec3 L = vColor * f / (uPxAngle * uPxAngle);
+  float m = max(L.r, max(L.g, L.b)) * uExposure;
+  L *= min(1.0, 64.0 / max(m, 1e-6));
+  gl_FragColor = vec4(L, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
@@ -148,28 +236,52 @@ class LightList {
 }
 
 export class AirportLights {
-  constructor({ renderer, scene, env, terrain }) {
+  constructor({ renderer, scene, env, terrain, camera, roads = null }) {
     this.renderer = renderer;
     this.scene = scene;
     this.env = env;
     this.terrain = terrain;
+    this.camera = camera;
+    this.roads = roads;
     this.group = new THREE.Group();
     this.group.name = 'AirportLights';
     scene.add(this.group);
     this.quality = 'high';
-    this.stats = { lights: 0, airfields: 0 };
+    this.stats = { lights: 0, airfields: 0, lamps: 0, lampTiles: 0 };
     this.uniforms = {
       ...env.uniforms,
       uOn: { value: new THREE.Vector4() },
       uPapiOn: { value: 1 },
+      uStreetOn: { value: 0 },
       uThreshold: { value: 1e-7 },
       uExposure: { value: 1 },
-      uPx: { value: 1 },
+      uPxAngle: { value: 1e-3 },
+      uGain: { value: 1 / 32000 },
+      uRange: { value: new THREE.Vector3(3400, 1600, LAMP_RANGE.high) },
       uClock: { value: 0 },
     };
+    // street lamp tiles: 'ix,iz' -> {state, points}
+    this._lampSrc = null;
+    this._lampTiles = new Map();
+    this._lampAt = new THREE.Vector3(1e9, 0, 0);
+    this._dbSize = new THREE.Vector2();
+    this._camPos = new THREE.Vector3();
     this.material = new THREE.ShaderMaterial({
       name: 'AirportLights',
       uniforms: this.uniforms,
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      blending: THREE.AdditiveBlending,
+      fog: false,
+    });
+    // the street lamps' own program (same shader, STREET_LAMPS): 16 bytes a lamp instead of 72
+    this.lampMaterial = new THREE.ShaderMaterial({
+      name: 'StreetLamps',
+      uniforms: this.uniforms,
+      defines: LAMP_DEFINES,
       vertexShader: VERT,
       fragmentShader: FRAG,
       transparent: true,
@@ -182,9 +294,99 @@ export class AirportLights {
     this._built = false;
   }
 
-  setQuality(q) { this.quality = q; }
+  setQuality(q) {
+    this.quality = LAMP_RANGE[q] ? q : 'high';
+    this.uniforms.uRange.value.z = LAMP_RANGE[this.quality];
+    this._lampAt.set(1e9, 0, 0);
+  }
   setTime() {}
-  reset() {}
+  reset() { this._lampAt.set(1e9, 0, 0); }
+
+  /** Where the street lamp tiles are (Roads.js, from roads/index.json): {baseUrl, files: {'ix,iz': count}}. */
+  setLampSource(src) {
+    this._lampSrc = src && src.files && Object.keys(src.files).length ? src : null;
+    this._lampAt.set(1e9, 0, 0);
+  }
+
+  /** The road ribbons' draw range (m) of group 0 and group 1: lamp pools become points beyond. */
+  setRoadRange(r0, r1) { this.uniforms.uRange.value.x = r0; this.uniforms.uRange.value.y = r1; }
+
+  // street lamp tiles within the lamp range: loaded (8 bytes a lamp) and dropped as the camera moves
+  _updateLamps(cam) {
+    if (!this._lampSrc) return;
+    const dx = cam.x - this._lampAt.x, dz = cam.z - this._lampAt.z;
+    if (dx * dx + dz * dz < 500 * 500) return;
+    this._lampAt.copy(cam);
+    const R = LAMP_RANGE[this.quality], T = 6400, H = 51200;
+    const want = new Set();
+    const i0 = Math.max(0, Math.floor((cam.x - R + H) / T)), i1 = Math.min(15, Math.floor((cam.x + R + H) / T));
+    const j0 = Math.max(0, Math.floor((cam.z - R + H) / T)), j1 = Math.min(15, Math.floor((cam.z + R + H) / T));
+    for (let iz = j0; iz <= j1; iz++) {
+      for (let ix = i0; ix <= i1; ix++) {
+        const key = `${ix},${iz}`;
+        if (!this._lampSrc.files[key]) continue;
+        const ex = Math.max(-H + ix * T - cam.x, 0, cam.x - (-H + (ix + 1) * T));
+        const ez = Math.max(-H + iz * T - cam.z, 0, cam.z - (-H + (iz + 1) * T));
+        if (Math.hypot(ex, ez) > R) continue;
+        want.add(key);
+        if (!this._lampTiles.has(key)) this._loadLamps(key, ix, iz);
+      }
+    }
+    for (const [key, t] of this._lampTiles) {
+      if (want.has(key)) continue;
+      const cx = -H + (t.ix + 0.5) * T, cz = -H + (t.iz + 0.5) * T;
+      if (Math.hypot(cx - cam.x, cz - cam.z) < R + 6000) continue;      // keep a margin (no reload churn)
+      this._dropLamps(key, t);
+    }
+  }
+
+  _loadLamps(key, ix, iz) {
+    const t = { state: 'loading', ix, iz, points: null, n: 0 };
+    this._lampTiles.set(key, t);
+    fetch(`${this._lampSrc.baseUrl}lamps_${ix}_${iz}.bin`).then((r) => (r.ok ? r.arrayBuffer() : null)).then((buf) => {
+      if (this._lampTiles.get(key) !== t || !buf) { if (this._lampTiles.get(key) === t) t.state = 'failed'; return; }
+      const dv = new DataView(buf);
+      const n = buf.byteLength >= 8 && dv.getUint32(4, true);
+      if (!n || String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== 'LMP1') { t.state = 'failed'; return; }
+      const pos = new Float32Array(3 * n), lamp = new Uint8Array(4 * n);
+      let y0 = Infinity, y1 = -Infinity;
+      for (let i = 0; i < n; i++) {
+        const o = 8 + 8 * i;
+        // relative to the tile's centre (float32 precision near the camera)
+        pos[3 * i] = dv.getUint16(o, true) * 0.1 - 3200;
+        pos[3 * i + 1] = dv.getUint16(o + 4, true) * 0.05 - 500;
+        pos[3 * i + 2] = dv.getUint16(o + 2, true) * 0.1 - 3200;
+        y0 = Math.min(y0, pos[3 * i + 1]); y1 = Math.max(y1, pos[3 * i + 1]);
+        lamp[4 * i] = dv.getUint8(o + 7);                   // rank
+        lamp[4 * i + 1] = dv.getUint8(o + 6) & 3;           // LED, minor road
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('aLamp', new THREE.BufferAttribute(lamp, 4));
+      g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, (y0 + y1) / 2, 0), 4526 + (y1 - y0) / 2 + 20);
+      const pts = new THREE.Points(g, this.lampMaterial);
+      pts.name = `StreetLamps ${key}`;
+      pts.position.set(-51200 + (ix + 0.5) * 6400, 0, -51200 + (iz + 0.5) * 6400);
+      pts.matrixAutoUpdate = false;
+      pts.updateMatrix();
+      pts.renderOrder = 1;
+      pts.visible = this.uniforms.uStreetOn.value > 0;
+      this.group.add(pts);
+      t.points = pts; t.n = n; t.state = 'ready';
+      this.stats.lamps += n;
+      this.stats.lampTiles++;
+    }).catch(() => { t.state = 'failed'; });
+  }
+
+  _dropLamps(key, t) {
+    if (t.points) {
+      this.group.remove(t.points);
+      t.points.geometry.dispose();
+      this.stats.lamps -= t.n;
+      this.stats.lampTiles--;
+    }
+    this._lampTiles.delete(key);
+  }
 
   /** Builds every airfield's lights (once the terrain and airfields.json are there). */
   setAirfields(af) {
@@ -346,14 +548,29 @@ export class AirportLights {
     const B = 0.15 * lux / Math.PI;
     U.uThreshold.value = Math.max(10 ** (0.64 * Math.log10(B) - 5.7), 1e-7);
     U.uExposure.value = this.renderer.toneMappingExposure || 1;
-    U.uPx.value = Math.min(2, this.renderer.getPixelRatio()) * Math.max(0.6, Math.min(1.6, this.renderer.domElement.height / 1080));
+    // radians per pixel of the drawing buffer (device pixels: the pixel ratio is in it once)
+    const cam = (f && f.camera) || this.camera;
+    if (cam && cam.isPerspectiveCamera) {
+      const hPx = this.renderer.getDrawingBufferSize(this._dbSize).y || 1;
+      U.uPxAngle.value = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) / (cam.zoom || 1) / hPx;
+    }
+    // street lamps with the road surfaces' switch and night adaptation (Roads.js)
+    U.uStreetOn.value = this.roads ? this.roads._lightsOn || 0 : 0;
+    U.uGain.value = this.roads && this.roads.sceneGain ? this.roads.sceneGain : 1 / 32000;
     U.uClock.value = (performance.now() - this._t0) / 1000;
+    // the lamps only while they are on (by day their 200 k points would be drawn for nothing);
+    // their tiles load from dusk
+    const lampsOn = U.uStreetOn.value > 0;
+    for (const t of this._lampTiles.values()) if (t.points) t.points.visible = lampsOn;
+    if (cam && lampsOn) this._updateLamps(cam.getWorldPosition(this._camPos));
     this.group.visible = true;
   }
 
   dispose() {
+    for (const [key, t] of [...this._lampTiles]) this._dropLamps(key, t);
     for (const o of [...this.group.children]) o.geometry.dispose();
     this.scene.remove(this.group);
     this.material.dispose();
+    this.lampMaterial.dispose();
   }
 }

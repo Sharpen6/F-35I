@@ -19,9 +19,9 @@
 // the traffic), traffic=0 the traffic.
 
 import * as THREE from 'three';
-import { HGRID, TILE_M, CORE_HALF, CHUNK_M, CHUNKS } from './roadMesh.js';
-import { ROAD_VERT, ROAD_FRAG, MAX_MASTS } from './roadShaders.js';
-import { AirportLights, skyIlluminance } from './AirportLights.js';
+import { HGRID, TILE_M, CORE_HALF, CHUNK_M, CHUNKS, NOISE_SIZE } from './roadMesh.js';
+import { ROAD_VERT, roadFrag, MAX_MASTS } from './roadShaders.js';
+import { AirportLights, skyIlluminance, LAMP_RANGE } from './AirportLights.js';
 import { Traffic } from './Traffic.js';
 
 const FAR_HALF = 204800;
@@ -44,66 +44,13 @@ const KEEP = 900;                        // and dropped this far beyond it
 const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
 
 // ------------------------------------------------------------------------------------------
-// procedural noise texture (tiling value noise, a different scale per channel)
-
-function mulberry32(a) {
-  return () => {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** 256 x 256 RGBA, every channel mean 0.5: r grain, g blotches, b streaks / stains, a large patches. */
-export function makeNoiseData(size = 256) {
-  const rnd = mulberry32(20261101);
-  const lattices = new Map();
-  const lattice = (n) => {
-    if (!lattices.has(n)) { const a = new Float32Array(n * n); for (let i = 0; i < a.length; i++) a[i] = rnd(); lattices.set(n, a); }
-    return lattices.get(n);
-  };
-  const value = (n, x, y) => {      // x, y in 0..1 (tiling), n lattice cells per tile
-    const L = lattice(n);
-    const gx = x * n, gy = y * n;
-    const xi = Math.floor(gx), yi = Math.floor(gy), fx = gx - xi, fy = gy - yi;
-    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-    const i0 = ((xi % n) + n) % n, i1 = (i0 + 1) % n, j0 = ((yi % n) + n) % n, j1 = (j0 + 1) % n;
-    const a = L[j0 * n + i0], b = L[j0 * n + i1], c = L[j1 * n + i0], d = L[j1 * n + i1];
-    return (a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy;
-  };
-  const octaves = [
-    [[256, 0.6], [128, 0.4]],                 // r: grain
-    [[8, 0.5], [16, 0.3], [32, 0.2]],         // g: blotches
-    [[16, 0.45], [32, 0.35], [64, 0.2]],      // b: streaks / stains
-    [[2, 0.5], [4, 0.3], [8, 0.2]],           // a: large patches
-  ];
-  const ch = octaves.map(() => new Float32Array(size * size));
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = x / size, v = y / size;
-      for (let c = 0; c < 4; c++) {
-        let s = 0;
-        for (const [n, w] of octaves[c]) s += w * value(n, u, v);
-        ch[c][y * size + x] = s;
-      }
-    }
-  }
-  const data = new Uint8Array(size * size * 4);
-  for (let c = 0; c < 4; c++) {
-    const a = ch[c];
-    let m = 0, m2 = 0;
-    for (let i = 0; i < a.length; i++) { m += a[i]; m2 += a[i] * a[i]; }
-    m /= a.length;
-    const sd = Math.sqrt(Math.max(m2 / a.length - m * m, 1e-9));
-    for (let i = 0; i < a.length; i++) data[i * 4 + c] = Math.max(0, Math.min(255, Math.round(127.5 + (a[i] - m) / sd * 0.2 * 255)));
-  }
-  return data;
-}
+// procedural noise texture (roadMesh.js makeNoiseData). The worker computes it (~0.1 s that the
+// main thread used to spend at start-up) and sends it before the first chunk; until then the
+// texture is neutral grey (no grain), which nothing draws with anyway.
 
 function makeNoiseTexture(renderer) {
-  const size = 256;
-  const t = new THREE.DataTexture(makeNoiseData(size), size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+  const size = NOISE_SIZE;
+  const t = new THREE.DataTexture(new Uint8Array(size * size * 4).fill(128), size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.magFilter = THREE.LinearFilter;
   t.minFilter = THREE.LinearMipmapLinearFilter;
@@ -170,22 +117,31 @@ export class Roads {
       uArt: { value: new THREE.Vector4(0, LUX_TO_SCENE, 1, 0) },
       uMasts: { value: Array.from({ length: MAX_MASTS }, () => new THREE.Vector4()) },
       uMastCount: { value: 0 },
+      uPx: { value: 0 },
     };
+    this._mastNear = [];               // reused: [d2, mast] of the masts within 5 km
+    this._mastAt = new THREE.Vector3(1e9, 0, 0);
+    this._dbSize = new THREE.Vector2();
     this.materials = [this._makeMaterial(0), this._makeMaterial(1)];
+    // The terrain's own shadows (hills over valleys at a low sun) on the roads too, when the
+    // terrain has them (gfx-terrain's horizon maps: terrain.horizon.uniforms and HORIZON_GLSL,
+    // one more sampler). Loaded only then, so this file runs with or without that terrain.
+    if (terrain.horizon && terrain.horizon.uniforms) this._hookHorizon(terrain.horizon.uniforms);
     this.lights = params.get('airportlights') === '0' ? null : new AirportLights({ renderer, scene, camera, env, terrain, app, roads: this });
-    this.traffic = this.lights && this.enabled ? new Traffic({ roads: this, lights: this.lights, terrain, env }) : null;
+    this.lights?.setRoadRange(this.Q.range[0], this.Q.range[1]);
+    this.traffic = this.lights && this.enabled ? new Traffic({ roads: this, lights: this.lights, env }) : null;
 
     this._worker = null;
     if (this.enabled) this._load();
   }
 
-  _makeMaterial(group) {
+  _makeMaterial(group, horizon = null) {
     const lights = THREE.UniformsUtils.clone(THREE.UniformsLib.lights);
     const m = new THREE.ShaderMaterial({
       name: `Roads${group}`,
-      uniforms: { ...lights, ...this.env.uniforms, ...this._shared, uFade: { value: new THREE.Vector2(2500, 3400) } },
+      uniforms: { ...lights, ...this.env.uniforms, ...this._shared, ...(horizon ? horizon.uniforms : {}), uFade: { value: new THREE.Vector2(2500, 3400) } },
       vertexShader: ROAD_VERT,
-      fragmentShader: ROAD_FRAG,
+      fragmentShader: roadFrag(horizon ? horizon.glsl : ''),
       lights: true,
       fog: false,
       // opaque list (drawn after the terrain, before anything transparent), but blended: the soft
@@ -199,6 +155,20 @@ export class Roads {
       depthWrite: true,
     });
     return m;
+  }
+
+  _hookHorizon(uniforms) {
+    import('../terrain/horizonMap.js').then((mod) => {
+      if (!mod.HORIZON_GLSL || this._disposed) return;
+      const horizon = { uniforms, glsl: mod.HORIZON_GLSL };
+      this.materials = this.materials.map((old, g) => {
+        const m = this._makeMaterial(g, horizon);
+        m.uniforms.uFade.value.copy(old.uniforms.uFade.value);
+        for (const c of this._chunks.values()) if (c.mesh && c.mesh.material === old) c.mesh.material = m;
+        old.dispose();
+        return m;
+      });
+    }).catch(() => {});
   }
 
   async _load() {
@@ -221,6 +191,8 @@ export class Roads {
       return;
     }
     this.lights?.setAirfields(airfields);
+    // street lamps (roads/lamps_ix_iz.bin, drawn as points out to LAMP_RANGE)
+    this.lights?.setLampSource(index && index.lamps ? { baseUrl: B + 'roads/', files: index.lamps.files } : null);
     this.ready = true;
   }
 
@@ -231,8 +203,15 @@ export class Roads {
     this.Q = QUALITY[this.quality];
     this._selFrame = -1e9;
     this.lights?.setQuality(q);
+    this.lights?.setRoadRange(this.Q.range[0], this.Q.range[1]);
     this.traffic?.setQuality(this.quality);
   }
+
+  /**
+   * How far the street lamps are drawn (m). For the terrain's procedural city lights (gfx-terrain)
+   * when both are in: they should start beyond this distance, or the lamps count twice.
+   */
+  get lampRange() { return this.lights ? LAMP_RANGE[this.quality] : 0; }
 
   setTime(h, day) {
     this.lights?.setTime(h, day);
@@ -241,6 +220,7 @@ export class Roads {
   reset() {
     this._selFrame = -1e9;
     this.lights?.reset();
+    this.traffic?.reset();
   }
 
   update(f) {
@@ -251,8 +231,14 @@ export class Roads {
     this.group.visible = true;
     const Q = this.Q;
     for (let g = 0; g < 2; g++) this.materials[g].uniforms.uFade.value.set(Q.range[g] * (1 - Q.fade), Q.range[g]);
+    // radians per pixel of what is drawn (the thin-ribbon widening in the vertex shader)
+    const fc = f.camera;
+    if (fc.isPerspectiveCamera) {
+      const hPx = this.renderer.getDrawingBufferSize(this._dbSize).y || 1;
+      this._shared.uPx.value = 2 * Math.tan(THREE.MathUtils.degToRad(fc.fov) / 2) / (fc.zoom || 1) / hPx;
+    }
     this._updateLightUniforms(cam);
-    this.traffic?.update(cam);
+    this.traffic?.update(cam, f.dt);
 
     if (this._frame - this._selFrame > 20 || cam.distanceToSquared(this._lastSel) > 60 * 60) this._select(cam);
     this._pump();
@@ -284,20 +270,28 @@ export class Roads {
     const night = t * t * (3 - 2 * t);
     const gain = Math.max(1, 1 + night * (ADAPTED_EXPOSURE / exp - 1));
     S.uArt.value.set(on, LUX_TO_SCENE * gain, this.Q.detail, 0);
+    this.sceneGain = LUX_TO_SCENE * gain;          // the light sprites' (AirportLights) too
     S.uAlbedoGain.value = this.terrain.albedoGain ?? 0.7;
     this._lightsOn = on;
-    // the floodlight masts nearest the camera
+    // the floodlight masts nearest the camera: chosen again only after 100 m of travel (the list
+    // and its entries are reused: no garbage per frame)
     const masts = this.airfields && this.airfields.masts;
-    let n = 0;
-    if (on > 0 && masts && masts.length) {
-      const near = [];
-      for (const m of masts) {
-        const d2 = (m[0] - cam.x) ** 2 + (m[1] - cam.z) ** 2;
-        if (d2 < 5000 * 5000) near.push([d2, m]);
-      }
-      near.sort((a, b) => a[0] - b[0]);
-      for (const [, m] of near.slice(0, MAX_MASTS)) S.uMasts.value[n++].set(m[0], m[1], m[2], m[3]);
+    if (!(on > 0 && masts && masts.length)) { S.uMastCount.value = 0; this._mastAt.set(1e9, 0, 0); return; }
+    const dx = cam.x - this._mastAt.x, dz = cam.z - this._mastAt.z;
+    if (dx * dx + dz * dz < 100 * 100) return;
+    this._mastAt.copy(cam);
+    const near = this._mastNear;
+    let k = 0;
+    for (const m of masts) {
+      const d2 = (m[0] - cam.x) ** 2 + (m[1] - cam.z) ** 2;
+      if (d2 >= 5000 * 5000) continue;
+      if (k < near.length) { near[k][0] = d2; near[k][1] = m; } else near.push([d2, m]);
+      k++;
     }
+    near.length = k;
+    near.sort((a, b) => a[0] - b[0]);
+    const n = Math.min(k, MAX_MASTS);
+    for (let i = 0; i < n; i++) { const m = near[i][1]; S.uMasts.value[i].set(m[0], m[1], m[2], m[3]); }
     S.uMastCount.value = n;
   }
 
@@ -358,7 +352,7 @@ export class Roads {
       let used = false;
       for (const key of t.chunks) if (this._chunks.has(key)) { used = true; break; }
       if (!used && !this._queue.some((q) => `${q.ix},${q.iz}` === tk)) {
-        if (t.state === 'ready') this._worker.postMessage({ type: 'drop', key: tk });
+        if (t.state === 'ready') { this._worker.postMessage({ type: 'drop', key: tk }); this.traffic?.dropTile(tk); }
         if (t.state !== 'loading') this._tiles.delete(tk);
       }
     }
@@ -394,7 +388,8 @@ export class Roads {
       if (this._tiles.get(key) !== t) return;
       const af = this.airfields && this.airfields.tiles && this.airfields.tiles[key];
       const heights = this._tileHeights(ix, iz);
-      const msg = { type: 'tile', key, road: buf, heights, extra: af ? af.taxiways || [] : [], polygons: af ? af.aprons || [] : [] };
+      // lanes: the worker sends the main roads' lanes back for the traffic (Traffic.addTile)
+      const msg = { type: 'tile', key, ix, iz, road: buf, heights, extra: af ? af.taxiways || [] : [], polygons: af ? af.aprons || [] : [], lanes: !!(this.traffic && this.traffic.enabled) };
       this._worker.postMessage(msg, [heights.buffer].concat(buf ? [buf] : []));
       t.state = 'ready';
     }).catch((e) => { console.warn('Roads tile', key, e); t.state = 'failed'; });
@@ -419,6 +414,15 @@ export class Roads {
   }
 
   _onWorker(m) {
+    if (m.type === 'noise') {
+      this._noise.image.data.set(m.data);
+      this._noise.needsUpdate = true;
+      return;
+    }
+    if (m.type === 'lanes') {
+      if (this._tiles.has(m.key)) this.traffic?.addTile(m.key, m.ix, m.iz, m.lanes);
+      return;
+    }
     if (m.type !== 'chunk') return;
     this._inflight = Math.max(0, this._inflight - 1);
     const key = `${m.key},${m.cx},${m.cz},${m.group}`;
@@ -428,7 +432,7 @@ export class Roads {
     if (!m.chunk) { c.state = 'empty'; return; }
     c.mesh = this._makeMesh(m.chunk, c);
     c.tris = m.chunk.ni / 3;
-    c.bytes = m.chunk.n * 36 + m.chunk.idx.byteLength;
+    c.bytes = m.chunk.n * 38 + m.chunk.idx.byteLength;
     c.state = 'built';
     this.group.add(c.mesh);
     this.stats.chunks++;
@@ -445,6 +449,7 @@ export class Roads {
     g.setAttribute('aInfo', new THREE.BufferAttribute(ch.info, 4));
     g.setAttribute('aSect', new THREE.BufferAttribute(ch.sect, 4));
     g.setAttribute('aRad', new THREE.BufferAttribute(ch.rad, 2));
+    g.setAttribute('aDir', new THREE.BufferAttribute(ch.dir, 2, true));
     g.setIndex(new THREE.BufferAttribute(ch.idx, 1));
     const cy = (ch.minY + ch.maxY) / 2 - ch.baseY;
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, cy, 0), Math.hypot(CHUNK_M / 2, CHUNK_M / 2, (ch.maxY - ch.minY) / 2) + 30);
@@ -472,6 +477,7 @@ export class Roads {
   }
 
   dispose() {
+    this._disposed = true;
     for (const [key, c] of [...this._chunks]) this._dropChunk(key, c);
     this._worker?.terminate();
     this.scene.remove(this.group);
