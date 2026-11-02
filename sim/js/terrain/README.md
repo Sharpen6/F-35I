@@ -111,7 +111,9 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   row direction differs (> 15 deg) on 7.5 % of neighbouring crop texel pairs across tile edges
   and 5.2 % inside the tiles (it was 44-56 % across the edges when each tile was analysed on
   its own; `dev/terrain.analysis.test.mjs` checks it). Without the data the tile worker still
-  analyses each tile on its own (`fieldAnalysis.js`). **Field edges**: a pixel's class is
+  analyses each tile on its own (`fieldAnalysis.js`), with the seams; the request for its
+  `index.json` then answers 404, which `tests/e2e.mjs` counts as a failed request
+  (`new Terrain({ fieldsUrl: '' })` asks for none). **Field edges**: a pixel's class is
   a vote of the four texels around it (bilinear weights; on high also weighted by how close
   each texel's imagery colour is to the pixel's own, a joint bilateral upsampling, so the
   6.25 m imagery places the edge inside the 10 m steps), sharpened toward the winner as
@@ -271,17 +273,49 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
 
 * Terrain per frame (measured at 960 x 540 in the test views): 0.05 - 0.6 M triangles, 3 - 26
   draw calls for the whole scene without the aircraft; the selection costs ~0.04 ms of CPU.
-  Worst case before frustum culling is 1.7 M triangles (`terrain_lod.test.mjs`). SwiftShader
-  needs seconds per frame (it pays per triangle for the large fragment shader), a GPU does not:
-  on an RTX 3070 at 2560 x 1440 the terrain is a few ms (one pass, no overdraw-heavy effects,
-  about 40 texture fetches per pixel, ~0.4 M vertices).
+  Worst case before frustum culling is 1.7 M triangles (`terrain_lod.test.mjs`).
+* Cost per feature and quality, measured with `dev/terrain.bench.mjs` (the terrain and the
+  sky only, 960 x 540, the three views of the bench, SwiftShader: the CPU time its threads
+  spend on a frame, the smaller of two frames per row; shares, not a GPU's milliseconds):
+
+  | | fields, 120 m, noon | orchards, 80 m, 08:00 | Tel Aviv, 400 m, night |
+  |---|---|---|---|
+  | high (2048^2 horizon maps) | 15.3 s | 14.2 s | 15.5 s |
+  | ground detail off | −15 % | −12 % | −7 % |
+  | terrain shadows off | 0 % | 0 % | −1 % |
+  | city lights off | +1 % | +1 % | −1 % |
+  | 1024^2 horizon maps | +2 % | 0 % | −1 % |
+  | medium | −7 % | −6 % | −5 % |
+  | low | −17 % | −16 % | −11 % |
+  | all three off | −15 % | −12 % | −8 % |
+  | before this round (9f9c902): high | −3 % | −4 % | −3 % |
+  | before: medium | −4 % | −3 % | 0 % |
+  | before: low | −11 % | −10 % | −6 % |
+
+  The ground materials are 7-15 % of the terrain's frame, the terrain shadows and the city
+  lights within the noise (about 2 %: one fetch per pixel, a few operations in built-up land
+  at night). The 2048^2 horizon maps of high cost per frame what the 1024^2 maps do; they
+  take four times as long to compute (in the worker, in the background) and 12 MB more VRAM,
+  and their 25 m texels (50 m on medium) draw the edges of the hills' shadows near the jet,
+  so high keeps them. Before this round (9f9c902) high cost 3 - 4 % less (the crowns traced
+  along the view and sun rays and the imagery-guided field edges are the difference), its
+  medium drew what its high drew and its low only switched the ground materials off (the
+  rows are shares of this round's high); now medium is 5 - 7 % and low 11 - 17 % below high.
+* On a GPU: not measured here. On an RTX 3070 at 1920 x 1080 the terrain should take about
+  1 - 1.5 ms on high (~1.2 M terrain pixels with ~50 texture fetches each, ~110 bilinear taps
+  with the anisotropic filtering, at ~300 GTexel/s, plus the shader's arithmetic and 0.55 M
+  triangles), about 1.8 - 2.7 ms at 2560 x 1440; medium and low should save at least the
+  shares above (SwiftShader also pays heavily per triangle, which a GPU hardly does, so the
+  per-pixel features weigh more on a GPU). `node sim/dev/terrain.bench.mjs --gpu --size
+  1920x1080` on the PC measures it.
 * VRAM: ~0.7 GB (heights 42 MB, normal maps ~110 MB, overview and far colour ~110 MB, 64 L0
   tiles ~360 MB plus their field data ~50 MB, land cover ~50 MB, detail array 18 MB, horizon
   maps double-buffered: 2 x 8 MB on high, 2 x 2 MB on medium, 2 x 0.5 MB on low). CPU memory
   ~90 MB (heights and land cover for physics), plus a copy of the heights in the horizon
   worker (~45 MB).
-* Ground materials cost only where a pixel is under 8 m (the near L0 patches); the horizon
-  map is one fetch per pixel; city lights only at night in built-up land.
+* Ground materials cost only where a pixel's footprint (its short axis) is under 8 m on the
+  L0 patches; the horizon map is one fetch per pixel; city lights only at night in built-up
+  land.
 
 ### Settings
 
@@ -327,13 +361,18 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   positions 2 cm apart across a 256 m and a 1280 m wrap line of the periodic texture
   coordinates, against a control pair away from any line; fails if a wrap pair differs more
   than the control pair (the wave layers would jump as the camera crosses the line).
-* `node sim/dev/terrain.bench.mjs [--port 8146] [--root DIR] [--frames 7] [--out FILE] [--gpu]`:
-  terrain-only frame times (`dev/terrain.html`, the terrain and the sky) at three views per
-  quality, with each terrain feature switched off in turn and with 1024^2 instead of 2048^2
-  horizon maps, the median of several frames once the tiles, horizon maps and programs have
-  settled; `--root` runs another copy of `sim/` (older code) for a before / after comparison.
-  On SwiftShader (the default) compare the numbers with each other; `--gpu` uses the real GPU
-  (a browser window opens), e.g. `--gpu --size 1920x1080` on the PC.
+* `node sim/dev/terrain.bench.mjs [--port 8146] [--root DIR] [--frames 7] [--rounds 1]
+  [--configs 0,5,6] [--views 0,2] [--out FILE] [--gpu]`: terrain-only frame times
+  (`dev/terrain.html`, the terrain and the sky) at three views per quality, with each terrain
+  feature switched off in turn and with 1024^2 instead of 2048^2 horizon maps, the median and
+  the smallest of several frames once the tiles, horizon maps and programs have settled (one
+  frame after the settling and after a shader change is not counted; each horizon map size is
+  computed once per view; the rows that share it are visited in turn, `--rounds` times);
+  `--root` runs another copy of `sim/` (older code) for a before / after comparison. On
+  SwiftShader (the default) the wall time mostly measures what else the machine runs, so the
+  bench also reads the CPU time of the browser's GPU process (SwiftShader's threads) per
+  frame: compare those with each other. `--gpu` uses the real GPU (a browser window opens),
+  e.g. `--gpu --size 1920x1080` on the PC, where the wall time is the number.
 * `node sim/tests/terrain_screens.mjs [--out DIR] [--only a,b]` (Playwright, SwiftShader,
   960 x 540; serves `sim/` itself or takes `--base`): the GPU height / surface checks, then
   screenshots: Tel Nof runway from 30 m, the Tel Aviv coast from 3 km and at sunset, the
