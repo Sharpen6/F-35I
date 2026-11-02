@@ -766,7 +766,10 @@ function frameGaps() {
     if (!(by[k] >= d)) by[k] = Math.round(d);
     from = step;
   };
-  const f = (now) => {
+  // (performance.now(), not the frame's time stamp: that is when the frame began, which on a
+  // loaded machine can be long before this runs)
+  const f = () => {
+    const now = performance.now();
     note(now - last);
     last = now;
     if (on) requestAnimationFrame(f);
