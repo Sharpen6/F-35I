@@ -4,7 +4,7 @@
 //
 //   node sim/tests/vegetation_shots.mjs [--port 8144] [--out DIR] [--size 960x540]
 //        [--quality medium] [--only telnof_chase,orchards_150] [--params "vegetation=0"]
-//        [--settle 6000] [--tag before] [--ab] [--shadow-radius 190] [--long]
+//        [--settle 6000] [--tag before] [--ab] [--shadow-radius 190] [--long] [--checks]
 //
 // Every scene is a start point (spawns.json or one defined here, placed at a height above the
 // ground) with a time of day and a camera; the scene is flown for a moment, the streaming is given
@@ -20,7 +20,9 @@
 // --shadow-radius R widens the main environment's shadow box around the jet to R m, as the
 // lighting track's wide near-ground box does (so the near trees cast into the shadow map).
 // --long flies 10 km at 250 m above the hills and fails when an upload failed or the module did
-// not drain its queue (the buffer must never stall).
+// not drain its queue (the buffer must never stall). --checks (after the scenes): a quality change
+// bakes the atlas again over frames (the longest module update is logged), and the trees switched
+// off for 11 s free their memory and come back when switched on.
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -49,6 +51,7 @@ const TAG = arg('tag', '') ? `${arg('tag', '')}_` : '';
 const AB = argv.includes('--ab');
 const SHADOW_R = +arg('shadow-radius', 0);
 const LONG = argv.includes('--long');
+const CHECKS = argv.includes('--checks');
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -81,6 +84,10 @@ const SCENES = {
   sunset_chase: { spawn: 'jerusalem_sunset', camera: 'chase', fly: 1 },
   sunset_cockpit: { spawn: 'jerusalem_sunset', camera: 'cockpit', fly: 1 },
   sunset_low: { spawn: { x: 9000, z: 1500, agl: 200, heading: 270, speed: 140 }, time: 18.7, camera: 'chase', fly: 1 },
+  // low over a forest in a chase view: with --shadow-radius 190 the near trees cast into the
+  // shadow map (the lighting track's wide box) and must not keep a decal as well
+  dbl_jlm: { spawn: { x: 10300, z: 2400, agl: 45, heading: 60, speed: 120 }, time: 9, camera: 'chase', fly: 0.2 },
+  dbl_benshemen: { spawn: { x: -9150, z: -15560, agl: 30, heading: 80, speed: 120 }, time: 9, camera: 'chase', fly: 0.2 },
   // free cameras (the jet parked 900 m up, out of the way)
   free_forest_near: { spawn: { x: -9000, z: -15500, agl: 900, heading: 80, speed: 150 }, time: 10, free: { pos: [-9300, 12, -15600], dir: { heading: 80, pitch: -6 }, fov: 50 } },
   free_forest_low: { spawn: { x: -9000, z: -15500, agl: 900, heading: 80, speed: 150 }, time: 10, free: { pos: [-9300, 40, -15600], dir: { heading: 80, pitch: -12 }, fov: 55 } },
@@ -91,8 +98,12 @@ const SCENES = {
   free_telnof_top: { spawn: 'telnof_36', time: 12, free: { rel: [-700, 450, 300], dir: { heading: 60, pitch: -35 }, fov: 50 } },
   free_sunset_side: { spawn: 'jerusalem_sunset', free: { rel: [0, -1100, 0], dir: { heading: 270, pitch: -8 }, fov: 45 } },
   free_sunset_tele: { spawn: 'jerusalem_sunset', free: { rel: [0, 0, 0], dir: { heading: 90, pitch: -25 }, fov: 18 } },
+  // a line of river red gums between fields east of Ashdod (19 trees, 25 m, along 68 degrees),
+  // across from 80 m and from 45 m
+  free_euc_line: { spawn: { x: -20863, z: 36, agl: 900, heading: 338, speed: 120 }, time: 15, free: { pos: [-20863, 18, 36], dir: { heading: 338, pitch: -2 }, fov: 50 } },
+  free_euc_near: { spawn: { x: -20863, z: 36, agl: 900, heading: 338, speed: 120 }, time: 15, free: { pos: [-20876, 10, 4], dir: { heading: 338, pitch: 6 }, fov: 55 } },
   // a forest road in Ben Shemen from 18 m (trees beside it, none on it)
-  free_forest_road: { spawn: { x: -9000, z: -15500, agl: 900, heading: 80, speed: 150 }, time: 10, free: { pos: [-8965, 18, -14815], dir: { heading: 20, pitch: -14 }, fov: 55 } },
+  free_forest_road:{ spawn: { x: -9000, z: -15500, agl: 900, heading: 80, speed: 150 }, time: 10, free: { pos: [-8965, 18, -14815], dir: { heading: 20, pitch: -14 }, fov: 55 } },
   // the eucalyptus windbreaks and gum rows of the coastal plain, from 25 m
   free_windbreak: { spawn: { x: -24100, z: -3200, agl: 900, heading: 350, speed: 120 }, time: 15, free: { pos: [-24300, 25, -2600], dir: { heading: 20, pitch: -8 }, fov: 50 } },
 };
@@ -142,7 +153,16 @@ async function main() {
     const url = `${BASE}index.html?test=1&quality=${QUALITY}&wingmen=0${PARAMS ? `&${PARAMS}` : ''}`;
     log('open', url);
     await page.goto(url);
-    await page.waitForFunction(() => window.__sim && (window.__sim.ready || window.__sim.error), null, { timeout: 300000 });
+    // ready, or an error; a module that fails to evaluate stops main.js before window.__sim
+    // exists, so a page error ends the wait too (10 minutes on a loaded machine)
+    for (let t0 = Date.now(); ;) {
+      const s = await page.evaluate(() => (window.__sim ? (window.__sim.ready ? 'ready' : window.__sim.error ? 'error' : '') : ''));
+      if (s) break;
+      const pe = problems.find((p) => p.startsWith('page error'));
+      if (pe) throw new Error(`app did not load: ${pe}`);
+      if (Date.now() - t0 > 600000) throw new Error('app did not load in 10 minutes');
+      await sleep(2000);
+    }
     const err = await page.evaluate(() => window.__sim.error);
     if (err) throw new Error(`app did not load: ${err}`);
     // the free camera: while window.__vegFree is set the camera rig is bypassed
@@ -254,6 +274,56 @@ async function main() {
           await open();
         }
       }
+    }
+    if (CHECKS) {
+      // a quality change (the atlas is baked again over frames: no long frame), then the trees off
+      // for longer than the module keeps its memory, then on again
+      const mod = () => window.__sim.app.modules.find((x) => x && x.isScatter);
+      const timeUpdates = (fn) => page.evaluate(`(${fn})()`);
+      await timeUpdates(() => {
+        const m = window.__sim.app.modules.find((x) => x && x.isScatter);
+        const orig = m.update.bind(m);
+        window.__vegUpd = { max: 0, n: 0 };
+        m.update = (f) => { const t = performance.now(); orig(f); const dt = performance.now() - t; window.__vegUpd.max = Math.max(window.__vegUpd.max, dt); window.__vegUpd.n++; };
+      });
+      const memBefore = await page.evaluate(() => window.__sim.gpuMemory());
+      const q0 = await page.evaluate(() => window.__sim.app.settings.quality);
+      const q1 = q0 === 'low' ? 'medium' : 'low';
+      await page.evaluate((q) => { window.__vegUpd.max = 0; window.__vegUpd.n = 0; window.__sim.app.setQuality(q, true); }, q1);
+      let frames = 0;
+      for (; frames < 400; frames++) {
+        const busy = await page.evaluate(`(${mod})()._rebaker !== null`);
+        if (!busy) break;
+        await page.evaluate(() => window.__sim.render());
+      }
+      const upd = await page.evaluate(() => ({ ...window.__vegUpd }));
+      const afterQ = await page.evaluate(`(${mod})().statsJSON()`);
+      log(`quality ${q0} -> ${q1}: atlas baked again over ${frames} frames, longest module update ${upd.max.toFixed(1)} ms (${upd.n} updates); atlas ${afterQ.atlasMB} MB, rebakes ${afterQ.rebakes}`);
+      results.push({ name: 'quality_change', from: q0, to: q1, frames, maxUpdateMs: +upd.max.toFixed(1), stats: afterQ });
+      if (frames >= 400) problems.push('quality change: the atlas was not baked again within 400 frames');
+      await page.evaluate((q) => window.__sim.app.setQuality(q, true), q0);
+      for (let i = 0; i < 400; i++) {
+        if (await page.evaluate(`(${mod})().idle()`)) break;
+        await page.evaluate(() => window.__sim.render());
+      }
+      // off for 11 s: the buffers, atlas and worker go; on again: everything comes back
+      await page.evaluate(`(${mod})().setOption('vegetation', false)`);
+      await page.evaluate(() => window.__sim.settle(11000));
+      const offStats = await page.evaluate(`(${mod})().statsJSON()`);
+      const memOff = await page.evaluate(() => window.__sim.gpuMemory());
+      await page.evaluate(`(${mod})().setOption('vegetation', true)`);
+      const tOn = Date.now();
+      for (let i = 0; i < 300; i++) {
+        if (await page.evaluate(`(${mod})().idle()`)) break;
+        await page.evaluate(() => window.__sim.settle(1000));
+      }
+      const onStats = await page.evaluate(`(${mod})().statsJSON()`);
+      const memOn = await page.evaluate(() => window.__sim.gpuMemory());
+      await page.screenshot({ path: join(OUT, `${TAG}checks_on_again.png`) });
+      log(`off 11 s: freed ${offStats.freed}, GPU memory ${memBefore.totalMB} -> ${memOff.totalMB} MB; on again: ready ${onStats.ready}, ${onStats.instances} trees after ${((Date.now() - tOn) / 1000).toFixed(0)} s, ${memOn.totalMB} MB`);
+      results.push({ name: 'off_on', memBeforeMB: memBefore.totalMB, memOffMB: memOff.totalMB, memOnMB: memOn.totalMB, off: offStats, on: onStats });
+      if (!offStats.freed) problems.push('vegetation off: the memory was not freed');
+      if (!onStats.ready || !onStats.instances) problems.push('vegetation on again: no trees');
     }
     if (LONG) {
       // 10 km at 250 m above the Judean foothills at 250 m/s, the worker given wall time every
