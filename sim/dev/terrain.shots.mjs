@@ -47,7 +47,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
 const log = (...a) => console.log(`[shots ${((Date.now() - t0) / 1000).toFixed(0).padStart(4)} s]`, ...a);
 
-// spawn: a name from spawns.json, or {x, z, agl, hdg, speed} (airborne, gear up)
+// spawn: a name from spawns.json, or {x, z, agl, hdg, speed} (airborne, gear up; agl above the
+// ground or the sea; alt instead: metres above sea level, e.g. low over the Dead Sea)
 // look: {yaw, pitch} in degrees for the cockpit head (optional)
 export const SCENES = [
   { name: 'telnof36_noon_chase', spawn: 'telnof_36', time: 12, camera: 'chase', steps: 120, settle: 3500 },
@@ -78,8 +79,21 @@ export const SCENES = [
   { name: 'deadsea_shore150_chase', spawn: { x: 38500, z: 6500, agl: 150, hdg: 150, speed: 150 }, time: 9, camera: 'chase', steps: 90, settle: 3500 },
   // dawn: the Moab plateau's shadow over the Dead Sea's west shore, the Judean cliffs lit above it
   { name: 'deadsea_dawn_chase', spawn: { x: 47000, z: 7600, agl: 400, hdg: 265, speed: 150 }, time: 5.35, camera: 'chase', steps: 30, settle: 2500 },
+  // 05:06 solar: the sun 1.6 deg up behind the jet, over the Moab plateau (2.2 deg high seen
+  // from the water, 0.8 deg from 400 m above sea level). 60 m over the water (370 m below sea
+  // level) the jet is in the plateau's shadow with the sea (terrain.sunVisibilityAt,
+  // stats.sunVisibility ~0); at 400 m above sea level it is in the sun
+  { name: 'deadsea0506_60_chase', spawn: { x: 47000, z: 7600, alt: -370, hdg: 265, speed: 150 }, time: 5.1, camera: 'chase', steps: 30, settle: 2500 },
+  { name: 'deadsea0506_400_chase', spawn: { x: 47000, z: 7600, alt: 400, hdg: 265, speed: 150 }, time: 5.1, camera: 'chase', steps: 30, settle: 2500 },
   // beach and dunes south of Ashdod, 120 m
   { name: 'dunes120_chase', spawn: { x: -41500, z: 11500, agl: 120, hdg: 20, speed: 150 }, time: 10, camera: 'chase', steps: 90, settle: 3500 },
+  // the mapped land use of data/terrain_extra/fields (OSM via Overture): Rehovot's citrus groves,
+  // the vineyards south of Tel Nof, the greenhouses south of Ashkelon; 80-100 m, morning and noon
+  { name: 'orchards80_0800_chase', spawn: { x: -22720, z: -8000, agl: 80, hdg: 60, speed: 150 }, time: 8, camera: 'chase', steps: 90, settle: 3500 },
+  { name: 'orchards80_noon_cockpit', spawn: { x: -22720, z: -8000, agl: 80, hdg: 60, speed: 150 }, time: 12, camera: 'cockpit', steps: 30, settle: 1500 },
+  { name: 'orchards30_0800_chase', spawn: { x: -16320, z: -11200, agl: 30, hdg: 120, speed: 150 }, time: 8, camera: 'chase', steps: 30, settle: 1500 },
+  { name: 'vineyards80_0900_chase', spawn: { x: -17600, z: 8640, agl: 80, hdg: 20, speed: 150 }, time: 9, camera: 'chase', steps: 90, settle: 3500 },
+  { name: 'greenhouses100_noon_chase', spawn: { x: -47040, z: 21440, agl: 100, hdg: 20, speed: 150 }, time: 12, camera: 'chase', steps: 90, settle: 3500 },
   // night over Tel Aviv, 1,500 m
   { name: 'tlv_night_cockpit', spawn: { x: -20000, z: -27000, agl: 1500, hdg: 290, speed: 180 }, time: 21.5, camera: 'cockpit', steps: 30, settle: 2500 },
   { name: 'tlv_night_chase', spawn: { x: -20000, z: -27000, agl: 1500, hdg: 290, speed: 180 }, time: 21.5, camera: 'chase', steps: 30, settle: 2500 },
@@ -165,7 +179,7 @@ async function main() {
           const g = app.terrain.heightAt(s.spawn.x, s.spawn.z);
           name = '__shot';
           app.terrain.spawns[name] = {
-            label: s.name, x: s.spawn.x, z: s.spawn.z, y: Math.max(g, 0) + s.spawn.agl, ground_y: g,
+            label: s.name, x: s.spawn.x, z: s.spawn.z, y: s.spawn.alt ?? Math.max(g, 0) + s.spawn.agl, ground_y: g,
             heading_deg: s.spawn.hdg, on_ground: false, speed_ms: s.spawn.speed, gear: 0, throttle: 0.45,
           };
         }
@@ -209,7 +223,8 @@ async function main() {
           for (const [k, [d, sh, c]] of Object.entries(cfgs)) {
             t.groundDetail = d; t.shadows = sh; t.cityLights = c;
             window.__sim.render();                     // uniforms and maps settle
-            out[k] = window.__sim.render().ms;
+            // the faster of two frames (a busy machine only ever adds time)
+            out[k] = Math.min(window.__sim.render().ms, window.__sim.render().ms);
           }
           t.groundDetail = keep.d; t.shadows = keep.s; t.cityLights = keep.c;
           return out;

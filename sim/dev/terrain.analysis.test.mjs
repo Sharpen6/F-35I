@@ -1,9 +1,14 @@
 // node sim/dev/terrain.analysis.test.mjs
 // Checks the terrain's pure helpers: horizon angles (horizonCore.js) against brute force on a
-// synthetic ridge, with the earth's curvature, and the field analysis packing
-// (fieldAnalysis.js) on a synthetic pattern of striped fields.
+// synthetic ridge, with the earth's curvature, the field analysis packing (fieldAnalysis.js)
+// on a synthetic pattern of striped fields, the built field data's tile edges (when
+// data/terrain_extra/fields is there) and the runway overrun corrections.
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 import { computeHorizon, decodeHorizon, EARTH_R } from '../js/terrain/horizonCore.js';
-import { analyzeTile, packCodes, CLASS_CODES } from '../js/terrain/fieldAnalysis.js';
+import { analyzeTile, packCodes, CLASS_CODES, CLASS_ORCHARD, CLASS_VINEYARD } from '../js/terrain/fieldAnalysis.js';
 import { Runways } from '../js/terrain/Surface.js';
 
 let failures = 0;
@@ -88,6 +93,61 @@ const pk = packCodes(new Uint8Array([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 
 check('packCodes maps ESA codes to class indices', pk[0] === 0, '');
 const pk2 = packCodes(new Uint8Array(16).map((_, i) => [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100, 0, 0, 0, 0][i]), 4);
 check('every ESA code round-trips', [...pk2.slice(0, 12)].every((v, i) => CLASS_CODES[v] === [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100][i]));
+
+// --- the built field data (tools/terrain/fields.py): no seams at the tile edges -----------
+// Pairs of neighbouring crop texels (both crop, orchard or vineyard) across every tile edge
+// against the pairs across each tile's middle row and column (the control: same data, no
+// edge). A field cut by a tile edge must keep its row direction and its random number, so
+// the edge pairs may differ no more often than the inner ones (the per-tile analysis had
+// 44-56 % of edge pairs more than 15 deg apart against 1-4 % inside).
+const FIELDS = fileURLToPath(new URL('../data/terrain_extra/fields/', import.meta.url));
+if (existsSync(join(FIELDS, 'index.json'))) {
+  const idx = JSON.parse(readFileSync(join(FIELDS, 'index.json'), 'utf8'));
+  const n = idx.n, T = idx.tiles;
+  const tile = (ix, iz) => {
+    const f = join(FIELDS, `tile_${ix}_${iz}.u16.gz`);
+    if (!existsSync(f)) return null;
+    const b = gunzipSync(readFileSync(f));
+    return new Uint16Array(b.buffer, b.byteOffset, n * n);
+  };
+  const ROWS = new Set([4, CLASS_ORCHARD, CLASS_VINEYARD]);   // crop, orchard, vineyard
+  const st = { edge: { n: 0, dir: 0, rnd: 0 }, inner: { n: 0, dir: 0, rnd: 0 } };
+  const pair = (s, a, b) => {
+    if ((a & 15) !== (b & 15) || !ROWS.has(a & 15)) return;
+    s.n++;
+    const d = Math.abs(((a >> 4) & 127) - ((b >> 4) & 127)) % 128;
+    if (Math.min(d, 128 - d) * 180 / 128 > 15) s.dir++;
+    if ((a >> 11) === (b >> 11)) s.rnd++;
+  };
+  t0 = performance.now();
+  let prevRow = new Array(T).fill(null);
+  for (let iz = 0; iz < T; iz++) {
+    const row = [];
+    for (let ix = 0; ix < T; ix++) row.push(tile(ix, iz));
+    for (let ix = 0; ix < T; ix++) {
+      const A = row[ix];
+      if (!A) continue;
+      const R = ix + 1 < T ? row[ix + 1] : null, U = prevRow[ix];
+      const h = n >> 1;
+      for (let k = 0; k < n; k++) {
+        if (R) pair(st.edge, A[k * n + n - 1], R[k * n]);
+        if (U) pair(st.edge, U[(n - 1) * n + k], A[k]);
+        pair(st.inner, A[k * n + h - 1], A[k * n + h]);
+        pair(st.inner, A[(h - 1) * n + k], A[h * n + k]);
+      }
+    }
+    prevRow = row;
+  }
+  const pc = (s, k) => (100 * s[k] / Math.max(s.n, 1));
+  const e = st.edge, i = st.inner;
+  const detail = `edges ${pc(e, 'dir').toFixed(1)} % of ${e.n} pairs, inside ${pc(i, 'dir').toFixed(1)} % of ${i.n}`;
+  check('field data: row directions across tile edges agree as well as inside tiles',
+    e.n > 1000 && pc(e, 'dir') <= Math.max(2 * pc(i, 'dir'), pc(i, 'dir') + 3), detail);
+  check('field data: a field keeps its random number across tile edges',
+    pc(e, 'rnd') >= pc(i, 'rnd') - 10, `edges ${pc(e, 'rnd').toFixed(1)} %, inside ${pc(i, 'rnd').toFixed(1)} % same (${(performance.now() - t0).toFixed(0)} ms)`);
+} else {
+  console.log('SKIP  field data seams (no data/terrain_extra/fields: run tools/terrain/fields.py)');
+}
 
 // --- measured overrun corrections (Surface.js OVERRUN_FIX) --------------------------------
 const rws = new Runways([{ icao: 'LLEK', runways: [{ width_m: 45.7, surface: 'asphalt', ends: [
