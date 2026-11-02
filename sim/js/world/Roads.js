@@ -171,6 +171,22 @@ export class Roads {
     }).catch(() => {});
   }
 
+  /**
+   * The programs of what streams in later, built ahead (js/env/warmup.js calls this at start-up and
+   * after a quality change): the road chunks of both groups (their meshes come from the worker; to
+   * three only the material, the kind of object and whether the geometry has normals select the
+   * program), and through AirportLights the airfield lights, street lamps and traffic (Points).
+   */
+  warmup(w, camera) {
+    const tmp = new THREE.Group();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+    if (this.enabled) for (const m of this.materials) { const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; tmp.add(mesh); }
+    this.lights?.warmupObjects?.(tmp, g);
+    if (tmp.children.length) w.compile(tmp, camera, { scene: this.scene });
+    g.dispose();
+  }
+
   async _load() {
     const B = this.baseUrl;
     const get = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
