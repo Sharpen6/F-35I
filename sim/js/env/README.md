@@ -319,9 +319,9 @@ drawing while they compile. `?warmup=0` turns it off.
 5. The textures of the scene's materials not on the GPU yet (`renderer.initTexture`), a few a
    frame; then six real frames behind the loading screen (the menu's view, the cockpit, the chase
    view, the same two by the other light, the menu's view again) for the driver's own per-draw
-   state, and a fence polled once a frame until the GPU has done them. The bounding spheres three
-   works out in those frames after the menu's own are handed back (`firstDrawBounds`): see
-   *Nothing looks different* below.
+   state, and a fence polled once a frame until the GPU has done them. The bounding spheres
+   worked out while those frames after the menu's own are drawn (by three, or by `Post.js`) are
+   handed back (`firstDrawBounds`): see *Nothing looks different* below.
 
 After start-up, `check(label)` runs when a flight starts, the camera, the time of day or the
 quality changes and when the wingmen load: whatever in the scene was not compiled yet (a new
@@ -390,11 +390,15 @@ place wherever the jet is, was first drawn in the warm-up's night view at the me
 point. Its sphere stayed there, and it was sorted among the transparent draws as if it were
 there too: at night at Ben Gurion its multiplication of the ground came before the airfield's
 lights instead of after them, their glow dimmer (1.4 % of the cockpit view's pixels, 0.7 % of
-the chase view's). The spheres three works out in the warm-up's frames after the menu's own are
-now handed back, to be worked out again where the object is first really drawn
-(`firstDrawBounds`; `info().bounds` counts them). (Without the warm-up the pool's sphere stays
-wherever it was first drawn as well, so a night flight after one elsewhere sorts it the same
-way: for `LandingPool.js`, a sphere set when it rebuilds its grid.)
+the chase view's). The spheres worked out while the warm-up's frames after the menu's own are
+drawn are now handed back, to be worked out again where the object is first really drawn
+(`firstDrawBounds`; `info().bounds` counts them). With clouds in the sky (the menu's default
+weather, `few`) the pool's is worked out by `Post.js` before three draws (it picks the near
+transparent things to draw over the clouds): with that counted too, the pool has no sphere when
+the menu shows, as with `warmup=0` (the default start, Tel Nof at 07:00: 2 handed back; before,
+the pool kept the one of the night view). (Without the warm-up the pool's sphere stays wherever
+it was first drawn as well, so a night flight after one elsewhere sorts it the same way: for
+`LandingPool.js`, a sphere set when it rebuilds its grid.)
 
 **Cost.** In flight nothing: the same draws, and the GPU memory estimate within 0.1 MB (916 MB
 at the 21:30 view; the warm-up keeps a 1 x 1 float target and its depth materials). Per frame,

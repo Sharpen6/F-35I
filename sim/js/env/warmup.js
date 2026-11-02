@@ -45,8 +45,9 @@
 // the cockpit's interior) given their frames, compileAll, finish, then a few real frames drawn
 // behind the loading screen (the menu's view, the cockpit, the chase view, by day and by night):
 // the first uploads of the textures, the driver's per-draw state, and whatever variant the passes
-// did not foresee (what three works out at an object's first draw is handed back after them:
-// firstDrawBounds); then a wait (a fence, polled once a frame) until the GPU has done them.
+// did not foresee (the bounding spheres worked out at an object's first draw are handed back
+// after them: firstDrawBounds); then a wait (a fence, polled once a frame) until the GPU has done
+// them.
 //
 // URL: ?warmup=0 turns it off (three builds each program when first drawn, as before).
 
@@ -830,7 +831,7 @@ async function drawViews(app, w, say) {
       w.afterDraw(app);
       w.stats.frames++;
       // (the menu's own view first: what it works out is what the menu's first frame would)
-      if (!bounds) bounds = firstDrawBounds(app.renderer);
+      if (!bounds) bounds = firstDrawBounds(app);
       say(++k / views.length);
       await nextFrame();
     }
@@ -840,18 +841,19 @@ async function drawViews(app, w, say) {
 }
 
 /**
- * The bounding spheres three works out the first time it draws an object (the geometry's, or an
- * instanced, batched or skinned mesh's own: for the frustum test and the order of the
- * transparent draws), while the warm-up's other views are drawn: handed back afterwards (null),
- * so each is worked out where and when the object is first really drawn, as without the
- * warm-up. A geometry rewritten in place keeps the sphere of its first draw: the landing light's
- * pool, first drawn in the warm-up's night view at the menu's start point, was then sorted among
- * the transparent draws as if it were still there, and at night at another airfield its
- * multiplication of the ground came before that airfield's lights instead of after them (their
- * glow dimmer: 1.4 % of the cockpit view's pixels at Ben Gurion). Returns the function that
- * hands them back (it returns how many).
+ * The bounding spheres worked out the first time an object is drawn (the geometry's, or an
+ * instanced, batched or skinned mesh's own: by three for the frustum test and the order of the
+ * transparent draws, by Post.js for the near transparent things it keeps above the clouds),
+ * while the warm-up's other views are drawn: handed back afterwards (null), so each is worked
+ * out where and when the object is first really drawn, as without the warm-up. A geometry
+ * rewritten in place keeps the sphere of its first draw: the landing light's pool, first drawn in
+ * the warm-up's night view at the menu's start point, was then sorted among the transparent draws
+ * as if it were still there, and at night at another airfield its multiplication of the ground
+ * came before that airfield's lights instead of after them (their glow dimmer: 1.4 % of the
+ * cockpit view's pixels at Ben Gurion). Returns the function that hands them back (it returns
+ * how many).
  */
-function firstDrawBounds(renderer) {
+function firstDrawBounds(app) {
   const made = [], undo = [];
   let depth = 0;
   for (const C of [THREE.BufferGeometry, THREE.InstancedMesh, THREE.BatchedMesh, THREE.SkinnedMesh]) {
@@ -866,11 +868,16 @@ function firstDrawBounds(renderer) {
     };
     undo.push(() => { P.computeBoundingSphere = raw; });
   }
-  // (only those three works out while it draws: a module's own, set in its update, stay)
-  const render = renderer.render;
-  const counted = function () { depth++; try { return render.apply(this, arguments); } finally { depth--; } };
-  renderer.render = counted;
-  undo.push(() => { if (renderer.render === counted) renderer.render = render; });
+  // (only those worked out while a frame is drawn, by three or by Post, which works out the near
+  // ones itself before three draws, whenever there are clouds: a module's own, set in its update,
+  // stay)
+  for (const o of [app.renderer, app.post]) {
+    if (!o || typeof o.render !== 'function') continue;
+    const own = Object.prototype.hasOwnProperty.call(o, 'render'), draw = o.render;
+    const counted = function () { depth++; try { return draw.apply(this, arguments); } finally { depth--; } };
+    o.render = counted;
+    undo.push(() => { if (o.render === counted) { if (own) o.render = draw; else delete o.render; } });
+  }
   return () => {
     for (const u of undo.reverse()) u();
     let n = 0;
