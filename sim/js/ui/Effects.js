@@ -7,6 +7,7 @@
 //   fx.clear();                    // on restart
 
 import * as THREE from 'three';
+import { LUX_PER_UNIT, meteredLight } from '../env/Environment.js';
 
 function puffTexture() {
   const c = document.createElement('canvas');
@@ -35,19 +36,30 @@ function puffTexture() {
 const FIRE_N = 40, SMOKE_N = 90;
 
 // Under the HDR chain (js/env/Post.js) the sprites are scene-referred radiance and get the
-// scene's exposure like everything else (about x0.9 at noon, x40 at night). The fire is a light:
-// its radiance is scaled by exposure^-0.75, as an eye adapts to a fire it looks at (bright
+// scene's exposure like everything else (about x0.9 at noon, up to x285 at night). The fire is a
+// light: its radiance is scaled by exposure^-0.75, as an eye adapts to a fire it looks at (bright
 // orange at night, not a white blot). The smoke is lit: its radiance follows the light falling
-// on the scene (the exposure meter's curve, Environment.js METER, inverted), so it is grey by day
-// and dark at night instead of glowing. Drawn straight to the canvas (?post=0): as tuned before.
+// on the scene (the exposure meter's curve inverted, Environment.js meteredLight), so it is grey
+// by day and dark at night instead of glowing, plus the fire's light on it while it burns.
+// Drawn straight to the canvas (?post=0): as tuned before.
 const NOON_LIGHT = 5.7;          // the metered light at noon (exposure 0.93)
-function expose(renderer, m, lit) {
+const SMOKE_ALBEDO = 0.3;
+function expose(renderer, m, lit, fx) {
   const base = m.userData.base;
   if (!renderer.getRenderTarget()) { m.color.copy(base); return; }
   const e = Math.max(1e-3, renderer.toneMappingExposure || 1);
-  if (lit) m.color.copy(base).multiplyScalar(Math.min(1.5, Math.pow(e / 1.817, -1 / 0.385) / NOON_LIGHT));
-  else m.color.copy(base).multiplyScalar(Math.pow(e, -0.75));
+  if (lit) {
+    m.color.copy(base).multiplyScalar(Math.min(1.5, meteredLight(e) / NOON_LIGHT));
+    // the fire below lights the smoke (cd / m^2 at ~15 m: an orange glow at night, nothing by day)
+    const f = fx.light.intensity;
+    if (f > 0) m.color.addScaledVector(fx.light.color, f / 225 * SMOKE_ALBEDO / Math.PI);
+  } else m.color.copy(base).multiplyScalar(Math.pow(e, -0.75));
 }
+
+// The fire's light on the wreck and the ground: a burning fuel pool of ~10 m is ~2.5e5 cd (flames
+// of ~2500 cd/m^2), the fireball's first second ~1e6 cd. (In scene units: cd / LUX_PER_UNIT. The
+// 2500 / 600 used before were ~75x that: brighter than the noon sun within 10 m.)
+const FIRE_CD = 2.5e5, FLASH_CD = 1e6;
 
 export class Effects {
   constructor(scene) {
@@ -63,7 +75,7 @@ export class Effects {
       const m = new THREE.SpriteMaterial({ map: tex, color: 0xffa040, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false, toneMapped: false });
       m.userData.base = new THREE.Color(0xffa040);
       const s = new THREE.Sprite(m);
-      s.onBeforeRender = (r) => expose(r, m, false);
+      s.onBeforeRender = (r) => expose(r, m, false, this);
       s.visible = false;
       s.renderOrder = 6;
       this.group.add(s);
@@ -73,7 +85,7 @@ export class Effects {
       const m = new THREE.SpriteMaterial({ map: tex, color: 0x2a2826, depthWrite: false, transparent: true, opacity: 0 });
       m.userData.base = m.color.clone();
       const s = new THREE.Sprite(m);
-      s.onBeforeRender = (r) => expose(r, m, true);
+      s.onBeforeRender = (r) => expose(r, m, true, this);
       s.visible = false;
       s.renderOrder = 5;
       this.group.add(s);
@@ -85,9 +97,9 @@ export class Effects {
     this._emit = 0;
     this._next = 0;
     this.wind = new THREE.Vector3(3, 0, -1.5);
-    // physical units: the Environment's sun gives about 4 at the ground, so a few thousand cd
-    // light the wreck and the jets near it without washing out everything around
-    this.light = new THREE.PointLight(0xff8a30, 0, 300, 2);
+    // physical: intensity in candela / LUX_PER_UNIT (FIRE_CD), inverse-square falloff
+    this.light = new THREE.PointLight(0xff8a30, 0, 600, 2);
+    this._r = new THREE.Vector3();
     this.group.add(this.light);
   }
 
@@ -127,7 +139,7 @@ export class Effects {
         if (this.t < 12) {
           p.age = 0;
           p.life = 0.6 + Math.random() * 0.9;
-          p.s.position.copy(this.origin).add(new THREE.Vector3((Math.random() - 0.5) * 8 * sc, 0, (Math.random() - 0.5) * 8 * sc));
+          p.s.position.copy(this.origin).add(this._r.set((Math.random() - 0.5) * 8 * sc, 0, (Math.random() - 0.5) * 8 * sc));
           p.v.set((Math.random() - 0.5) * 3, 4 + Math.random() * 6, (Math.random() - 0.5) * 3).multiplyScalar(sc);
         } else { p.s.visible = false; continue; }
       }
@@ -141,7 +153,7 @@ export class Effects {
       p.s.material.opacity = 0.35 * Math.max(0, 1 - k) * (this.t < 12 ? 1 : 0);
       p.s.material.userData.base.setRGB(1, 0.3 + 0.3 * (1 - k), 0.06 * (1 - k));
     }
-    this.light.intensity = this.t < 12 ? (this.t < 1 ? 2500 : 600 * (0.7 + 0.3 * Math.random())) * sc : 0;
+    this.light.intensity = this.t < 12 ? (this.t < 1 ? FLASH_CD : FIRE_CD * (0.7 + 0.3 * Math.random())) * sc / LUX_PER_UNIT : 0;
     // smoke: a steady stream rising and drifting
     if (this.t < 40) {
       this._emit += dt * (this.t < 15 ? 6 : 2.5);
@@ -149,7 +161,7 @@ export class Effects {
         this._emit -= 1;
         const p = this.smoke[this._next];
         this._next = (this._next + 1) % SMOKE_N;
-        p.s.position.copy(this.origin).add(new THREE.Vector3((Math.random() - 0.5) * 6 * sc, 2, (Math.random() - 0.5) * 6 * sc));
+        p.s.position.copy(this.origin).add(this._r.set((Math.random() - 0.5) * 6 * sc, 2, (Math.random() - 0.5) * 6 * sc));
         p.v.set((Math.random() - 0.5) * 2, 7 + Math.random() * 5, (Math.random() - 0.5) * 2);
         p.age = 0;
         p.life = 9 + Math.random() * 6;
