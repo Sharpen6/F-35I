@@ -124,7 +124,12 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   white ball as wide as the nozzle it was with the old gain (up to ~200, tuned for a night exposure
   of 40). A light many times over the threshold of a point source against the ground
   (`fxEnv.pointThreshold`) keeps a visible core however far (`AircraftLights.visibleFloor`, the
-  airfield lights' floor). When the frame goes to the HDR chain's float target (`fxEnv.bloomOn`)
+  airfield lights' floor), and its centre is at most 64 on the display at night, the cap of every
+  point light where the bloom clamps (`AircraftLights.coreCap`, eased in with `fxEnv.lightNight`,
+  none by day): a light a few metres from the camera is a small hard point with a modest bloom
+  (the tail light from the chase seat at 960 x 540: a 5 px white core in a 14 px glow; 8 in 22 px
+  uncapped, 21 in 52 px with the old gain).
+  When the frame goes to the HDR chain's float target (`fxEnv.bloomOn`)
   the halo is fainter (the bloom makes the glare) and the shoulder higher;
   `visual.lights.haloGain` scales the halo further.
 * `materials.js`: calibration of Blender's Cycles materials for three.js (`TUNE`): the skin

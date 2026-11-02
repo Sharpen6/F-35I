@@ -111,10 +111,12 @@ against the ground behind it (Allard / Blondel-Rey, E_t = 10^(0.64 log10 B - 5.7
 background of B cd/m^2: `pointLightThreshold(el)`, `env.pointThreshold`). A light a few times over
 its threshold stays a visible dot even where its energy over a pixel would be too faint (an edge
 light 3 km out): the dot's peak rises from 0 at the threshold to ~0.35 three stops over and never
-past ~0.85 (no white blobs). One GLSL for all of them, `js/world/AirportLights.js`
-`POINT_LIGHT_VERT_GLSL` / `POINT_LIGHT_FRAG_GLSL` (the airfield, the cars of `Traffic.js`, the
-obstruction lights of `js/world/Buildings.js`); the jet's lights use the same numbers on the CPU
-(`js/aircraft/lights.js` `visibleFloor`).
+past ~0.85 (no white blobs). A near light's centre is at most 64 on the display (where the HDR
+chain's bloom clamps): a small hard point with a modest bloom, never a ball. One GLSL for all of
+them, `js/world/AirportLights.js` `POINT_LIGHT_VERT_GLSL` / `POINT_LIGHT_FRAG_GLSL` (the airfield,
+the cars of `Traffic.js`, the obstruction lights of `js/world/Buildings.js`); the jet's lights
+use the same numbers on the CPU (`js/aircraft/lights.js` `visibleFloor`, `coreCap`: at night
+only, by day they keep their look).
 
 **Picture levels.** A few self-lit things are set by eye or lie far outside anything an exposure
 holds; they are drawn at a fixed brightness on the screen, level / exposure:
@@ -130,8 +132,8 @@ holds; they are drawn at a fixed brightness on the screen, level / exposure:
 | module | light | physical value |
 | --- | --- | --- |
 | `js/world/Roads.js` | street lamps and apron floodlights on the roads and aprons | ~26-32 lux at a lamp's foot, up to 300 lux under a mast |
-| `js/world/AirportLights.js` | runway, taxiway, approach lights, PAPI, lamp heads | cd per light (ICAO) |
-| `js/world/Traffic.js` | head and tail lights | cd |
+| `js/world/AirportLights.js` | runway, taxiway, approach lights, PAPI; street lamp heads | cd per light (ICAO); 3,000 cd sodium, 1,200 cd LED (seen from below their horizontal plane) |
+| `js/world/Traffic.js` | head and tail lights | 500 cd and 18 cd towards a viewer above the road (`HEAD_CD`, `TAIL_CD`) |
 | `js/world/Buildings.js` | lit windows, facades under the street lamps, obstruction lights | 30 cd/m^2 (`WINDOW_CD`), 8 lux (`FACADE_LUX`), 32 cd steady / 2,000 cd flashing (`OBSTRUCTION_CD`) |
 | `js/aircraft/lights.js` | position lights, tail light, anti-collision beacons | 150 cd, 40 cd, 600 cd |
 | `js/aircraft/LandingPool.js` | the landing and taxi beams on the ground | 400,000 cd and 250,000 cd, a roll-off far above the night's light (`POOL_KNEE` 64) |

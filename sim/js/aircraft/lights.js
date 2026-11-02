@@ -42,7 +42,9 @@
 // so a position light looks the same at exposure 40 and at 285. And as for those (the rule for
 // point lights, js/world/AirportLights.js), a light many times over the threshold of a point source
 // on the night's ground is at least as bright on the display as that excess says (visibleFloor;
-// at night only: by day the jet's lights keep their look), so it stays a dot for miles.
+// at night only: by day the jet's lights keep their look), so it stays a dot for miles; and its
+// centre is no brighter on the display than any point light's (NIGHT_PEAK 64, where the bloom
+// clamps), so a light a few metres from the camera is a small hard point, not a ball.
 // The exposure is read from the renderer (toneMappingExposure) when the glows are drawn.
 //
 // Light positions and directions come from rig.info.lights (node-relative, model frame), so the
@@ -187,6 +189,12 @@ const SHOULDER_HDR = [0.6, 0.9, 2.0, 4.0];
 const SHOULDER_BLOOM = 2.5;
 const DEPTH_BIAS = 0.6;                // m: the glow sprite drawn this much nearer than the lamp
 const HALO_BLOOM = 0.35;
+// The most a light's centre shows on the display at night (radiance x exposure): where the HDR
+// chain's bloom clamps, the cap every point light has (js/world/AirportLights.js
+// POINT_LIGHT_FRAG_GLSL). At night the lights near the jet hold far more than that (a 40 cd tail
+// light 18 m away ~1,000): uncapped, the core's skirt stays over white for ~6 px around it and the
+// bloom makes a ball of it; capped, it is a small hard point with a modest bloom, as the airfield's.
+const NIGHT_PEAK = 64;
 
 export class AircraftLights {
   /**
@@ -351,6 +359,15 @@ export class AircraftLights {
     return Math.min(1, Math.max(0, lv / 3)) * Math.min(0.35 + 0.06 * Math.max(lv - 3, 0), 0.85);
   }
 
+  /**
+   * The most a light's core may hold (scene radiance) for the exposure, the brightest channel of its
+   * colour and fxEnv.lightNight: NIGHT_PEAK on the display at night, eased in through the blue hour
+   * (NIGHT_PEAK / lightNight), no cap by day (the jet's lights keep their day look).
+   */
+  static coreCap(exposure, peak, night) {
+    return night > 0 ? NIGHT_PEAK / (Math.max(exposure, 1e-4) * Math.max(peak, 1e-4) * night) : Infinity;
+  }
+
   /** The glows' shoulder for the target last drawn into: [knee, cap] saturated, [knee, cap] white. */
   _shoulder() {
     const src = this._linear ? SHOULDER_HDR : SHOULDER;
@@ -451,7 +468,8 @@ export class AircraftLights {
             coreR *= grow;
             core /= grow * grow;
           }
-          core = Math.min(core, 2000);
+          // at night no brighter on the display than any point light (NIGHT_PEAK): a hard point
+          core = Math.min(core, 2000, AircraftLights.coreCap(exposure, s.peak, fxEnv.lightNight));
           // halo: display brightness and size grow with the light at the camera; dark only, except
           // a light shining straight into the camera (a landing lamp head-on dazzles by day too)
           const seen = E * G * exposure;

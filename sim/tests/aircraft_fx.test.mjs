@@ -79,6 +79,20 @@ test('light glows: a point many times over the threshold stays a visible dot, no
   assert.ok(AircraftLights.visibleFloor(1e6) <= 0.85, 'never a white blob');
 });
 
+test('light glows: at night a centre no brighter on the display than any point light, by day as it was', () => {
+  assert.equal(AircraftLights.coreCap(0.93, 1, 0), Infinity, 'noon: no cap');
+  assert.equal(AircraftLights.coreCap(25, 1, 0), Infinity, 'blue hour before the lights take over');
+  // a 40 cd tail light 18 m from the camera at night: ~1,000 on the display uncapped, 64 capped
+  for (const e of [40, 230, 285]) {
+    const cap = AircraftLights.coreCap(e, 1, 1);
+    assert.ok(Math.abs(cap * e - 64) < 1e-9, `exposure ${e}: ${cap * e}`);
+  }
+  // a red light (brightest channel 1, the others low) the same by its brightest channel
+  assert.ok(Math.abs(AircraftLights.coreCap(230, 0.9, 1) * 230 * 0.9 - 64) < 1e-9);
+  // eased in: half way into the night the cap is twice as high
+  assert.ok(Math.abs(AircraftLights.coreCap(230, 1, 0.5) / AircraftLights.coreCap(230, 1, 1) - 2) < 1e-9);
+});
+
 test('nozzle: open at idle, closed at MIL', () => {
   assert.ok(nozzleIdleOpen(0) > 0.7);
   assert.ok(nozzleIdleOpen(0.75) < 0.01);
