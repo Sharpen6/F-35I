@@ -367,9 +367,11 @@ the first rows of *before* at 960 x 540): the shader programs made after the loa
 | 250 m over Tel Aviv, by day and at 21:30 (buildings, roads, lamps, trees streaming in) | (not reached) | 0, 0 |
 | the wingmen | none when they load; built when they first come into view | 11 when they load, finished before they show |
 
-A whole `tests/e2e.mjs` run (medium quality: the runway, a take-off, the cameras, sunset over
-Jerusalem, the Tel Aviv towers by day and by night) made none either: `app.warmup.late` stayed
-empty.
+A whole `tests/e2e.mjs` run (medium quality, the default weather: the runway, a take-off, the
+cameras, sunset over Jerusalem, the Tel Aviv towers by day and by night) made none either:
+`app.warmup.late` stayed empty (86 of 86 checks passed; the GPU memory estimate at its end
+836.7 MB). `tests/pc_check.py --swiftshader` (Tel Nof 36, cockpit) found none in the menu or the
+flight (`programs_made`, `warmup_late` empty).
 
 **Nothing looks different.** `--phases shots` takes the noon view at Tel Nof 36 and the 21:30
 view at Ben Gurion 26, from the chase camera and from the cockpit (960 x 540, `clouds=clear`),
