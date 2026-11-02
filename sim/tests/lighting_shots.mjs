@@ -126,7 +126,51 @@ function sets() {
     { name: 'fl_jlm_1200_chase', spawn: 'jerusalem_sunset', time: 12, cam: 'chase', clouds: 'broken', pair: true },
     { name: 'fl_edge_1200_bkn', spawn: 'jerusalem_sunset', time: 12, cam: 'chase', clouds: 'broken', inside: 1900, back: 650, pair: true },
   ];
-  s.all = [...s.quick, ...s.times, ...s.night, ...s.sky, ...s.clouds, ...s.shadows, ...s.twilight, ...s.flicker];
+  // the sun's glare, bloom and lens ghosts (sky track): into the sun and away from it, low and
+  // high, in the outside views (a camera lens: faint ghosts at most) and from the pilot's seat (an
+  // eye behind the canopy: no ghosts). sunRel: the jet's heading relative to the sun's azimuth
+  // (deg, + = the sun to the left); cam {chase: [yaw, pitch]}: the chase camera turned (deg)
+  s.glare = [
+    { name: 'gl_bgn_1845_chase', spawn: 'bengurion_26', time: 18.75, cam: 'chase' },
+    { name: 'gl_bgn_1845_cockpit', spawn: 'bengurion_26', time: 18.75, cam: 'cockpit' },
+    { name: 'gl_coast_1900_sun_chase', spawn: 'coast_low', time: 19.0, sunRel: -15, cam: 'chase' },
+    { name: 'gl_coast_1900_sun_cockpit', spawn: 'coast_low', time: 19.0, sunRel: -15, cam: 'cockpit' },
+    { name: 'gl_coast_1900_away_chase', spawn: 'coast_low', time: 19.0, sunRel: 180, cam: 'chase' },
+    { name: 'gl_coast_0700_sun_chase', spawn: 'coast_low', time: 7.0, sunRel: -20, cam: { chase: [0, 14] } },
+    { name: 'gl_coast_0700_sun_cockpit', spawn: 'coast_low', time: 7.0, sunRel: -12, cam: { head: [0, 20] } },
+    { name: 'gl_tlv_1200_sun_orbit', spawn: 'tlv_3000', time: 12.0, cam: { orbit: [0, -64, 30] } },
+    { name: 'gl_tlv_1200_sun_cockpit', spawn: 'tlv_3000', time: 12.0, cam: { head: [0, 72] } },
+    { name: 'gl_tlv_1200_chase', spawn: 'tlv_3000', time: 12.0, cam: 'chase' },
+  ];
+  // the sky and the clouds at night (sky track): moonless (year 2028: the moon is down all
+  // evening on 21 June; 2026 at 03:00), the first quarter (2026, the default: 44 deg up in the SW at
+  // 20:00, 28 deg in the WSW at 21:30), the full moon (2024: 18 deg up in the SE at 20:00) and a
+  // waning gibbous moon (2027, 96 %: 30 deg up in the SE at 03:00); over Tel Aviv, at Ben Gurion,
+  // along the coast and over the Dead Sea, in and above a scattered deck (climb 4500), its bases
+  // over Tel Aviv from 800 m (the chase camera below the jet, looking up); blue hour
+  s.nightsky = [
+    { name: 'ns_bgn_2130_q_chase', spawn: 'bengurion_26', time: 21.5, cam: 'chase' },
+    { name: 'ns_bgn_2130_new_chase', spawn: 'bengurion_26', time: 21.5, cam: 'chase', year: 2028 },
+    { name: 'ns_bgn_2130_full_chase', spawn: 'bengurion_26', time: 21.5, cam: 'chase', year: 2024 },
+    { name: 'ns_tlv_2130_q_chase', spawn: 'tlv_3000', time: 21.5, cam: 'chase' },
+    { name: 'ns_tlv_2130_new_chase', spawn: 'tlv_3000', time: 21.5, cam: 'chase', year: 2028 },
+    { name: 'ns_tlv_2130_new_up', spawn: 'tlv_3000', time: 21.5, cam: { head: [0, 45] }, year: 2028 },
+    { name: 'ns_tlv_2000_new_chase', spawn: 'tlv_3000', time: 20.0, cam: 'chase', year: 2028 },
+    { name: 'ns_tlv_0300_new_chase', spawn: 'tlv_3000', time: 3.0, cam: 'chase', year: 2026 },
+    { name: 'ns_coast_2130_new_chase', spawn: 'coast_low', time: 21.5, cam: 'chase', year: 2028, clouds: 'scattered' },
+    { name: 'ns_coast_2130_q_chase', spawn: 'coast_low', time: 21.5, cam: 'chase', clouds: 'scattered' },
+    { name: 'ns_deadsea_2130_new_up', spawn: 'deadsea_low', time: 21.5, cam: { head: [0, 40] }, year: 2028 },
+    { name: 'ns_deadsea_2130_new_west', spawn: 'deadsea_low', time: 21.5, heading: 285, cam: 'chase', year: 2028 },
+    { name: 'ns_tlv_2000_q_above', spawn: 'tlv_3000', time: 20.0, cam: 'chase', clouds: 'scattered', climb: 4500 },
+    { name: 'ns_tlv_2000_full_above', spawn: 'tlv_3000', time: 20.0, cam: 'chase', year: 2024, clouds: 'scattered', climb: 4500 },
+    { name: 'ns_tlv_2130_full_sct', spawn: 'tlv_3000', time: 21.5, cam: 'chase', year: 2024, clouds: 'scattered' },
+    { name: 'ns_tlv_0300_moon_sct', spawn: 'tlv_3000', time: 3.0, cam: 'chase', year: 2027, clouds: 'scattered' },
+    { name: 'ns_tlv_0300_moon_above', spawn: 'tlv_3000', time: 3.0, cam: 'chase', year: 2027, clouds: 'scattered', climb: 4500 },
+    { name: 'ns_tlv_2130_new_bases', spawn: 'tlv_3000', time: 21.5, cam: { chase: [0, 25] }, year: 2028, clouds: 'scattered', climb: 800 },
+    { name: 'ns_bgn_1936_blue', spawn: 'bengurion_26', time: 19.6, cam: 'chase' },
+    { name: 'ns_coast_1945_blue', spawn: 'coast_low', time: 19.75, cam: 'chase', clouds: 'scattered' },
+  ];
+  s.all = [...s.quick, ...s.times, ...s.night, ...s.sky, ...s.clouds, ...s.shadows, ...s.twilight, ...s.flicker, ...s.glare, ...s.nightsky];
   return s;
 }
 
@@ -180,15 +224,21 @@ async function main() {
     // budgetMs) would step high down to medium after two seconds: keep the tier asked for
     await S(() => { const C = window.__sim.app.clouds; if (C && 'budgetMs' in C) { C.budgetMs = null; C.setQuality(C.quality); } });
     for (const s of list) {
-      await S(async ({ spawn, time, climb, year, clouds, inside, back }) => {
+      await S(async ({ spawn, time, climb, year, clouds, inside, back, heading, sunRel }) => {
         const sim = window.__sim, app = sim.app;
         if (app.env) app.env.year = year || 2026;     // the moon's phase
         if (app.clouds) app.clouds.choose(clouds || 'few');
         // a different height or place: the spawn itself is moved for this start (in memory only),
         // so the flight model trims there
         const sp = app.terrain.spawns[spawn];
-        const keep = { x: sp.x, y: sp.y, z: sp.z };
+        const keep = { x: sp.x, y: sp.y, z: sp.z, heading_deg: sp.heading_deg };
         if (climb) sp.y = climb;
+        // another heading: absolute, or relative to the sun's azimuth at that time (+ = sun on the left)
+        if (Number.isFinite(heading)) sp.heading_deg = heading;
+        if (Number.isFinite(sunRel)) {
+          const { sunDirection } = await import('./js/env/sun.js');
+          sp.heading_deg = (((sunDirection(time, sp.day_of_year || 172).azimuthDeg + sunRel) % 360) + 360) % 360;
+        }
         const C = app.clouds;
         if (inside && C && C.layer) {
           // the nearest point (on a spiral) where the cumulus is solid for 900 m along the heading,
@@ -242,7 +292,17 @@ async function main() {
         });
       }, s.boxes || null);
       if (typeof s.cam === 'string') await S((c) => { window.__sim.camera(c); window.__sim.step(24); }, s.cam);
-      else if (s.cam.head) {
+      else if (s.cam.chase) {
+        // the chase camera turned by the player (yaw + = the camera swings right, the view left;
+        // pitch + = looking up), held there (no swing back while the shot settles)
+        await S(([yaw, pitch]) => {
+          const sim = window.__sim, C = sim.app.cams.chase;
+          sim.camera('chase');
+          sim.step(12);
+          C.yaw = yaw * Math.PI / 180; C.pitch = pitch * Math.PI / 180; C.idle = -1e9;
+          sim.step(12);
+        }, s.cam.chase);
+      } else if (s.cam.head) {
         // cockpit view with the head turned: yaw + = left, pitch + = up (degrees)
         await S(([yaw, pitch]) => {
           const sim = window.__sim, H = sim.app.cams.head;
