@@ -29,6 +29,7 @@ import { makeDetailTexture, makeGlassTexture } from './pcd/detail.js';
 import { Interior, DISPLAY_ALPHA } from './pcd/interior.js';
 import { CanopyGlass } from './pcd/canopy.js';
 import { CockpitShadow } from './pcd/shadow.js';
+import { CockpitParts } from './pcd/parts.js';
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const clamp1 = (x) => (x > 1 ? 1 : x < -1 ? -1 : x || 0);
@@ -120,6 +121,9 @@ export class Cockpit {
     this._setupPcdMaterial();
     this.pcd.setMaps(terrain).catch(() => {});
     this.detail = makeDetailTexture(512);
+    // the glb's bow, coaming, seat, consoles, sills and PCD bezel rebuilt (pcd/parts.js, one part
+    // per task): before the interior's analysis, which takes them in
+    this.parts = new CockpitParts({ visual });
     this.interior = new Interior({ visual, detail: this.detail });
     // the cockpit's own sun shadow, on the interior's analysis box (the pilot's head, hidden at the
     // eye, still casts)
@@ -130,7 +134,9 @@ export class Cockpit {
     // (the patched materials need 5-9 new programs: the next render compiles them, once, normally
     // behind the menu. A compileAsync here would not help: the materials are already patched, and
     // behind a post chain the scene renders into a target with other program variants)
-    this.interior.start().then((s) => { this.interiorStats = s; })
+    this.ready = this.parts.build()
+      .then(() => (this.parts.disposed ? null : this.interior.start()))
+      .then((s) => { this.interiorStats = s; })
       .catch((e) => console.warn('Cockpit: interior:', e.message));
     // the canopy pass; its glass texture is made the first time the pass is on (_glass: 1024²,
     // 0.1-0.2 s of start-up that the low quality, without the pass, does not pay)
@@ -412,6 +418,7 @@ gl_FragColor.a = ${DISPLAY_ALPHA.toFixed(1)};`);
     this.pcd.dispose();
     this.pcdMaterial?.dispose();
     this.interior?.dispose();
+    this.parts?.dispose();
     this.canopy?.dispose();
     this.shadow?.dispose();
     this.detail?.dispose();

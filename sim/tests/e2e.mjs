@@ -90,7 +90,11 @@ async function main() {
   const frames = [];
   try {
     const page = await browser.newPage({ viewport: { width: W, height: H } });
-    page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
+    const ckWarnings = [];   // (pcd/parts.js warns when a cockpit part is not rebuilt; Cockpit.js when the interior fails)
+    page.on('console', (m) => {
+      if (m.type() === 'error') problems.push(`console: ${m.text()}`);
+      else if (m.type() === 'warning' && /^Cockpit: /.test(m.text())) ckWarnings.push(m.text());
+    });
     page.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
     page.on('requestfailed', (r) => problems.push(`request failed: ${r.url()} ${r.failure()?.errorText || ''}`));
     page.on('response', (r) => { if (r.status() >= 400) problems.push(`HTTP ${r.status()}: ${r.url()}`); });
@@ -316,6 +320,16 @@ async function main() {
       const cIn = await ckState();
       const st = cIn.stats;
       check('cockpit interior analysed: inner skin faces repainted, no gap', !!st && !st.leak && st.interiorTris > 3000, st ? `${st.interiorTris} faces, ${st.edgeTris} along the paint's edge, leak ${st.leak}` : 'no analysis');
+      // the rebuilt parts (js/aircraft/pcd/parts.js): every one built, in its own task, nothing left out
+      const pk = await S(async () => {
+        const c = window.__sim.app.cockpit, m = await import('./js/aircraft/pcd/parts.js');
+        const p = c.parts, st = p.stats || {};
+        return { steps: m.STEPS, expected: m.EXPECTED_DRAWS, off: !!st.off, bad: m.STEPS.filter((k) => !st[k] || st[k].err).map((k) => `${k}: ${st[k] ? st[k].err : 'not built'}`),
+          added: p.added.length, ms: st.ms, maxTaskMs: st.maxTaskMs };
+      });
+      check('cockpit parts rebuilt: every part, the expected draws, no warning',
+        !pk.off && pk.bad.length === 0 && pk.added === pk.expected && ckWarnings.length === 0,
+        `${pk.added}/${pk.expected} draws, ${pk.steps.length} parts in ${f2(pk.ms, 0)} ms (longest task ${f2(pk.maxTaskMs, 0)} ms)${pk.bad.length ? `; ${pk.bad.join(', ')}` : ''}${ckWarnings.length ? `; ${ckWarnings.slice(0, 3).join(' | ')}` : ''}`);
       check('cockpit display redrawn in the cockpit view', cIn.redraws > cOut2.redraws, `${cOut2.redraws} -> ${cIn.redraws}`);
       check('cockpit sun shadow on in the cockpit view', cIn.shadow === 1);
       const tip = async (input) => { await S((o) => window.__sim.setInput(o), input); await step(30); return (await ckState()).tips; };

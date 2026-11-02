@@ -192,6 +192,14 @@ chain's night vision to leave them in colour. All procedural, no new data (the m
 the terrain imagery credited below). Design, overridden materials and costs:
 `js/aircraft/pcd/README.md`.
 
+The canopy bow, the coaming, the display's bezel, the side consoles, the seat's headbox and beams,
+the canopy's side frame and the sills are rebuilt at start-up from the glb's own parts, in their
+places and sizes, one part per task and each all or nothing: a slim bow at the glb's band with
+sealant beads and handholds, a hooded anti-glare coaming whose outline from the eye is the
+helmet's coaming line, Dzus-fastened console panels, a lined canopy frame with its bolts and seal,
+a rounded sill cap; fastener heads in their part's paint (`js/aircraft/pcd/parts.js`;
+`?ckparts=0` shows the glb's).
+
 ## Helmet display
 
 Green symbology as in the F-35's helmet, drawn crisp at the screen's resolution. In the
@@ -339,6 +347,7 @@ node sim/tests/input.test.mjs                                          (keyboard
 node sim/tests/lighting_shots.mjs [--port 8148] [--out DIR] [--set quick|times|night|sky|clouds|shadows|twilight|flicker|all] [--only a,b] [--quality q] [--frames N] [--resume]
 python3 sim/tests/frame_diff.py DIR [--threshold 4]                    (frame-to-frame change of the flicker pairs)
 node --import ./sim/tests/node-three.mjs sim/tests/aircraft_fx.test.mjs  (lights, burner, vapour models)
+node --import ./sim/tests/node-three.mjs sim/tests/cockpit_parts.test.mjs (the rebuilt cockpit parts against the glb and the helmet's coaming line)
 node sim/tests/aircraft_scenes.mjs [--port 8150] [--only park_,ab_] [--shots chase,side]   (the jet's looks)
 ```
 
