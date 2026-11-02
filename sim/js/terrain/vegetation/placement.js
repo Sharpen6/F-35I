@@ -390,7 +390,7 @@ function isGrey(r, g, b) {
 
 /** Writes one tree after the last checks (inside the cell, not on grey or water pixels). */
 function emit(t, out, x, z, species, height, rng, opts = {}) {
-  const { cellX0, cellZ0, grey = true, wf = 0.82 + 0.4 * rng() } = opts;
+  const { cellX0, cellZ0, grey = true, wf = 0.82 + 0.4 * rng(), rankMax = 1 } = opts;
   if (cellX0 !== undefined && (x < cellX0 || x >= cellX0 + CELL_M || z < cellZ0 || z >= cellZ0 + CELL_M)) return false;
   const i = Math.floor((x - t.x0) / LC_PX), j = Math.floor((z - t.z0) / LC_PX);
   if (i < 0 || j < 0 || i >= LC_N || j >= LC_N) return false;
@@ -421,7 +421,7 @@ function emit(t, out, x, z, species, height, rng, opts = {}) {
     clamp(Math.round(wf * 128), 1, 255),
     Math.floor(rng() * 256),
     Math.round(f[0] + (r - f[0]) * w), Math.round(f[1] + (g - f[1]) * w), Math.round(f[2] + (b - f[2]) * w),
-    Math.floor(rng() * 256),
+    Math.floor(rng() * 256 * rankMax),
   );
   return true;
 }
@@ -487,12 +487,13 @@ function treeCover(t, p, px, pz, rng, out) {
   if (t.built[p] > 85) { urban(t, p, px, pz, rng, out, 1); return; }
   const cover = clamp((exg - 0.03) / 0.17, 0.15, 1) * (0.75 + 0.4 * smooth(0.58, 0.36, luma));
   // a line of trees through farmland: windbreak (eucalyptus, cypress), planted 3-4 m apart,
-  // the crowns crowded narrow and merging into one tall wall
+  // the crowns crowded narrow and merging into one tall wall; ranked low, so every quality
+  // keeps the whole row (a gappy windbreak is not one) and it stays to the far range
   if (t.tree3[p] <= 115 && t.crop[p] + t.grass[p] > 100 && elev > -100) {
     const sp = noise2(px, pz, 300, 7) < 0.68 ? SP.eucalyptus : SP.cypress;
     const n = countOf(sp === SP.cypress ? 3.0 : 2.8, rng);
     for (let k = 0; k < n; k++) {
-      emit(t, out, px + rng() * LC_PX, pz + rng() * LC_PX, sp, heightFor(sp, rng, noise2(px, pz, 200, 9)), rng, { wf: 0.55 + 0.25 * rng() });
+      emit(t, out, px + rng() * LC_PX, pz + rng() * LC_PX, sp, heightFor(sp, rng, noise2(px, pz, 200, 9)), rng, { wf: 0.55 + 0.25 * rng(), rankMax: 0.44 });
     }
     return;
   }

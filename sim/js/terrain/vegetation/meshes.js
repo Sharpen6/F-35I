@@ -420,40 +420,53 @@ function basisY(n) {
 function pine(b, sp, rng, detail) {
   const fol = lin(sp.foliage), wood = lin(sp.wood);
   const lean = 0.03 + rng() * 0.08;
-  const trunkTop = 0.8;
+  const trunkTop = 0.86;
   const path = trunkPath(rng, trunkTop, lean, 5);
   b.tube(path, path.map((p, i) => 0.024 * (1 - 0.65 * i / (path.length - 1))), detail ? 6 : 4, wood, 0.3);
   const top = path[path.length - 1];
-  const crownC = [top[0] * 0.85, 0.72, top[2] * 0.85];
-  const crownR = [0.36, 0.25, 0.36];
-  // Aleppo pine (planted KKL forest): a trunk bare to about half its height, then an open,
-  // irregular crown: a few main branches climbing out of the trunk, each ending in several
-  // small tufts of needles, tilted with the branch (their flat side up and out), frayed at the
-  // rim, darker inside and underneath; sky shows between the tufts
-  const limbs = 6 + Math.floor(rng() * 3);
+  const crownC = [top[0] * 0.85, 0.7, top[2] * 0.85];
+  const crownR = [0.34, 0.26, 0.34];
+  // Aleppo pine of a planted KKL forest: the trunk bare to almost half its height, then an open,
+  // irregular dome: seven to nine branches climbing out of the trunk, each carrying tufts of
+  // needles along its outer two thirds and at its end (tilted with the branch, flat side up and
+  // out, frayed at the rim, darker inside and underneath). The tufts crowd into clustered masses
+  // with sky between them. The reduced level of detail leaves out each branch's innermost tuft
+  // (hidden in the crown) and makes the others a little larger (an icosahedron is smaller than
+  // its sphere).
+  const lowK = detail ? 1 : 1.12;
+  const limbs = 7 + Math.floor(rng() * 2);
   let k = 0;
   for (let i = 0; i < limbs; i++) {
     const t = i / (limbs - 1);
-    const y0 = 0.46 + 0.36 * t + jitter(rng, 0.03);
+    const y0 = 0.44 + 0.34 * t + jitter(rng, 0.03);
     const az = i * 2.39996 + rng() * 0.9;
-    const reach = (0.2 * (1 - 0.5 * t) + 0.06 * rng()) * (t > 0.92 ? 0.45 : 1);
-    const rise = 0.06 + 0.1 * rng();
+    const reach = (0.22 * (1 - 0.45 * t) + 0.07 * rng()) * (t > 0.92 ? 0.5 : 1);
+    const rise = 0.08 + 0.12 * rng();
     const tp = alongY(path, Math.min(y0, trunkTop));
-    const out = [Math.cos(az), 0, Math.sin(az)];
-    const e = [tp[0] + out[0] * reach, y0 + rise, tp[2] + out[2] * reach];
+    const e = [tp[0] + Math.cos(az) * reach, y0 + rise, tp[2] + Math.sin(az) * reach];
     if (detail) b.tube([tp, [(tp[0] + e[0]) / 2, (tp[1] + e[1]) / 2 + 0.015, (tp[2] + e[2]) / 2], e], [0.009, 0.006, 0.004], 3, wood, 0.5, (yy) => 0.3 + 0.5 * yy, 0.5);
-    // three or four tufts around the branch's outer end
-    const tufts = 3 + Math.floor(rng() * 2);
+    const tufts = 4 + (rng() < 0.35 ? 1 : 0);
     for (let j = 0; j < tufts; j++) {
-      const s = 0.55 + 0.5 * rng();
-      const a2 = az + jitter(rng, 1.1);
-      const c = [tp[0] + (e[0] - tp[0]) * s + Math.cos(a2) * 0.05 * rng(), tp[1] + (e[1] - tp[1]) * s + jitter(rng, 0.025), tp[2] + (e[2] - tp[2]) * s + Math.sin(a2) * 0.05 * rng()];
-      const r = 0.055 + 0.03 * rng() - 0.012 * t;
-      const tilt = 0.25 + 0.4 * rng();         // the tuft's flat side faces up and out
+      const s = 0.35 + 0.75 * (j + 0.8 * rng()) / tufts;
+      const a2 = az + jitter(rng, 1.2);
+      const o = 0.045 * rng();
+      const c = [tp[0] + (e[0] - tp[0]) * s + Math.cos(a2) * o, tp[1] + (e[1] - tp[1]) * s + jitter(rng, 0.03), tp[2] + (e[2] - tp[2]) * s + Math.sin(a2) * o];
+      const r = (0.07 + 0.035 * rng() - 0.015 * t) * lowK;
+      const tilt = 0.2 + 0.35 * rng();         // the tuft's flat side faces up and out
       const n = [Math.cos(a2) * Math.sin(tilt), Math.cos(tilt), Math.sin(a2) * Math.sin(tilt)];
-      b.clump(c, [r * 1.35, r * 0.5, r * 1.2], detail ? 1 : 0, fol, crownC, 100 + (k++) * 7 + Math.floor(rng() * 1000),
-        { amp: 0.3, freq: 3.1, bend: 0.45, basis: basisY(n), under: 0.3, rim: 0.22 });
+      const seed = 100 + (k++) * 7 + Math.floor(rng() * 1000);
+      if (!detail && j === 0) continue;
+      b.clump(c, [r * 1.3, r * 0.62, r * 1.15], detail ? 1 : 0, fol, crownC, seed,
+        { amp: 0.3, freq: 3.1, bend: 0.5, basis: basisY(n), under: 0.3, rim: 0.18 });
     }
+  }
+  // the leader: two or three tufts on top
+  const nt = 2 + Math.floor(rng() * 2);
+  for (let j = 0; j < nt; j++) {
+    const c = [top[0] + jitter(rng, 0.06), top[1] + 0.02 + 0.05 * rng(), top[2] + jitter(rng, 0.06)];
+    const r = (0.06 + 0.025 * rng()) * lowK;
+    b.clump(c, [r * 1.2, r * 0.7, r * 1.1], detail ? 1 : 0, fol, crownC, 900 + j * 13 + Math.floor(rng() * 1000),
+      { amp: 0.3, freq: 3.1, bend: 0.5, under: 0.3, rim: 0.18 });
   }
   b.finishAO(crownC, crownR, 0.25);
 }
@@ -578,41 +591,50 @@ function cypress(b, sp, rng, detail) {
 }
 
 function eucalyptus(b, sp, rng, detail) {
-  const fol = lin(sp.foliage), wood = lin(sp.wood), bark = lin([112, 100, 84]);
-  // river red gum (the gum of Israel's windbreaks and stream banks): a smooth pale grey trunk
-  // with a rough darker foot, forking at about a third of its height into a few long limbs
-  // that climb and spread; a tall, open, irregular crown of many small drooping masses of
-  // grey-green leaves from ~0.4 of the height to the top, sky between them
+  const fol = lin(sp.foliage), wood = lin(sp.wood), bark = lin([150, 141, 126]);
+  // river red gum (the gum of Israel's windbreaks and stream banks): a smooth pale trunk, its foot
+  // a little rougher and darker, forking at about a third of its height into three or four long
+  // limbs that climb steeply and fork again; an open, ragged crown from ~0.4 of the height to the
+  // top: many small drooping masses of grey-green leaves around the outer half of the limbs and
+  // their forks (the crown's middle open, sky between the masses)
+  const lowK = detail ? 1 : 1.12;
   const fork = 0.3 + 0.08 * rng();
   const path = trunkPath(rng, fork, 0.06, 3);
   b.tube(path.slice(0, 2), [0.034, 0.03], detail ? 6 : 4, bark, 0.2, (y) => y * y * 0.5, 0.55);
   b.tube(path.slice(1), [0.03, 0.026, 0.023], detail ? 6 : 4, wood, 0.25, (y) => y * y * 0.5, 0.6);
   const top = path[path.length - 1];
-  const crownC = [top[0], 0.7, top[2]];
-  const crownR = [0.36, 0.32, 0.36];
-  const limbs = 4 + Math.floor(rng() * 2);
-  const ends = [];
+  const crownC = [top[0], 0.68, top[2]];
+  const crownR = [0.34, 0.32, 0.34];
+  const limbs = 3 + Math.floor(rng() * 2);
+  const twigs = [];             // [start, end] of every limb and fork: the masses hang on them
   for (let i = 0; i < limbs; i++) {
-    const az = (i / limbs) * Math.PI * 2 + rng() * 0.8;
-    const r = 0.16 + 0.14 * rng();
-    const e = [top[0] + Math.cos(az) * r, 0.68 + 0.28 * rng(), top[2] + Math.sin(az) * r];
-    ends.push(e);
-    const mid = [(top[0] + e[0]) / 2 + jitter(rng, 0.04), (top[1] + e[1]) / 2 + 0.04, (top[2] + e[2]) / 2 + jitter(rng, 0.04)];
-    b.tube([top, mid, e], [0.018, 0.012, 0.006], detail ? 4 : 3, wood, 0.5, (y) => 0.3 + 0.5 * y, 0.7);
+    const az = (i / limbs) * Math.PI * 2 + rng() * 0.9;
+    const r = 0.13 + 0.1 * rng();
+    const e = [top[0] + Math.cos(az) * r, 0.62 + 0.16 * rng(), top[2] + Math.sin(az) * r];
+    const mid = [(top[0] + e[0]) / 2 + jitter(rng, 0.03), (top[1] + e[1]) / 2 + 0.03, (top[2] + e[2]) / 2 + jitter(rng, 0.03)];
+    b.tube([top, mid, e], [0.018, 0.013, 0.009], detail ? 4 : 3, wood, 0.5, (y) => 0.3 + 0.5 * y, 0.7);
+    twigs.push([mid, e]);
+    // the limb forks again: two branches up and out to the crown's edge and top
+    for (let j = 0; j < 2; j++) {
+      const a2 = az + (j ? 1 : -1) * (0.35 + 0.4 * rng());
+      const r2 = 0.08 + 0.1 * rng();
+      const f = [e[0] + Math.cos(a2) * r2, e[1] + 0.1 + 0.2 * rng(), e[2] + Math.sin(a2) * r2];
+      if (detail) b.tube([e, f], [0.008, 0.004], 3, wood, 0.6, (y) => 0.4 + 0.5 * y, 0.75);
+      twigs.push([e, f]);
+    }
   }
-  // 26-34 small masses along the outer two thirds of the limbs, around their ends and above
-  // them, hanging (taller than wide); the lowest ones at ~0.4 of the height
-  const n = 26 + Math.floor(rng() * 9);
+  // 28-34 small masses, hanging (taller than wide), along the outer part of the limbs and forks
+  const n = 28 + Math.floor(rng() * 7);
   for (let i = 0; i < n; i++) {
-    const e = ends[i % limbs];
-    const s = 0.35 + 0.8 * rng();
+    const [a, c0] = twigs[i % twigs.length];
+    const s = 0.3 + 0.85 * rng();
     const az = rng() * Math.PI * 2;
-    const out = 0.03 + 0.1 * rng();
-    const c = [top[0] + (e[0] - top[0]) * s + Math.cos(az) * out, Math.max(0.4, top[1] + (e[1] - top[1]) * s + jitter(rng, 0.07)),
-      top[2] + (e[2] - top[2]) * s + Math.sin(az) * out];
-    const r = 0.1 + 0.05 * rng();
-    b.clump(c, [r * 0.85, r * 1.0, r * 0.85], detail ? 1 : 0, fol, crownC, 1400 + i * 9 + Math.floor(rng() * 1000),
-      { amp: 0.4, freq: 2.6, bend: 0.45, under: 0.25, rim: 0.1 });
+    const out = 0.02 + 0.06 * rng();
+    const c = [a[0] + (c0[0] - a[0]) * s + Math.cos(az) * out, Math.max(0.42, a[1] + (c0[1] - a[1]) * s - 0.04 * rng() + jitter(rng, 0.04)),
+      a[2] + (c0[2] - a[2]) * s + Math.sin(az) * out];
+    const r = (0.055 + 0.035 * rng()) * lowK;
+    b.clump(c, [r * 0.9, r * 1.15, r * 0.9], detail ? 1 : 0, fol, crownC, 1400 + i * 9 + Math.floor(rng() * 1000),
+      { amp: 0.38, freq: 2.6, bend: 0.45, under: 0.25, rim: 0.1 });
   }
   b.finishAO(crownC, crownR, 0.35);
 }
