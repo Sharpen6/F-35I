@@ -343,7 +343,9 @@ runways.bin: uint8 RGBA, layers x 32 rows x 1024 samples: rgb the imagery's pave
 * Markings (ICAO Annex 14): threshold stripes (4-16 by width) 6-36 m past the threshold,
   designation digits 9 m tall (and the L / R / C letter), centreline 30 m stripes / 20 m gaps,
   aiming point (400 m on runways of 2400 m and more, else 300 m), touchdown zone pattern A
-  (3-3-2-2-1 bars per side, every 150 m), 0.9 m edge stripes, displaced threshold bar and arrows.
+  (3-3-2-2-1 bars per side, every 150 m), 0.9 m edge stripes, displaced threshold bar and arrows
+  (on the displaced section, in place of the centreline: one every 60 m pointing at the
+  threshold, an 8 m head 4 x the centreline's width, a 30 m shaft; whole arrows only).
   Worn by the field's `wear`, chipped (noise), blackened by the rubber in the touchdown zone,
   crossed by the sealant.
 * By day: the arresting cable (32 mm, on rubber supports every 2.4 m) under yellow discs 3 m across

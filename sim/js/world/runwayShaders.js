@@ -392,15 +392,22 @@ void main() {
         }
         white = max(white, tz);
       }
-      // displaced threshold: the transverse bar and arrows along the centre before it
-      if (disp > 0.0) {
-        white = max(white, band(ed, -1.8, 0.0, pu) * step(at, hw - 0.9));
-        if (ed < 0.0 && e > 0.0) {
-          float a = mod(-ed, 60.0);
-          float shaft = band(at, 0.0, 0.45, pv) * band(a, 10.0, 40.0, pu);
-          float head = band(at, 0.0, 0.45 + 0.6 * (10.0 - a), pv) * band(a, 2.0, 10.0, pu) * step(a, 10.0);
-          white = max(white, max(shaft, head) * step(10.0, -ed));
-        }
+    }
+    // displaced threshold (ICAO Annex 14 fig. 5-4): the transverse bar at the threshold and, on
+    // the displaced section before it (no centreline there), arrows along the centre pointing at
+    // the threshold, one every 60 m: an 8 m head widening from its tip (the first one's 2 m short
+    // of the bar) to 4 x the centreline's width, then a 30 m shaft of that width; only whole
+    // arrows, ending 2 m or more inside the runway's end (outside the threshold markings'
+    // branch above: that one stops 2 m before the threshold)
+    if (disp > 0.0) {
+      white = max(white, band(ed, -1.8, 0.0, pu) * step(at, hw - 0.9));
+      if (e > 0.0 && ed < 0.0) {
+        float aw = hw >= 22.0 ? 0.45 : 0.3;
+        float k = floor(-ed / 60.0);
+        float a = -ed - 60.0 * k;                      // from the threshold side of this arrow's cell
+        float shaft = band(at, 0.0, aw, pv) * band(a, 10.0, 40.0, pu);
+        float head = band(at, 0.0, aw * 4.0 * (a - 2.0) / 8.0, pv) * band(a, 2.0, 10.0, pu);
+        white = max(white, max(shaft, head) * step(60.0 * k + 42.0, disp));
       }
     }
   }
