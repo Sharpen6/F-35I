@@ -24,6 +24,7 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import sys
 import time
@@ -431,32 +432,196 @@ def runway_rects(airports, margin=4.0):
     return rects
 
 
-class LandCover:
-    """ESA WorldCover codes of the core at 25 m (data/terrain/landcover/overview.png)."""
+class BuiltUp:
+    """Built-up land beside the roads: ESA WorldCover class 50 at 10 m (data/terrain/landcover/tile_*.png).
+
+    WorldCover maps a paved road as built-up land wherever it is wider than about a pixel (a
+    motorway with its shoulders is 3 - 4 pixels), so sampling a road's own centreline called 98 %
+    of the motorways and 91 % of the trunk roads "urban" (zebra crossings and sidewalks on the
+    Ayalon). So the road corridors are rasterised first (half the paved width plus 6 m) and taken
+    out of the mask: a road is urban when the land beside it, 15 - 120 m beyond its edges on both
+    sides, is mostly built-up. Water, no-data and the other roads' corridors count neither way.
+    """
+    PX = 10.0                                   # m per pixel (the land cover tiles)
+    OFFSETS = (15.0, 35.0, 60.0, 90.0, 120.0)   # m beyond the road's edge, both sides
 
     def __init__(self, terrain_dir):
         from PIL import Image
+        t, m = grid.NTILES, grid.LC_TILE_PX
+        self.n = t * m
+        codes = np.zeros((self.n, self.n), np.uint8)
+        for iz in range(t):
+            for ix in range(t):
+                fn = os.path.join(terrain_dir, 'landcover', f'tile_{ix}_{iz}.png')
+                codes[iz * m:(iz + 1) * m, ix * m:(ix + 1) * m] = np.asarray(Image.open(fn))
+        self.codes = codes
+        self.road = None
+        self.near = None
+
+    def set_roads(self, corridors):
+        """corridors: [(p (n, 2) world m, half width m)]. Builds the road mask, then the built-up
+        share within ~300 m without the roads (40 m grid) that decides street lighting."""
+        from PIL import Image, ImageDraw
         from scipy.ndimage import uniform_filter
-        self.codes = np.asarray(Image.open(os.path.join(terrain_dir, 'landcover', 'overview.png')))
-        self.n = self.codes.shape[0]
-        built = (self.codes == 50).astype(np.float32)
-        # built-up share within ~300 m: decides street lighting on main roads
-        self.near = uniform_filter(built, size=13, mode='nearest')
+        img = Image.new('L', (self.n, self.n), 0)
+        draw = ImageDraw.Draw(img)
+        H, px = grid.CORE_HALF, self.PX
+        for p, hw in corridors:
+            xy = [(float(x), float(z)) for x, z in zip((p[:, 0] + H) / px - 0.5, (p[:, 1] + H) / px - 0.5)]
+            draw.line(xy, fill=1, width=max(1, int(round(2 * hw / px))), joint='curve')
+        self.road = np.asarray(img) > 0
+        del img, draw
+        c = self.codes
+        valid = ~self.road & (c != 0) & (c != 80)
+        built = valid & (c == 50)
+        k = 4                                    # 40 m cells
+        m = self.n // k
+        vb = valid.reshape(m, k, m, k).mean(axis=(1, 3), dtype=np.float32)
+        bb = built.reshape(m, k, m, k).mean(axis=(1, 3), dtype=np.float32)
+        fv = uniform_filter(vb, size=7, mode='nearest')
+        fb = uniform_filter(bb, size=7, mode='nearest')
+        self.near = np.where(fv > 0.02, fb / np.maximum(fv, 1e-6), 0.0).astype(np.float32)
+        self._k = k
 
-    def _idx(self, x, z):
-        px = 2 * grid.CORE_HALF / self.n
-        i = np.clip(((np.asarray(x) + grid.CORE_HALF) / px).astype(int), 0, self.n - 1)
-        j = np.clip(((np.asarray(z) + grid.CORE_HALF) / px).astype(int), 0, self.n - 1)
-        return j, i
-
-    def built_share(self, p):
-        """Share of points along polyline p (sampled every ~20 m) in built-up land cover."""
+    def beside(self, p, hw):
+        """(built-up share of the land beside polyline p with half width hw, share within ~300 m)."""
+        H, px, n = grid.CORE_HALF, self.PX, self.n
         s = cumlen(p)
-        n = max(2, int(s[-1] / 20) + 1)
-        t = np.linspace(0, s[-1], n)
+        L = s[-1]
+        m = max(2, int(L / 20) + 1)
+        t = np.linspace(0, L, m)
         x, z = np.interp(t, s, p[:, 0]), np.interp(t, s, p[:, 1])
-        j, i = self._idx(x, z)
-        return float(np.mean(self.codes[j, i] == 50)), float(np.mean(self.near[j, i]))
+        k = np.clip(np.searchsorted(s, t, 'right') - 1, 0, len(p) - 2)
+        dx, dz = p[k + 1, 0] - p[k, 0], p[k + 1, 1] - p[k, 1]
+        dl = np.hypot(dx, dz) + 1e-9
+        rx, rz = -dz / dl, dx / dl
+        off = hw + np.array(self.OFFSETS)
+        off = np.concatenate([off, -off])
+        X = x[:, None] + rx[:, None] * off[None, :]
+        Z = z[:, None] + rz[:, None] * off[None, :]
+        i = np.clip(((X + H) / px).astype(int), 0, n - 1)
+        j = np.clip(((Z + H) / px).astype(int), 0, n - 1)
+        c = self.codes[j, i]
+        valid = ~self.road[j, i] & (c != 0) & (c != 80)
+        nv = int(valid.sum())
+        kk = self._k * px
+        ni = np.clip(((x + H) / kk).astype(int), 0, self.near.shape[1] - 1)
+        nj = np.clip(((z + H) / kk).astype(int), 0, self.near.shape[0] - 1)
+        near = float(np.mean(self.near[nj, ni]))
+        if nv < 4:                               # all water, roads or no data around: the wider share
+            return near, near
+        return float((valid & (c == 50)).sum()) / nv, near
+
+
+class CoreHeights:
+    """The core height tiles (data/terrain/height) as one 4097 x 4097 grid, sampled exactly as the
+    terrain renders them (js/terrain/HeightField.js: 25 m cells split along the NW-SE diagonal)."""
+
+    def __init__(self, terrain_dir):
+        n = grid.NTILES * (grid.H_TILE_N - 1) + 1
+        h = np.zeros((n, n), np.float32)
+        m = grid.H_TILE_N - 1
+        for iz in range(grid.NTILES):
+            for ix in range(grid.NTILES):
+                fn = os.path.join(terrain_dir, 'height', f'tile_{ix}_{iz}.bin')
+                a = np.fromfile(fn, '<u2').reshape(grid.H_TILE_N, grid.H_TILE_N)
+                h[iz * m:iz * m + grid.H_TILE_N, ix * m:ix * m + grid.H_TILE_N] = grid.decode_height(a)
+        self.h = h
+        self.n = n
+
+    def at(self, x, z):
+        gx = (np.asarray(x, np.float64) + grid.CORE_HALF) / grid.H_STEP
+        gz = (np.asarray(z, np.float64) + grid.CORE_HALF) / grid.H_STEP
+        i = np.clip(np.floor(gx).astype(int), 0, self.n - 2)
+        j = np.clip(np.floor(gz).astype(int), 0, self.n - 2)
+        fx, fz = np.clip(gx - i, 0, 1), np.clip(gz - j, 0, 1)
+        h = self.h
+        ha, hb, hc, hd = h[j, i], h[j, i + 1], h[j + 1, i], h[j + 1, i + 1]
+        return np.where(fx >= fz, ha + fx * (hb - ha) + fz * (hd - hb), ha + fz * (hc - ha) + fx * (hd - hc))
+
+
+def bridge_decks(pieces, hts, min_sag=2.0):
+    """Deck profiles of the bridges that span a dip in the terrain.
+
+    Bridges come as pieces of segments (Overture splits a viaduct wherever an attribute changes);
+    the pieces that share end points form one bridge. Its ends on the ground (where a non-bridge
+    road meets it, or a dead end) take the terrain height; the joints in between are interpolated
+    along the bridge (harmonic over the joints: linear along a chain), so each piece gets a straight
+    deck from height ha at its start to hb at its end. Where the elevation model (a surface model
+    at 30 m: the valley under a viaduct, rarely the deck itself) sags more than min_sag below that
+    line, the bridge is a deck: js/world/roadMesh.js draws the surface at max(terrain, deck) and adds
+    the deck's sides, parapets, underside and piers. Smaller dips stay draped on the terrain.
+    Sets piece['deck'] = (ha, hb, structure depth); returns statistics.
+    """
+    key = lambda x, z: (int(round(x * 10)), int(round(z * 10)))
+    road_keys, nodes = set(), {}
+    br = []
+    for k, pc in enumerate(pieces):
+        p, s = pc['p'], pc['s']
+        e = [(float(np.interp(u, s, p[:, 0])), float(np.interp(u, s, p[:, 1]))) for u in (pc['a'], pc['b'])]
+        if pc['flags'] & F_BRIDGE:
+            ka, kb = key(*e[0]), key(*e[1])
+            br.append((k, ka, kb))
+            for kk, xz in ((ka, e[0]), (kb, e[1])):
+                nodes.setdefault(kk, dict(xz=xz, edges=[]))
+        else:
+            road_keys.add(key(*e[0]))
+            road_keys.add(key(*e[1]))
+    for k, ka, kb in br:
+        L = max(pieces[k]['b'] - pieces[k]['a'], 0.1)
+        nodes[ka]['edges'].append((kb, L))
+        nodes[kb]['edges'].append((ka, L))
+    # joint heights: anchors on the ground, the rest relaxed (Gauss-Seidel on 1 / length weights)
+    h = {}
+    for kk, nd in nodes.items():
+        if kk in road_keys or len(nd['edges']) == 1:
+            h[kk] = float(hts.at(*nd['xz']))
+    free = [kk for kk in nodes if kk not in h]
+    for kk in free:
+        h[kk] = float(hts.at(*nodes[kk]['xz']))
+    for _ in range(200):
+        delta = 0.0
+        for kk in free:
+            ws = sum(1 / L for _, L in nodes[kk]['edges'])
+            v = sum(h[o] / L for o, L in nodes[kk]['edges']) / ws
+            delta = max(delta, abs(v - h[kk]))
+            h[kk] = v
+        if delta < 1e-3:
+            break
+    # components (union-find over the bridge pieces' joints) and their largest dip
+    parent = {kk: kk for kk in nodes}
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    for _, ka, kb in br:
+        parent[find(ka)] = find(kb)
+    sag = {}
+    for k, ka, kb in br:
+        pc = pieces[k]
+        p, s, a, b = pc['p'], pc['s'], pc['a'], pc['b']
+        t = np.linspace(a, b, max(2, int((b - a) / 5) + 1))
+        x, z = np.interp(t, s, p[:, 0]), np.interp(t, s, p[:, 1])
+        line = h[ka] + (h[kb] - h[ka]) * (t - a) / max(b - a, 1e-6)
+        d = float(np.max(line - hts.at(x, z)))
+        r = find(ka)
+        sag[r] = max(sag.get(r, -1e9), d)
+    n = km = 0
+    worst = 0.0
+    for k, ka, kb in br:
+        if sag[find(ka)] >= min_sag:
+            # structure depth under the deck surface: a slab on a low overpass, a deep girder on a
+            # tall viaduct (its spans are longer: js/world/roadMesh.js spaces the piers by height)
+            depth = float(np.clip(1.2 + 0.04 * sag[find(ka)], 1.6, 4.5))
+            pieces[k]['deck'] = (h[ka], h[kb], depth)
+            n += 1
+            km += (pieces[k]['b'] - pieces[k]['a']) / 1000
+            worst = max(worst, sag[find(ka)])
+    comps = sum(1 for r, v in sag.items() if v >= min_sag)
+    return dict(pieces=n, bridges=comps, km=round(float(km), 2), worst_sag_m=round(float(worst), 1),
+                bridge_pieces=len(br), dips_over_10m=sum(1 for v in sag.values() if v >= 10))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -486,7 +651,7 @@ def build(cache, out):
     with open(os.path.join(terrain_dir, 'airports.json')) as f:
         airports = json.load(f)
     rects = runway_rects(airports)
-    lc = LandCover(terrain_dir)
+    lc = BuiltUp(terrain_dir)
     table = pq.read_table(os.path.join(cache, 'segments.parquet'))
     cols = table.to_pydict()
     n = table.num_rows
@@ -520,9 +685,9 @@ def build(cache, out):
     offs = np.concatenate([[0], np.cumsum(lens)])
     log(f'{len(segs)} segments kept, {len(cat)} points projected ({time.time() - t0:.0f} s)')
 
-    # ---- pass 2: pieces (tunnels out, bridges and levels split), junctions, cross-sections ----
-    pieces = []
-    halfw_at = {}            # connector -> widest half-width of the roads meeting there
+    # ---- pass 2a: geometry, class, carriageway; the road corridors for the built-up mask ----
+    base = []
+    corridors = []
     for k, sg in enumerate(segs):
         i = sg['i']
         p = np.column_stack([X[offs[k]:offs[k + 1]], Z[offs[k]:offs[k + 1]]])
@@ -539,14 +704,39 @@ def build(cache, out):
         unpaved = rc == 'track' or any(v in UNPAVED and a <= 0.5 <= b for a, b, v in surf)
         if rc == 'track' and any(v in ('paved', 'asphalt', 'concrete', 'paving_stones') and a <= 0.5 <= b for a, b, v in surf):
             unpaved = False
-        built, near = lc.built_share(p)
-        urban = built > 0.5
+        if rc in ('rail', 'light_rail'):
+            cw, ml = RAIL_SECTION[rc]
+            hw = cw / 2 + ml
+        else:
+            _, cw, ml, mr = section_for(rc, oneway, name, False)
+            hw = cw / 2 + max(ml, mr, SECTION[rc][5])
+        base.append((k, p, s, L, rc, name, oneway, unpaved, hw))
+        if not unpaved:
+            corridors.append((p, hw + 6.0))
+    lc.set_roads(corridors)
+    del corridors
+    log(f'built-up mask without the {len(base)} road corridors ({time.time() - t0:.0f} s)')
+
+    # ---- pass 2: pieces (tunnels out, bridges and levels split), junctions, cross-sections ----
+    pieces = []
+    halfw_at = {}            # connector -> widest half-width of the roads meeting there
+    for k, p, s, L, rc, name, oneway, unpaved, hw in base:
+        sg = segs[k]
+        i = sg['i']
+        built, near = lc.beside(p, hw)
+        # Motorways and their ramps are never "urban" (no kerbs, sidewalks or zebra crossings on
+        # the Ayalon); other roads are when the land beside them is mostly built-up, residential
+        # streets and service roads from a lower share (gardens, parks and school yards between
+        # the houses of a town are not class 50)
+        urban = rc not in ('motorway', 'motorway_link') and built > (0.35 if rc in ('residential', 'service') else 0.5)
         if rc in ('rail', 'light_rail'):
             cw, ml = RAIL_SECTION[rc]
             lanes, left, right = 1, ml, ml
         else:
             lanes, cw, left, right = section_for(rc, oneway, name, urban)
-        lit = (urban and rc not in ('track', 'rail', 'light_rail')) or (rc in ('motorway', 'motorway_link', 'trunk', 'trunk_link') and near > 0.25)
+        # street lights: roads in town and roads near built-up land (motorways and trunk roads
+        # through or beside towns are lit, the stretches between them mostly not)
+        lit = rc not in ('track', 'rail', 'light_rail') and (urban or near > (0.3 if rc != 'service' else 0.6))
         flags = (F_ONEWAY if oneway else 0) | (F_URBAN if urban else 0) | (F_UNPAVED if unpaved else 0) | (F_LIT if lit else 0)
         if rc in ('trunk', 'primary') and not oneway and not urban:
             flags |= F_SOLID_CENTRE
@@ -584,7 +774,11 @@ def build(cache, out):
             pf = flags | (F_BRIDGE if 'is_bridge' in fl else 0)
             pieces.append(dict(p=p, s=s, a=a, b=b, rc=rc, flags=pf, lanes=lanes, cw=cw, left=left, right=right,
                                level=lev, conns=conns))
+    del lc, base
     log(f'{len(pieces)} pieces ({time.time() - t0:.0f} s)')
+    hts = CoreHeights(terrain_dir)
+    deck_stats = bridge_decks(pieces, hts)        # (hts kept for the street lamps' heights)
+    log(f'bridge decks: {deck_stats} ({time.time() - t0:.0f} s)')
 
     # ---- pass 3: cut, keep out of runways, simplify, clip to tiles ----
     T = grid.TILE_SIZE
@@ -639,17 +833,20 @@ def build(cache, out):
                 br = [(u - (pu0 - pc_['a']), r) for u, r in breaks if lo - r < u < hi + r]
                 tiles.setdefault((ix, iz), []).append(dict(pts=part, u0=pu0, rc=pc_['rc'], flags=pc_['flags'],
                                                             lanes=pc_['lanes'], cw=pc_['cw'], left=pc_['left'],
-                                                            right=pc_['right'], level=pc_['level'], breaks=br))
+                                                            right=pc_['right'], level=pc_['level'], breaks=br,
+                                                            deck=pc_.get('deck'), span=(pc_['a'], pc_['b'])))
     log(f'simplified {npts_in} -> {npts_out} points; {sum(len(v) for v in tiles.values())} polylines in '
         f'{len(tiles)} tiles ({time.time() - t0:.0f} s)')
 
-    # ---- write ----
-    odir = os.path.join(out, 'roads')
-    os.makedirs(odir, exist_ok=True)
-    for fn in os.listdir(odir):
-        if fn.startswith('tile_') and fn.endswith('.bin'):
-            os.remove(os.path.join(odir, fn))
+    # ---- write (into roads.new/, then swapped in: the app may be reading the old tiles) ----
+    final = os.path.join(out, 'roads')
+    odir = final + '.new'
+    if os.path.isdir(odir):
+        shutil.rmtree(odir)
+    os.makedirs(odir)
     index = {}
+    lamp_index = {}
+    decks = 0
     counts = {name: 0 for name in CLS}
     km = {name: 0.0 for name in CLS}
     total = 0
@@ -659,7 +856,14 @@ def build(cache, out):
         with open(os.path.join(odir, fn), 'wb') as f:
             f.write(data)
         total += len(data)
-        index[f'{ix},{iz}'] = dict(bytes=len(data), polylines=len(pls), points=sum(len(p['pts']) for p in pls))
+        nd = sum(1 for p in pls if p.get('deck'))
+        decks += nd
+        index[f'{ix},{iz}'] = dict(bytes=len(data), polylines=len(pls), points=sum(len(p['pts']) for p in pls), decks=nd)
+        lamps = [r for p in pls for r in street_lamps(p, hts)]
+        if lamps:
+            with open(os.path.join(odir, f'lamps_{ix}_{iz}.bin'), 'wb') as f:
+                f.write(write_lamps(lamps, ix, iz))
+            lamp_index[f'{ix},{iz}'] = len(lamps)
         for p in pls:
             nm = next(k for k, v in CLS.items() if v == CLS[p['rc']])
             counts[nm] += 1
@@ -670,11 +874,21 @@ def build(cache, out):
         classes=CLS, flags=dict(oneway=F_ONEWAY, bridge=F_BRIDGE, urban=F_URBAN, unpaved=F_UNPAVED,
                                 solid_centre=F_SOLID_CENTRE, lit=F_LIT),
         km={k: round(v, 1) for k, v in km.items()}, polylines=counts, bytes=total, files=index,
+        decks=dict(polylines=decks, **deck_stats),
+        lamps=dict(total=sum(lamp_index.values()), files=lamp_index),
         built=time.strftime('%Y-%m-%d %H:%M:%S'),
     )
     with open(os.path.join(odir, 'index.json'), 'w') as f:
         json.dump(meta, f, indent=1, ensure_ascii=False)
-    log(f'{len(index)} tiles, {total / 1e6:.1f} MB -> {odir} ({time.time() - t0:.0f} s)')
+    if os.path.exists(os.path.join(final, 'check.txt')):
+        shutil.copy(os.path.join(final, 'check.txt'), os.path.join(odir, 'check.txt'))
+    if os.path.isdir(final):
+        os.rename(final, final + '.old')
+    os.rename(odir, final)
+    shutil.rmtree(final + '.old', ignore_errors=True)
+    del hts
+    log(f'{len(index)} tiles, {total / 1e6:.1f} MB, {decks} deck polylines, {sum(lamp_index.values())} street lamps '
+        f'-> {final} ({time.time() - t0:.0f} s)')
     log('km by class: ' + ', '.join(f'{k} {v:.0f}' for k, v in km.items() if v))
 
 
@@ -718,11 +932,15 @@ def clip_tiles(p, u0):
 
 
 def write_tile(pls, ix, iz):
-    """Tile bytes (ROADS.md): header, 24-byte polyline records, uint16 points, float32 breaks."""
+    """Tile bytes (ROADS.md): header, 24-byte polyline records, uint16 points, float32 breaks, and
+    the optional deck section (bridge deck heights per point; readers of the first version stop
+    before it)."""
     x0, z0 = grid.tile_origin(ix, iz)
     recs = bytearray()
     pts = []
     brs = []
+    deck = bytearray()
+    ndeck = 0
     npts = 0
     for p in pls:
         q = np.rint((p['pts'] - (x0, z0)) / 0.1)
@@ -733,6 +951,13 @@ def write_tile(pls, ix, iz):
         if len(q) < 2:
             continue
         nb = len(p['breaks'])
+        if p.get('deck'):
+            # the deck's straight profile between its ends, at every point's arc length
+            (ha, hb, depth), (a, b) = p['deck'], p['span']
+            u = p['u0'] + cumlen(p['pts'])[keep]
+            hgt = ha + (hb - ha) * np.clip((u - a) / max(b - a, 1e-6), 0, 1)
+            deck += struct.pack('<If', len(recs) // 24, depth) + hgt.astype('<f4').tobytes()
+            ndeck += 1
         recs += struct.pack('<BBBbHBBHHIIf', CLS[p['rc']], p['flags'], min(255, p['lanes']), p['level'],
                             int(round(p['cw'] * 100)), int(round(p['left'] * 10)), int(round(p['right'] * 10)),
                             len(q), nb, npts, len(brs) // 2, float(p['u0']))
@@ -742,7 +967,63 @@ def write_tile(pls, ix, iz):
             brs += [u, r]
     n = len(recs) // 24
     head = struct.pack('<4sIII', b'RDS1', n, npts, len(brs) // 2)
-    return head + bytes(recs) + b''.join(pts) + np.array(brs, '<f4').tobytes()
+    tail = struct.pack('<4sI', b'DCK1', ndeck) + bytes(deck) if ndeck else b''
+    return head + bytes(recs) + b''.join(pts) + np.array(brs, '<f4').tobytes() + tail
+
+
+def street_lamps(p, hts):
+    """Street lamps of one tile polyline p (world coordinates), exactly where js/world/roadShaders.js
+    puts the pools of light on the road: every 42 m on main roads (sodium, 12 m poles) and 33 m
+    elsewhere (LED, 9 m), from u = S / 2 on (the polyline's u, continuous across tiles); in the
+    median of a one-way carriageway, staggered on both sides of a two-way road, beyond the kerb
+    in town (0.7 m) or the shoulder (1 m). Returns rows (x, z, y of the lamp head, flags, rank):
+    flags bit 0 LED, bit 1 a minor road (class group 1); rank a hash 0..255 (thinning by distance).
+    """
+    cls = CLS[p['rc']]
+    f = p['flags']
+    if not (f & F_LIT) or (f & F_UNPAVED) or cls > CLS['service']:
+        return []
+    S, hl = (42.0, 12.0) if cls <= 3 else (33.0, 9.0)
+    hc = p['cw'] / 2
+    kerbs = (f & F_URBAN) and (p['left'] > 0.5 or p['right'] > 0.5) and 2 <= cls <= 7
+    side = hc + (0.7 if kerbs else 1.0)
+    pts = p['pts']
+    s = cumlen(pts)
+    u0 = p['u0']
+    k0, k1 = math.ceil(u0 / S - 0.5), math.floor((u0 + s[-1]) / S - 0.5)
+    out = []
+    for kk in range(k0, k1 + 1):
+        u = (kk + 0.5) * S
+        a = u - u0
+        j = int(min(max(np.searchsorted(s, a, side='right') - 1, 0), len(s) - 2))
+        L = max(s[j + 1] - s[j], 1e-9)
+        t = (a - s[j]) / L
+        tx, tz = (pts[j + 1] - pts[j]) / L
+        v = (-hc - p['left'] + 0.4) if (f & F_ONEWAY) else (-side if kk % 2 == 0 else side)
+        x = pts[j][0] + (pts[j + 1][0] - pts[j][0]) * t - tz * v
+        z = pts[j][1] + (pts[j + 1][1] - pts[j][1]) * t + tx * v
+        y = float(hts.at(x, z))
+        if p.get('deck'):
+            (ha, hb, _), (sa, sb) = p['deck'], p['span']
+            y = max(y, ha + (hb - ha) * min(max((u - sa) / max(sb - sa, 1e-6), 0), 1))
+        flags = (1 if cls > 3 else 0) | (2 if 7 <= cls <= 9 else 0)
+        rank = (int(round(x * 10)) * 73856093 ^ int(round(z * 10)) * 19349663) & 255
+        out.append((x, z, y + hl, flags, rank))
+    return out
+
+
+def write_lamps(lamps, ix, iz):
+    """Lamp tile bytes (ROADS.md): 'LMP1', count, then 8 bytes a lamp: x, z (uint16, 0.1 m from the
+    tile's NW corner), head height (uint16, 0.05 m above -500 m), flags, rank."""
+    x0, z0 = grid.tile_origin(ix, iz)
+    a = np.array(lamps, np.float64).reshape(-1, 5)
+    rec = np.zeros(len(a), dtype=[('x', '<u2'), ('z', '<u2'), ('y', '<u2'), ('f', 'u1'), ('r', 'u1')])
+    rec['x'] = np.clip(np.rint((a[:, 0] - x0) / 0.1), 0, 65535)
+    rec['z'] = np.clip(np.rint((a[:, 1] - z0) / 0.1), 0, 65535)
+    rec['y'] = np.clip(np.rint((a[:, 2] + 500) / 0.05), 0, 65535)
+    rec['f'] = a[:, 3]
+    rec['r'] = a[:, 4]
+    return struct.pack('<4sI', b'LMP1', len(a)) + rec.tobytes()
 
 
 def read_tile(path):
