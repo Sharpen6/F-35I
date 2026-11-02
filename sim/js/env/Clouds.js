@@ -198,10 +198,13 @@ const MARCH_FRAG = /* glsl */`
   }
   float remap01(float v, float lo, float hi) { return clamp((v - lo) / max(hi - lo, 1e-4), 0.0, 1.0); }
   // the footprint field at field coordinates (world xz + drift)
+  // (one return: ANGLE's HLSL for D3D11 warned X4000 "potentially uninitialized" on the early one)
   float coverAt(vec2 f) {
     vec2 uv = (f - uCoverWin.xy) * uCoverWin.z;
-    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return atmoCloudField(f / uCloudWind.z);
-    return texture(tCover, uv).r;
+    float v = 0.0;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) v = atmoCloudField(f / uCloudWind.z);
+    else v = texture(tCover, uv).r;
+    return v;
   }
   // The footprint is pushed around by up to +-WARP m (the noise's ~270 m Worley octaves): the
   // walls lean, bulge and break up with height instead of standing as extruded outlines. Empty air
