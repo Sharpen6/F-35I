@@ -27,6 +27,7 @@ import { BindingsUI } from './ui/BindingsUI.js';
 import { Effects } from './ui/Effects.js';
 import { EngineSound } from './audio/EngineSound.js';
 import { Clouds } from './env/Clouds.js';      // lighting: cumulus and cirrus, weather presets
+import { DisplayLevels } from './env/displayLevels.js';   // lighting fix: the jet's displays at a picture level
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -261,6 +262,7 @@ class App {
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
     if (!STUBS) this.addModule(new Clouds(ctx));          // lighting: clouds (?clouds=, menu Weather), drawn by Post
+    if (!STUBS) this.addModule(new DisplayLevels(ctx));   // lighting fix: PCD, tablet, LEDs = level / exposure (steps aside for app.cockpit)
   }
 
   /**
