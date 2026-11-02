@@ -33,6 +33,8 @@ import { BOX_VERT, CHUNK_VERT, BUILDING_FRAG, DEPTH_FRAG, LIGHT_VERT, LIGHT_FRAG
 import { LUX_PER_UNIT, artificialLightGain, pointLightThreshold, lightsOn as lightsOnAt } from '../env/Environment.js';
 import { emitterBlending } from '../env/emitters.js';
 import { LAMP_UNIFORMS } from '../aircraft/LandingPool.js';
+import { makeLitTextures } from './windowLights.js';
+import { Rooftops } from './Rooftops.js';
 
 const TILE = 6400;
 const CORE_HALF = 51200;
@@ -61,6 +63,12 @@ const FADE_S = 0.6;                  // cross-fade between a chunk's boxes and i
 // less, falling off upwards in the shader).
 const WINDOW_CD = 20;
 const FACADE_LUX = 8;
+// Tower crowns floodlit at night (cd/m^2 of the lit band); stairwells lit (share of buildings);
+// the walls' share of the sky's light at night (street canyons: the walls of a city at night are
+// dark between the lit windows; by day 1)
+const CROWN_CD = 30;
+const STAIRS_LIT = [[0, 0.45], [6, 0.35], [7, 0.1], [17, 0.1], [18.5, 0.6], [23, 0.55], [24, 0.45]];
+const NIGHT_WALL_SKY = 0.4;
 
 // Share of the windows lit at local solar time h: homes (an evening peak, quiet small hours),
 // offices and public buildings (the working day; after 20:00 late workers, cleaners and the
@@ -161,7 +169,14 @@ export class Buildings {
       uAlbedo: { value: new THREE.Vector3(0.78, terrain?.albedoGain ?? 0.7, 1) },
       uVis: { value: new THREE.Vector4(this.Q.visK, 0.25, 0.0012, this.Q.far) },
       uDebug: { value: params.get('buildingsDebug') === '1' ? 1 : 0 },
+      uCityNight: { value: new THREE.Vector4(1, 0, 0, 0) },
+      uRoofItems: { value: new THREE.Vector4(0, 0, 0, 0) },
     };
+    // which windows are lit (windowLights.js): homes and offices; null without the atmosphere (stubs)
+    const lit = env?.uniforms?.uSkyViewLUT && !this.forcedOff ? makeLitTextures(renderer) : null;
+    this._litTextures = lit;
+    this._shared.uLitHomes = { value: lit ? lit.homes : null };
+    this._shared.uLitOffices = { value: lit ? lit.offices : null };
     this._template = boxTemplate();
     this._hex = hexTemplate();
     this.chunkMaterial = this._material(false);
@@ -205,6 +220,8 @@ export class Buildings {
       this.ready = Promise.resolve();
       return;
     }
+    // solar water heaters, tanks and air conditioners on the roofs near the camera (Rooftops.js)
+    this.roofs = new Rooftops(this);
     this.worker = new Worker(new URL('./BuildingsWorker.js', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e) => this._onMessage(e.data);
     this.worker.onerror = (e) => { console.warn('Buildings: worker failed', e.message || e); this.failed = true; };
@@ -365,6 +382,9 @@ export class Buildings {
       new THREE.Mesh(cg, this.chunkMaterial), new THREE.Mesh(cg, this._chunkDitherProto),
       new THREE.Mesh(sg, this.shadowMaterial), new THREE.Points(pg, this.lightMaterial)];
     for (const m of objs) { m.frustumCulled = false; m.receiveShadow = true; tmp.add(m); }
+    // the roof items: colour and (as a caster) depth
+    const ro = this.roofs?.precompileObjects();
+    if (ro) { tmp.add(ro.mesh); tmpD.add(ro.caster); }
     // a chunk as the shadow pass sees it: a caster with the depth material as its customDepthMaterial
     const dm = new THREE.Mesh(cg, this.chunkMaterial);
     dm.castShadow = true;
@@ -372,7 +392,7 @@ export class Buildings {
     dm.frustumCulled = false;
     tmpD.add(dm);
     const rt = new THREE.WebGLRenderTarget(1, 1);
-    const done = () => { g.dispose(); cg.dispose(); sg.dispose(); pg.dispose(); rt.dispose(); };
+    const done = () => { g.dispose(); cg.dispose(); sg.dispose(); pg.dispose(); rt.dispose(); ro?.dispose(); };
     const r = this.renderer;
     const prev = r.getRenderTarget();
     const sun = this.env?.sunLight, cast = sun ? sun.castShadow : false;
@@ -416,6 +436,7 @@ export class Buildings {
     f.camera.getWorldPosition(this._cam);
     this._streamTiles();
     this._streamChunks();
+    this.roofs?.update(this._cam, true);
     if (f.draw) this._prepareDraw(f.camera);
   }
 
@@ -432,6 +453,7 @@ export class Buildings {
     this._shared.uVis.value.w = this.Q.far;
     this._shadowU.uShadowVis.value.x = this.Q.shadowVisK;
     this._shadowU.uShadowVis.value.y = this.Q.shadowFar;
+    this.roofs?.setQuality(q);
     // chunks built with the other options (roof houses, parapets) are built again: released
     // here, the streaming asks for them anew (tiles beyond the new `far` go by themselves)
     if (old.parapets !== this.Q.parapets || old.roofBoxes !== this.Q.roofBoxes) {
@@ -450,6 +472,9 @@ export class Buildings {
     this.scene.remove(this.group);
     for (const m of [this.chunkMaterial, this.chunkDepthMaterial, this.shadowMaterial, this.lightMaterial,
       this._boxMaterialProto, this._boxDitherProto, this._chunkDitherProto]) m?.dispose();
+    this.roofs?.dispose();
+    this._litTextures?.homes.dispose();
+    this._litTextures?.offices.dispose();
   }
 
   // ------------------------------------------------------------------------------ tiles (boxes)
@@ -586,6 +611,7 @@ export class Buildings {
 
   _unloadTile(t) {
     for (const c of [...t.lod.keys()]) this._releaseChunk(t, c, true);
+    this.roofs?.dropTile(t);
     if (t.mesh) {
       this.group.remove(t.mesh);
       t.mesh.geometry.dispose();
@@ -806,6 +832,7 @@ export class Buildings {
       this._castShadow = cast;
       for (const t of this._tileList) for (const L of t.lod.values()) if (L.mesh) L.mesh.castShadow = cast;
     }
+    this.roofs?.prepare(cast);
     // ground shadows: the sun's direction and strength; faded out inside the shadow map's box
     // when the buildings cast into it (its target is the box's centre on the ground)
     const SU = this._shadowU;
@@ -838,11 +865,16 @@ export class Buildings {
     const art = kOn * lightGain / LUX_PER_UNIT;
     U.set(litFraction(h), WINDOW_CD * art, FACADE_LUX * art, h > 22.5 || h < 6 ? 0.25 : 0.85);
     this._shared.uLitOffice.value = litFraction(h, LIT_OFFICES);
+    // the walls' sky light: all of it by day, NIGHT_WALL_SKY of it once the night's glow is up (the
+    // sun from -2 to -10 deg, as js/env's night floor); crowns and stairwells by the lights' switch
+    const nightK = Math.min(1, Math.max(0, (-2 - el) / 8));
+    this._shared.uCityNight.value.set(1 - (1 - NIGHT_WALL_SKY) * nightK * nightK * (3 - 2 * nightK), CROWN_CD * art, litFraction(h, STAIRS_LIT), 0);
     const S = this.stats;
     S.tiles = tiles; S.boxes = boxes; S.chunks = chunks; S.chunkVertices = verts;
     S.chunkMB = +(chunkBytes / 1048576).toFixed(1); S.boxMB = +(boxBytes / 1048576).toFixed(1);
     S.shadows = shadows; S.shadowMB = +(shadowBytes / 1048576).toFixed(1); S.lights = lights;
     S.fading = this._fading.size;
+    if (this.roofs) { S.roofChunks = this.roofs.stats.chunks; S.roofItems = this.roofs.stats.items; S.roofDrawn = this.roofs.stats.drawn; S.roofMB = this.roofs.stats.MB; }
     S.loading = this._tileLoads + this._chunkBuilds;
   }
 

@@ -32,6 +32,7 @@ import { ATMOSPHERE_PARS, ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
 import { POINT_LIGHT_VERT_GLSL, POINT_LIGHT_FRAG_GLSL } from './AirportLights.js';
 import { EMITTER_GLSL } from '../env/emitters.js';
 import { LAMP_GLSL } from '../aircraft/LandingPool.js';
+import { WINDOW_LIGHTS_GLSL } from './windowLights.js';
 
 // wall styles, roof styles, roof shapes, surface kinds: sim/tools/world/buildings.py, BuildingsWorker.js
 export const WALL = { plaster: 0, stone: 1, glass: 2, office: 3, industrial: 4, house: 5, greenhouse: 6, concrete: 7, public: 8, tower: 9, oldstone: 10, stack: 11, hangar: 12, frame: 13 };
@@ -200,41 +201,9 @@ void main() {
 }
 `;
 
-export const BUILDING_FRAG = /* glsl */ `
-#include <common>
-#include <packing>
-#include <logdepthbuf_pars_fragment>
-#include <shadowmap_pars_fragment>
-uniform bool receiveShadow;
-${ATMOSPHERE_PARS}
-${SAFE_H}
-
-uniform vec4 uLight;          // lit window fraction (homes), window radiance, street light irradiance, lit share of shops
-uniform float uLitOffice;     // lit window fraction (offices, public buildings)
-${EMITTER_GLSL}
-${LAMP_GLSL}
-uniform vec3 uAlbedo;         // wall albedo gain, roof albedo gain (the terrain's), detail on (1) / off (0)
-uniform float uDebug;         // 1: colour by level of detail
-#if defined( DITHER ) && !defined( BOX )
-  uniform float uFadeIn;      // this chunk's full detail share while it cross-fades with its boxes
-#endif
-
-varying vec3 vRel;
-varying float vH;
-varying vec4 vInf;
-#ifdef BOX
-  varying vec4 vWall;
-  varying vec4 vRoof;
-  varying vec3 vLoc;
-  varying vec4 vDim;
-  varying float vFade;
-#else
-  varying vec3 vN;
-  varying vec2 vFac;
-  varying vec4 vCol;
-  varying float vKind;
-#endif
-
+// helpers of both fragment shaders (buildings, roof items): hashes, filtered pulses and bands,
+// value noise, the environment a glossy surface reflects, the sun's highlight
+const SHADE_FNS = /* glsl */ `
 float hash13(vec3 p3) {
   p3 = fract(p3 * 0.1031);
   p3 += dot(p3, p3.zyx + 31.32);
@@ -286,6 +255,48 @@ float sunSpec(vec3 N, vec3 V, float a) {
   return D * G * 0.25 * NdL;
 }
 
+`;
+
+export const BUILDING_FRAG = /* glsl */ `
+#include <common>
+#include <packing>
+#include <logdepthbuf_pars_fragment>
+#include <shadowmap_pars_fragment>
+uniform bool receiveShadow;
+${ATMOSPHERE_PARS}
+${SAFE_H}
+
+uniform vec4 uLight;          // lit window fraction (homes), window radiance, street light irradiance, lit share of shops
+uniform float uLitOffice;     // lit window fraction (offices, public buildings)
+uniform vec4 uCityNight;          // walls' share of the sky's light (1 by day, less at night: street canyons), crown
+                              // light radiance, share of stairwells lit, -
+uniform vec4 uRoofItems;      // the roof items' fade (m from the camera: full size .. gone), on (1) / off (0), -
+${WINDOW_LIGHTS_GLSL}
+${EMITTER_GLSL}
+${LAMP_GLSL}
+uniform vec3 uAlbedo;         // wall albedo gain, roof albedo gain (the terrain's), detail on (1) / off (0)
+uniform float uDebug;         // 1: colour by level of detail
+#if defined( DITHER ) && !defined( BOX )
+  uniform float uFadeIn;      // this chunk's full detail share while it cross-fades with its boxes
+#endif
+
+varying vec3 vRel;
+varying float vH;
+varying vec4 vInf;
+#ifdef BOX
+  varying vec4 vWall;
+  varying vec4 vRoof;
+  varying vec3 vLoc;
+  varying vec4 vDim;
+  varying float vFade;
+#else
+  varying vec3 vN;
+  varying vec2 vFac;
+  varying vec4 vCol;
+  varying float vKind;
+#endif
+
+${SHADE_FNS}
 // window layout of a wall style in a bay x floor cell: (x0, x1, y0, y1) as fractions
 vec4 windowLayout(float st, float r) {
   vec4 L = vec4(0.5 - 0.22 - 0.08 * r, 0.5 + 0.22 + 0.08 * r, 0.30, 0.80);       // plaster blocks
@@ -358,7 +369,9 @@ void main() {
     sty = floor(vCol.a + 0.5);
     if (kind > 3.5) { doorX = fac.x; doorHW = floors; }     // the worker centres u; floors holds the half width
   #endif
-  vec2 fw = fwidth(fac);                                    // metres per pixel along u / v
+  // derivatives here, in uniform control flow (the lit-window masks are sampled with them below)
+  vec2 dFx = dFdx(fac), dFy = dFdy(fac);
+  vec2 fw = abs(dFx) + abs(dFy);                            // metres per pixel along u / v (fwidth)
   float near = uAlbedo.z * (1.0 - smoothstep(0.08, 0.5, max(fw.x, fw.y)));   // fine detail (< 0.5 m)
 
   // ---- light ----
@@ -414,24 +427,19 @@ void main() {
       spec = 1.0;                                            // gilded (a metal: the colour is in the reflection)
       rough = 0.26;
     } else {
-      // flat roofs: stains, and near the camera small boxes (water tanks, air conditioners)
+      // flat roofs: stains
       float st = vnoise(fac / 3.7 + seed) - 0.5;
-      float box = step(0.95, hash12(floor(fac / 2.5) + seed * 3.1)) * near;
-      alb *= 1.0 + 0.16 * st * (1.0 - smoothstep(0.6, 2.5, max(fw.x, fw.y))) - 0.18 * box;
+      alb *= 1.0 + 0.16 * st * (1.0 - smoothstep(0.6, 2.5, max(fw.x, fw.y)));
       if (rs == 0.0) {
-        // solar water heaters (on nearly every Israeli home): collectors of dark glass with a white
-        // tank behind each, in a block near the middle of the roof; one or two on a house
-        vec2 cs = vec2(2.3, 2.0);
-        vec2 zone = floors < 2.5 ? vec2(1.15, 1.0) * (1.0 + step(0.5, hash12(vec2(seed, 3.0)))) : vec2(4.6, 3.0);
-        vec2 q = fac / cs + 0.5;
-        float inZone = band(fac.x, -zone.x, zone.x, fw.x) * band(fac.y, -zone.y, zone.y, fw.y);
-        float here = mix(0.7, step(hash12(floor(q) + seed * 1.37), 0.7), detail0(fw));
-        vec2 qw = fw / cs * 1.3;
-        float col_ = pulse(q.x, qw.x, 0.06, 0.94) * pulse(q.y, qw.y, 0.08, 0.50) * inZone * here;
-        float tank = pulse(q.x, qw.x, 0.10, 0.90) * pulse(q.y, qw.y, 0.58, 0.80) * inZone * here;
-        alb = mix(alb, vec3(0.035, 0.045, 0.065), col_);
-        alb = mix(alb, vec3(0.62, 0.62, 0.60), tank);
-        spec = 0.5 * col_;
+        // solar water heaters (on nearly every Israeli home): near the camera they stand on the
+        // roof (js/world/Rooftops.js); beyond, they shrink into it and their mean takes over:
+        // collectors of dark glass and white tanks over the share of the roof the worker gives
+        // them by floors (BuildingsWorker.js roofSwhCover)
+        float kFar = 1.0 - uRoofItems.z * (1.0 - smoothstep(uRoofItems.x, uRoofItems.y, dist));
+        float cover = (floors > 9.5 ? 0.08 : clamp(0.0255 * floors, 0.04, 0.23)) * kFar;
+        alb = mix(alb, vec3(0.035, 0.045, 0.065), 0.6 * cover);
+        alb = mix(alb, vec3(0.62, 0.62, 0.60), 0.25 * cover);
+        spec = 0.6 * cover;
         rough = 0.15;
       }
     }
@@ -523,12 +531,16 @@ void main() {
     float upper = band(v, shops || pilotis ? fh : 0.0, top, fw.y) * hasWin;
     float ground = (shops || pilotis) ? band(v, 0.0, fh, fw.y) * hasWin : 0.0;
     float cov = pulse(g.x, gw.x, Lw.x, Lw.y) * pulse(g.y, gw.y, Lw.z, Lw.w);
+    // stairwells of blocks of flats: a column of narrow windows half a floor up (the landings)
+    float detailX = 1.0 - smoothstep(0.14, 0.42, gw.x);
+    float stair = (resid && floors > 2.5 && v > fh) ? mix(0.07, step(hash12(vec2(cell.x + 17.0 * face, seed + 3.0)), 0.07), detailX) : 0.0;
+    cov = mix(cov, pulse(g.x, gw.x, 0.40, 0.60) * pulse(g.y, gw.y, 0.45, 0.92), stair);
     // balconies (stacks of recessed bays over each other): a solid parapet, the recess in shade
     // above it and a glass door at its back
     float balc = 0.0;
     if (balcony && !curtain) {
       float pB = 0.42;
-      float isB = mix(pB, step(hash12(vec2(cell.x, seed + face * 13.0)), pB), detail);
+      float isB = mix(pB, step(hash12(vec2(cell.x, seed + face * 13.0)), pB), detail) * (1.0 - stair);
       float covR = pulse(g.x, gw.x, 0.08, 0.92) * pulse(g.y, gw.y, 0.36, 0.96);
       float covD = pulse(g.x, gw.x, 0.20, 0.80) * pulse(g.y, gw.y, 0.36, 0.90);
       balc = isB * max(covR - covD, 0.0) * upper;
@@ -537,29 +549,47 @@ void main() {
     float shopCov = (shops && !pilotis) ? pulse(g.x, gw.x, 0.05, 0.95) * pulse(g.y, gw.y, 0.06, 0.84) : 0.0;
     float pilo = pilotis ? (1.0 - pulse(g.x + 0.07, gw.x, 0.0, 0.14)) * ground : 0.0;   // void between columns
     float win = cov * upper + shopCov * ground;
-    // per window: closed shutter, curtains, lit at night (pairs of windows = one flat)
+    // per window: closed shutter, curtains, the room behind
     float h1 = hash13(vec3(cell.x, cell.y, seed + face * 31.0));
-    float h2 = hash13(vec3(floor(cell.x / 2.0), cell.y, seed * 1.7 + face * 7.0));
+    float h2 = hash13(vec3(cell.x * 0.7 + 3.1, cell.y * 1.3, seed * 1.7 + face * 7.0));
     float h3 = hash13(vec3(cell.x * 1.3, cell.y * 0.7, seed + 91.0));
     float pShut = resid ? 0.28 : 0.0;
     float shut = mix(pShut, step(h1, pShut), detail);
     bool groundCell = v < fh;
-    // some buildings and floors are busier than others: kept at the scale of buildings and floors,
-    // which stay visible further than single windows, so a far city is not one even glow
-    float busy = (0.2 + 1.6 * hash12(vec2(seed, 41.0 + face))) * mix(1.0, 0.35 + 1.3 * hash12(vec2(cell.y, seed + 5.0)), 1.0 - smoothstep(0.35, 0.9, gw.y));
-    float litP = (shops && groundCell) ? uLight.w : min((resid ? uLight.x : uLitOffice) * busy, 1.0);
-    float lit = mix(litP, step(h2, litP), detail);
+    // lit windows (js/world/windowLights.js): the share of the cells under this pixel that are lit
+    // at this hour, read from the homes' or the offices' masks at the building's own offset with
+    // the facade's derivatives (one window a few pixels big is lit or dark, a far facade its share,
+    // nothing sparkles in between); some buildings and sides are busier than others
+    vec2 dgx = dFx / vec2(bay, fh), dgy = dFy / vec2(bay, fh);
+    float busy = (0.25 + 1.5 * hash12(vec2(seed, 41.0))) * (0.8 + 0.4 * hash12(vec2(seed, 43.0 + face)));
+    vec2 uvL = (g + floor(vec2(hash12(vec2(seed, 11.0 + face)), hash12(vec2(seed, 5.0))) * 256.0)) / 256.0;
+    float lit;
+    if (resid) lit = litShare(textureGrad(uLitHomes, uvL, dgx / 256.0, dgy / 256.0), LIT_T_HOMES, uLight.x * busy);
+    else lit = litShare(textureGrad(uLitOffices, uvL, dgx / 256.0, dgy / 256.0), LIT_T_OFFICES, uLitOffice * busy);
+    // shop fronts (a share open, fewer after 22:30) and the lobbies of offices and towers (lit all night)
+    bool shopCell = shops && groundCell;
+    bool lobby = groundCell && !shops && !resid && floors > 5.5 && (st == 2.0 || st == 3.0 || st == 9.0);
+    if (shopCell) lit = mix(uLight.w, step(h2, uLight.w), detail);
+    if (lobby) lit = mix(0.85, step(h2, 0.85), detail);
+    // the stairwell's lights: on in some buildings (timer switches, lights left on)
+    lit = mix(lit, step(hash12(vec2(seed, 61.0)), uCityNight.z), stair);
+    // the light's colour (linear sRGB by the brightest channel; Post.js keeps a light's hue): homes
+    // warm white 2700-3000 K, a fifth of their rooms cool white (LED panels, fluorescent kitchens),
+    // some behind coloured curtains; offices, stairwells and shops 4000-5000 K, lobbies between
+    float hT = mix(0.5, h3, detail);
+    vec3 warm = mix(vec3(1.0, 0.416, 0.104), vec3(1.0, 0.477, 0.154), hT);
+    vec3 cool = mix(vec3(1.0, 0.654, 0.377), vec3(1.0, 0.792, 0.628), hT);
+    float coolK = resid && !shopCell ? mix(0.2, step(h2, 0.2), detail) : (lobby ? 0.5 : 1.0);
+    vec3 tint = mix(warm, cool, max(coolK, stair));
     float curtainIn = mix(0.3, step(h3, 0.3), detail);
-    // warm homes (2700-3200 K: incandescent, warm LED, behind curtains), offices and shops whiter
-    // (3500-4500 K fluorescent and LED panels); linear sRGB by the brightest channel (Post.js
-    // shows a lit window by its hue: these are its colour on the screen)
-    vec3 tint = resid ? mix(vec3(1.0, 0.45, 0.14), vec3(1.0, 0.56, 0.25), mix(0.5, h3, detail))
-                      : mix(vec3(1.0, 0.60, 0.32), vec3(1.0, 0.74, 0.52), mix(0.5, h3, detail));
-    float glassW = win * (1.0 - shut * (groundCell && shops ? 0.0 : 1.0));
+    if (resid && !shopCell) tint *= mix(vec3(1.0), mix(vec3(1.0, 0.8, 0.6), vec3(0.95, 0.5, 0.4), mix(0.5, h1, detail)) * 0.7, curtainIn * (1.0 - stair));
+    float glassW = win * (1.0 - shut * (shopCell ? 0.0 : 1.0) * (1.0 - stair));
     float shutW = win - glassW;
 
     // ---- shading ----
-    float ao = 0.62 + 0.38 * smoothstep(-0.5, 9.0, v);       // street canyons: less sky near the ground
+    // street canyons: less sky near the ground; at night the walls see little of the sky's glow
+    // and moonlight (uCityNight.x), so they stay dark between the lit windows and the street lights
+    float ao = (0.62 + 0.38 * smoothstep(-0.5, 9.0, v)) * uCityNight.x;
     vec3 E = sunE * NdL * shadow + (skyE + gndE) * ao;
     // street lights (sodium and LED) on the lowest floors
     vec3 street = uLight.z * vec3(1.0, 0.66, 0.36) * exp(-max(v, 0.0) / 3.5) * step(N.y, 0.5);
@@ -587,7 +617,10 @@ void main() {
     // ribbon: box-filtered, so far away they are their share of the glass)
     float mull = (curtain || st == 3.0) ? pulse(fac.x / 1.5, fw.x / 1.5 * 1.25, 0.0, 0.04)
                                         : pulse(g.x, gw.x, 0.5 - 0.02 * 3.0 / bay, 0.5 + 0.02 * 3.0 / bay);
-    vec3 emit = uLight.y * tint * lit * (1.0 - spandrel) * ((shops && groundCell) ? 1.8 : 1.0)
+    // offices brighter than homes (ceiling panels), their ceiling lights at the top of the glass
+    float roomK = shopCell ? 1.8 : (lobby ? 1.6 : (resid ? 1.0 : 1.35));
+    float ceil = resid ? 1.0 : mix(1.0, 0.6 + 0.9 * smoothstep(0.35, 0.9, fract(g.y)), detail);
+    vec3 emit = uLight.y * tint * lit * (1.0 - spandrel) * roomK * ceil
       * mix(1.0, 0.47 + 1.2 * h3 * h3 + 0.25 * h1, detail) * (1.0 - 0.85 * mull);
     vec3 glassR = F * refl + (1.0 - F) * (room * (1.0 - spandrel) + emit);
     // the parts
@@ -598,6 +631,15 @@ void main() {
     lightR = (1.0 - F) * emit * glassW + uLight.y * tint * lit * 0.06 * shutW;
     // the metal frames of a curtain wall reflect a little too
     if (curtain) radiance += 0.3 * F * refl * wallW * upper;
+    // tower crowns: the top floor and the screen above it floodlit at night (on some towers; white,
+    // a few blue or gold), standing out on the skyline
+    if (floors > 19.5 && !resid && !frame) {
+      float hc = hash12(vec2(seed, 71.0));
+      float crown = band(v, top - 0.9 * fh, top + 8.0, fw.y) * step(hc, 0.6) * hasWin;
+      vec3 cl = uCityNight.y * crown * (hc < 0.42 ? vec3(1.0, 0.86, 0.72) : (hc < 0.51 ? vec3(0.3, 0.55, 1.0) : vec3(1.0, 0.62, 0.3)));
+      radiance += cl;
+      lightR += cl;
+    }
     // below the floor (foundations)
     radiance *= v < 0.0 ? 0.85 : 1.0;
     if (plainWall) radiance = wallAlb * 0.9 * Ediff / PI;
@@ -645,6 +687,167 @@ void main() {
   // (js/env/emitters.js); by day (no window light) a surface as everything else
   float lightShare = smoothstep(0.35, 0.8, max(lightR.r, max(lightR.g, lightR.b)) / max(max(radiance.r, max(radiance.g, radiance.b)), 1e-12));
   gl_FragColor = vec4(color, lightShare > 0.0 ? emitterAlpha(lightShare) : 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`;
+
+// ---------------------------------------------------------------------------- roof items
+// Solar water heaters, water tanks, air conditioners and chillers on the flat roofs near the camera
+// (js/world/Rooftops.js; placed by BuildingsWorker.js buildRoofItems). One instance per item: a
+// unit box (x, z in -1..1, y 0..1) scaled, turned and, for a collector, made a wedge (its front
+// edge lower: the panel's slope). Between uItemFade.x and .y from the camera each item shrinks into
+// its roof, where BUILDING_FRAG blends in the items' mean (SWH_COVER) instead.
+//   iA: x, y, z of the base's centre (chunk-local, m), yaw (the item's x axis is (cos, sin) in x / z)
+//   iB: half length (0.025 m), half depth (0.025 m), height (0.05 m), front height (/ 255 of it)
+//   iC: rgb (sRGB), kind / 255: 0 collector (dark glass on its top, an aluminium frame), 1 tank
+//       (a horizontal cylinder along x), 2 water tank (a vertical cylinder), 3 air conditioner
+//       (a fan in its front), 4 chiller (fans on its top)
+export const ROOF_ITEM_VERT = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+#ifndef DEPTH_PASS
+  #include <shadowmap_pars_vertex>
+  varying vec3 vRel;
+  varying float vH;
+  varying vec3 vNw;            // world normal of the box's face
+  varying vec3 vLoc;           // unit-box coordinates (x, z -1..1, y 0..1 of the height)
+  varying vec4 vCol;           // rgb (linear), kind
+  varying vec4 vAxis;          // the item's x axis (x, z), half length, half depth (m)
+#endif
+${ATMOSPHERE_CORE}
+${SRGB}
+attribute vec4 iA;
+attribute vec4 iB;
+attribute vec4 iC;
+uniform vec4 uItemFade;        // full size within x (m), gone at y (m)
+${EMIT}
+
+void main() {
+  float hl = iB.x * 0.025, hd = iB.y * 0.025, h = iB.z * 0.05, front = iB.w / 255.0;
+  vec3 cw = (modelMatrix * vec4(iA.xyz, 1.0)).xyz;
+  float k = 1.0 - smoothstep(uItemFade.x, uItemFade.y, length(cw - uCameraPos));
+  // the top's front edge (-z) lower for a wedge
+  float top = position.y > 0.5 ? mix(front, 1.0, 0.5 + 0.5 * position.z) : 0.0;
+  vec3 q = vec3(position.x * hl, top * h, position.z * hd) * k;
+  float c = cos(iA.w), s = sin(iA.w);
+  vec3 p = iA.xyz + vec3(c * q.x - s * q.z, q.y, s * q.x + c * q.z);
+  vec3 n = normal;
+  if (normal.y > 0.5) n = normalize(vec3(0.0, 2.0 * hd, -(1.0 - front) * h));
+  vec3 nw = vec3(c * n.x - s * n.z, n.y, s * n.x + c * n.z);
+  #ifndef DEPTH_PASS
+    vNw = nw;
+    vLoc = vec3(position.x, top, position.z);
+    vCol = vec4(srgbToLinear(iC.rgb), floor(iC.w * 255.0 + 0.5));
+    vAxis = vec4(c, s, hl, hd);
+  #endif
+  emit(p, nw);
+  // beyond the fade: every vertex on one point outside the view (nothing drawn)
+  if (k <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+}
+`;
+
+export const ROOF_ITEM_FRAG = /* glsl */ `
+#include <common>
+#include <packing>
+#include <logdepthbuf_pars_fragment>
+#include <shadowmap_pars_fragment>
+uniform bool receiveShadow;
+${ATMOSPHERE_PARS}
+${SAFE_H}
+uniform vec3 uAlbedo;
+varying vec3 vRel;
+varying float vH;
+varying vec3 vNw;
+varying vec3 vLoc;
+varying vec4 vCol;
+varying vec4 vAxis;
+${SHADE_FNS}
+
+void main() {
+  #include <logdepthbuf_fragment>
+  float dist = max(length(vRel), 1e-3);
+  vec3 V = vRel / dist;
+  vec3 N = normalize(vNw);
+  float kind = floor(vCol.w + 0.5);
+  vec3 Ax = vec3(vAxis.x, 0.0, vAxis.y), Az = vec3(-vAxis.y, 0.0, vAxis.x);
+  // metres per pixel on the item (for the filtered details)
+  float px = max(length(fwidth(vRel)), 1e-4);
+  vec3 alb = vCol.rgb * uAlbedo.x;
+  float spec = 0.0, rough = 0.5;
+  vec3 Ns = N;                               // the shading normal (curved for the cylinders)
+  bool topF = N.y > 0.3;
+  float sideZ = dot(N, Az);                  // the faces: -1 front .. +1 back
+  if (kind < 0.5) {
+    // collector: dark glass in a thin aluminium frame on the top (the frame's share when it is
+    // smaller than a pixel); the frame's sides, legs and back grey metal
+    if (topF) {
+      float ex = (1.0 - abs(vLoc.x)) * vAxis.z, ez = (1.0 - abs(vLoc.z)) * vAxis.w;
+      float glass = band(ex, 0.05, 99.0, px) * band(ez, 0.05, 99.0, px);
+      if (vAxis.z > 0.8) glass *= 1.0 - band(abs(vLoc.x) * vAxis.z, -1.0, 0.03, px);   // two panels
+      alb = mix(vec3(0.5, 0.51, 0.52) * uAlbedo.x, alb, glass);
+      spec = glass;
+      rough = 0.06;
+    } else {
+      alb = vec3(0.42, 0.43, 0.44) * uAlbedo.x;
+      spec = 0.15;
+      rough = 0.4;
+    }
+  } else if (kind < 1.5) {
+    // the tank: a cylinder along x (its ends flat), painted or galvanized steel
+    if (abs(dot(N, Ax)) < 0.5) {
+      vec2 r = vec2(2.0 * vLoc.y - 1.0, vLoc.z);
+      Ns = normalize(Az * r.y + vec3(0.0, r.x, 0.0) * 1.0 + N * 0.15);
+    }
+    spec = 0.25;
+    rough = 0.3;
+  } else if (kind < 2.5) {
+    // a water tank: a vertical cylinder (plastic), a lid on top
+    if (!topF) Ns = normalize(Ax * vLoc.x + Az * vLoc.z);
+    spec = 0.12;
+    rough = 0.45;
+  } else if (kind < 3.5) {
+    // an air conditioner: the fan's grille in its front (a dark disc, its share far away)
+    if (sideZ < -0.5) {
+      vec2 f = vec2(vLoc.x * vAxis.z - 0.12, (vLoc.y - 0.5) * 0.62);
+      float fan = 1.0 - smoothstep(0.2 - px, 0.2 + px, length(f));
+      alb *= 1.0 - 0.6 * fan;
+    }
+    spec = 0.1;
+    rough = 0.5;
+  } else {
+    // a chiller: two fans on its top, louvres round its sides
+    if (topF) {
+      vec2 f = vec2(abs(vLoc.x * vAxis.z) - 0.5 * vAxis.z, vLoc.z * vAxis.w);
+      float fan = 1.0 - smoothstep(0.38 - px, 0.38 + px, length(f));
+      alb *= 1.0 - 0.7 * fan;
+    } else {
+      alb *= 1.0 - 0.25 * pulse(vLoc.y * 28.0, px / 0.07, 0.0, 0.4);      // ~2 m high, 7 cm louvres
+    }
+    spec = 0.1;
+    rough = 0.45;
+  }
+  // light: the sun (and its shadow map), the sky, the roof under it
+  vec3 sunE = atmoSunIrradianceAt(vRel, vH);
+  float shadow = 1.0;
+  #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+    if (receiveShadow) {
+      DirectionalLightShadow sh = directionalLightShadows[ 0 ];
+      shadow = getShadow( directionalShadowMap[ 0 ], sh.shadowMapSize, sh.shadowIntensity, sh.shadowBias, sh.shadowRadius, vDirectionalShadowCoord[ 0 ] );
+    }
+  #endif
+  float NdL = max(dot(Ns, uSunDir), 0.0);
+  vec3 E = sunE * NdL * shadow + uAmbient * (0.55 + 0.45 * Ns.y) + PI * uGroundRadiance * (0.5 - 0.5 * Ns.y);
+  vec3 radiance = alb * E / PI;
+  if (spec > 0.0) {
+    vec3 R = reflect(V, Ns);
+    float a = mix(rough, 0.6, smoothstep(0.05, 0.6, px));
+    float fr = pow(1.0 - max(dot(Ns, -V), 0.0), 5.0);
+    vec3 F = vec3(0.04 + 0.96 * fr);
+    radiance += spec * (F * envRadiance(R) + sunE * shadow * F * sunSpec(Ns, V, a));
+  }
+  vec3 color = atmoAerial(radiance, V, dist, atmoSafeH(vH));
+  gl_FragColor = vec4(color, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }

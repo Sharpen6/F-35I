@@ -9,6 +9,9 @@
 //   {type: 'chunk', id, key, chunk, opts} full-detail geometry of one 800 m chunk:
 //                                         reply {geo: {position, normal, facade, color, info, index,
 //                                         center, sphere, vertices, triangles}}
+//   {type: 'roofs', id, key, chunk, opts} the roof items of one chunk (Rooftops.js): solar water
+//                                         heaters, water tanks, air conditioners, chillers; reply
+//                                         {items: {a, b, c, count, center, sphere}}
 //   {type: 'drop', key}                   forget a parsed tile
 //
 // Frames: tile-local metres are world X / Z minus the tile's north-west corner (x0, z0); chunk
@@ -49,6 +52,11 @@ self.onmessage = async (e) => {
       const geo = buildChunk(t, m.chunk, m.opts || {});
       const tr = [geo.position.buffer, geo.normal.buffer, geo.facade.buffer, geo.color.buffer, geo.info.buffer, geo.index.buffer];
       self.postMessage({ type: 'chunk', id: m.id, key: m.key, chunk: m.chunk, ok: true, geo }, tr);
+    } else if (m.type === 'roofs') {
+      const t = tiles.get(m.key);
+      if (!t) throw new Error(`tile ${m.key} not loaded`);
+      const items = buildRoofItems(t, m.chunk, m.opts || {});
+      self.postMessage({ type: 'roofs', id: m.id, key: m.key, chunk: m.chunk, ok: true, items }, [items.a.buffer, items.b.buffer, items.c.buffer]);
     } else if (m.type === 'drop') {
       tiles.delete(m.key);
     }
@@ -628,6 +636,215 @@ function vault(B, sR, sW, P, ha, hb, y, rise, ax_, az_, bx_, bz_, g0, doorSgn = 
   }
   sW.kind = K.wall;
   sW.floors = floors;
+}
+
+// ------------------------------------------------------------------------------------ roof items
+// What stands on the flat roofs (Rooftops.js draws it, buildingShaders.js ROOF_ITEM_*): one
+// instance per item, a unit box the vertex shader shapes (x along the item's length, z across it
+// with -z its front, y up; a wedge when its front is lower). Placed here, deterministic per
+// building (its index and seed), so a roof always looks the same.
+//   Solar water heaters on the roofs of homes (Israeli law since 1980: nearly every flat up to
+//   ~9 floors has one): a collector of dark glass (1 m x 2 m on a frame tilted ~40 deg to the
+//   south) or two side by side, a white or grey horizontal tank (150-200 l, ~0.55 m) on the frame
+//   behind its top edge; in rows facing the side of the building closest to south, about one per
+//   flat (roofSwhCover: their share of the roof by floors, the far roofs' mean in the shader).
+//   Water tanks (black or white plastic, ~1 m), outdoor units of air conditioners in pairs; on
+//   offices and public buildings chillers and rows of condensers.
+const ITEM = { collector: 0, tank: 1, water: 2, ac: 3, chiller: 4 };
+// the share of a home's flat roof under solar water heaters (panels and tanks) by its floors; the
+// shader blends the same share into far roofs (buildingShaders.js SWH_COVER)
+const roofSwhCover = (floors) => (floors >= 10 ? 0.08 : Math.min(0.23, Math.max(0.04, 0.0255 * floors)));
+const SWH_DEPTH = 1.9;                 // a unit front to back: the panel's run (2 m at 40 deg) and the tank
+const SWH_ROW = SWH_DEPTH + 0.8;       // the rows' pitch (a walkway between)
+
+class ItemBuilder {
+  constructor(cap = 4096) {
+    this.n = 0;
+    this.a = new Float32Array(cap * 4);
+    this.b = new Uint8Array(cap * 4);
+    this.c = new Uint8Array(cap * 4);
+  }
+
+  /**
+   * One item: centre of its base (x, y, z chunk-local), yaw (its x axis = (cos, sin) in x / z),
+   * half length, half depth, height (m), the front's height as a share of it (1: a box), colour
+   * (sRGB bytes), kind (ITEM).
+   */
+  add(x, y, z, yaw, hl, hd, h, front, r, g, b, kind) {
+    if (this.n >= this.a.length / 4) {
+      const grow = (a) => { const o = new a.constructor(a.length * 2); o.set(a); return o; };
+      this.a = grow(this.a); this.b = grow(this.b); this.c = grow(this.c);
+    }
+    const k = 4 * this.n++;
+    this.a[k] = x; this.a[k + 1] = y; this.a[k + 2] = z; this.a[k + 3] = yaw;
+    this.b[k] = Math.min(255, Math.round(hl / 0.025)); this.b[k + 1] = Math.min(255, Math.round(hd / 0.025));
+    this.b[k + 2] = Math.min(255, Math.round(h / 0.05)); this.b[k + 3] = Math.round(Math.min(1, Math.max(0, front)) * 255);
+    this.c[k] = r; this.c[k + 1] = g; this.c[k + 2] = b; this.c[k + 3] = kind;
+  }
+}
+
+/** mulberry32: deterministic per building */
+function rng(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let q = s;
+    q = Math.imul(q ^ (q >>> 15), q | 1);
+    q ^= q + Math.imul(q ^ (q >>> 7), q | 61);
+    return ((q ^ (q >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** The roof items of chunk c (chunk-local, as buildChunk). opts: {parapets, roofBoxes}, the chunks'. */
+function buildRoofItems(t, c, opts) {
+  const nch = t.nch, cs = TILE / nch;
+  const ccx = ((c % nch) + 0.5) * cs, ccz = (Math.floor(c / nch) + 0.5) * cs;
+  const IB = new ItemBuilder(4096);
+  const parapets = opts.parapets !== false, roofBoxes = opts.roofBoxes !== false;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = t.starts[c]; i < t.starts[c + 1]; i++) {
+    const n0 = IB.n;
+    roofItems(t, i, IB, ccx, ccz, parapets, roofBoxes);
+    for (let k = n0; k < IB.n; k++) { const y = IB.a[4 * k + 1]; if (y < lo) lo = y; if (y > hi) hi = y; }
+  }
+  const n = IB.n;
+  return {
+    a: IB.a.slice(0, n * 4), b: IB.b.slice(0, n * 4), c: IB.c.slice(0, n * 4), count: n, center: [ccx, ccz],
+    sphere: n ? [0, (lo + hi) / 2 + 1, 0, Math.hypot(cs / 2, cs / 2, (hi - lo) / 2 + 3) + 6] : [0, 0, 0, 1],
+  };
+}
+
+function roofItems(t, i, IB, ccx, ccz, parapets, roofBoxes) {
+  if (t.shape[i] !== SHAPE.flat) return;
+  const style = t.style[i] & 15, rs = t.rstyle[i];
+  const homes = rs === R.flat_res;
+  if (!homes && rs !== R.flat) return;
+  if (style === W.greenhouse || style === W.industrial || style === W.hangar || style === W.stack || style === W.frame ||
+    style === W.concrete) return;
+  const area = t.area[i];
+  if (area < 45) return;
+  const g0 = t.base[i] * 0.1, apex = g0 + t.top[i] * 0.1;
+  const raised = t.minh[i] > 0;
+  const bottom = raised ? g0 + t.minh[i] * 0.1 : g0 - t.sink[i] * 0.1;
+  if (apex - bottom <= 4.5) return;
+  const eave = apex - t.rise[i] * 0.2;
+  // the roof's level as building() makes it (behind the parapet)
+  const parapet = parapets && !raised && style !== W.glass ? (style === W.house ? 0.5 : 1.0) : 0;
+  const y = eave - parapet;
+  const floors = t.floors[i];
+  const ha = t.oa[i] * 0.05, hb = t.ob[i] * 0.05;
+  const yaw = t.yaw[i] / 65536 * Math.PI;
+  const ax_ = Math.cos(yaw), az_ = Math.sin(yaw), bx_ = -az_, bz_ = ax_;
+  const ocx = t.cx[i] * t.q + (t.ox - t.x0) - ccx, ocz = t.cz[i] * t.q + (t.oz - t.z0) - ccz;
+  const R0 = rng((t.ix * 977 + t.iz) * 100003 + i * 7919 + t.seed[i]);
+  // the stair / lift house of building() roofHouse, kept clear (OBB coordinates, with a margin)
+  let house = null;
+  if (roofBoxes && parapet > 0 && area > 160 && (style === W.plaster || style === W.stone || style === W.tower ||
+    style === W.office || style === W.oldstone || style === W.public)) {
+    const big = t.top[i] * 0.1 > 40;
+    const a = Math.min(big ? 7 : 2.6, 0.32 * ha), b = Math.min(big ? 5 : 2.1, 0.36 * hb);
+    if (a >= 1.2 && b >= 1.0) {
+      const sd = t.seed[i];
+      const ou = ((sd & 15) / 15 - 0.5) * (ha - a) * 0.8, ow = (((sd >> 4) & 15) / 15 - 0.5) * (hb - b) * 0.8;
+      house = [ou - a - 0.6, ou + a + 0.6, ow - b - 0.6, ow + b + 0.6];
+    }
+  }
+  // the rows face the building's side closest to south (+z): F (front, an OBB axis), S along them
+  let fOnA = true, fs = 1, bestZ = az_;
+  if (-az_ > bestZ) { fs = -1; bestZ = -az_; }
+  if (bz_ > bestZ) { fOnA = false; fs = 1; bestZ = bz_; }
+  if (-bz_ > bestZ) { fOnA = false; fs = -1; }
+  const hf = fOnA ? ha : hb, hs = fOnA ? hb : ha;
+  // OBB coordinates (u along a, w along b) of the point t along F (+: to the front) and s along S
+  const U = (tt, ss) => (fOnA ? fs * tt : ss);
+  const Wo = (tt, ss) => (fOnA ? ss : fs * tt);
+  const X = (u, w) => ocx + ax_ * u + bx_ * w, Z = (u, w) => ocz + az_ * u + bz_ * w;
+  const at = (tt, ss) => { const u = U(tt, ss), w = Wo(tt, ss); return [X(u, w), Z(u, w)]; };
+  // the items' frame: z = -F (their front faces F), x = (-Fz, Fx) (x cross up = z: a rotation)
+  const Fx = fOnA ? fs * ax_ : fs * bx_, Fz = fOnA ? fs * az_ : fs * bz_;
+  const iyaw = Math.atan2(Fx, -Fz);
+  const free = (t0, t1, s0, s1) => {
+    // the middle first (most misses), then the corners; no arrays (this runs for every slot)
+    for (let q = 0; q < 5; q++) {
+      const tt = q === 0 ? (t0 + t1) / 2 : (q & 1 ? t0 : t1), ss = q === 0 ? (s0 + s1) / 2 : (q & 2 ? s0 : s1);
+      const u = U(tt, ss), w = Wo(tt, ss);
+      if (!insideFootprint(t, i, X(u, w) + ccx, Z(u, w) + ccz)) return false;
+    }
+    if (house) {
+      const u0 = Math.min(U(t0, s0), U(t1, s1)), u1 = Math.max(U(t0, s0), U(t1, s1));
+      const w0 = Math.min(Wo(t0, s0), Wo(t1, s1)), w1 = Math.max(Wo(t0, s0), Wo(t1, s1));
+      if (u1 > house[0] && u0 < house[1] && w1 > house[2] && w0 < house[3]) return false;
+    }
+    return true;
+  };
+  // free slots: rows of SWH_ROW from the back (north) of the roof, along them from one end, clear
+  // of the parapet; one or two collectors wide
+  const edge = parapet > 0 ? 0.9 : 0.6;
+  const slots = [];
+  for (let tt = -hf + edge + SWH_DEPTH / 2; tt + SWH_DEPTH / 2 <= hf - edge + 1e-6; tt += SWH_ROW) {
+    for (let ss = -hs + edge; ss + 1.05 <= hs - edge + 1e-6;) {
+      const w = R0() < 0.38 && ss + 2.15 <= hs - edge ? 2.1 : 1.05;
+      if (free(tt - SWH_DEPTH / 2, tt + SWH_DEPTH / 2, ss, ss + w)) slots.push([tt, ss + w / 2, w]);
+      ss += w + 0.3;
+    }
+  }
+  if (!slots.length) return;
+  if (homes) {
+    // solar water heaters: one per flat (~110 m^2 a floor), one or two on a house; on towers of
+    // flats (10 floors or more: central systems) a field of collectors (as the far roofs' mean in
+    // the shader: roofSwhCover)
+    let want = floors >= 10 ? Math.round(area * roofSwhCover(floors) / 2.6) : Math.round(floors * area / 110);
+    if (floors <= 2) want = Math.min(want, 1 + (R0() < 0.4 ? 1 : 0));
+    const keep = Math.min(1, want / slots.length) * 1.15;
+    const greyTanks = R0() < 0.25;
+    for (let k = 0, used = 0; k < slots.length && used < want; k++) {
+      if (R0() > keep) continue;
+      const [tt, ss, w] = slots[k];
+      slots[k] = null;
+      used++;
+      // the panel (a wedge: 0.3 m high at the front, 1.6 m at the back) and the tank on the frame
+      // behind its top edge: white, galvanized grey or cream
+      let [x, z] = at(tt + 0.17, ss);
+      IB.add(x, y, z, iyaw, w / 2 - 0.03, 0.78, 1.6, 0.19, 28, 34, 48, ITEM.collector);
+      [x, z] = at(tt - SWH_DEPTH / 2 + 0.3, ss);
+      const r = R0();
+      const tc = greyTanks || r < 0.12 ? [176, 178, 174] : (r < 0.3 ? [224, 216, 192] : [234, 234, 228]);
+      IB.add(x, y + 1.35, z, iyaw, Math.min(w / 2 - 0.08, 0.75), 0.28, 0.56, 1, tc[0], tc[1], tc[2], ITEM.tank);
+    }
+  }
+  // water tanks (homes: black or white plastic, ~1 m, on a low stand), air conditioners, on
+  // offices chillers; in the slots left, shuffled
+  const left = slots.filter(Boolean);
+  for (let k = left.length - 1; k > 0; k--) { const j = Math.floor(R0() * (k + 1)); const q = left[k]; left[k] = left[j]; left[j] = q; }
+  let nWater = homes && floors >= 2 && R0() < 0.7 ? 1 + (R0() < 0.35 ? 1 : 0) : 0;
+  let nAc = homes ? Math.min(12, Math.round(floors * area / 240 * R0())) : Math.min(36, Math.round(area / 70));
+  let nCh = homes ? 0 : Math.min(6, Math.round(area / 650) + (area > 500 ? 1 : 0));
+  for (const [tt, ss, w] of left) {
+    if (nCh <= 0 && nWater <= 0 && nAc <= 0) break;
+    if (nCh > 0 && w > 2) {
+      const [x, z] = at(tt, ss);
+      IB.add(x, y, z, iyaw, 0.98, 0.85, 1.9 + 0.4 * R0(), 1, 170, 172, 170, ITEM.chiller);
+      nCh--;
+    } else if (nWater > 0) {
+      const [x, z] = at(tt, ss);
+      const r = R0();
+      const wc = r < 0.62 ? [36, 36, 36] : (r < 0.88 ? [216, 216, 206] : [70, 98, 142]);
+      IB.add(x, y + 0.25, z, iyaw, 0.5, 0.5, 1.15 + 0.3 * R0(), 1, wc[0], wc[1], wc[2], ITEM.water);
+      nWater--;
+    } else {
+      // outdoor units, two deep (one or two across): 0.82 x 0.34 x 0.62 m, white or pale grey
+      const cols = w > 2 ? 2 : 1;
+      for (let ci = 0; ci < cols; ci++) {
+        for (const dt of [-0.45, 0.45]) {
+          if (nAc <= 0) break;
+          const [x, z] = at(tt + dt, ss + (cols === 2 ? (ci ? 0.52 : -0.52) : 0));
+          const g = 206 + Math.floor(R0() * 24);
+          IB.add(x, y + 0.08, z, iyaw, 0.41, 0.17, 0.62, 1, g, g, g - 6, ITEM.ac);
+          nAc--;
+        }
+      }
+    }
+  }
 }
 
 function insideFootprint(t, i, x, z) {
