@@ -10,7 +10,7 @@ Two builders for the sim's ground network, and the runtime that draws it:
 | `sim/js/world/roadMesh.js` | tile parser and chunk mesh builder (also runs in node) |
 | `sim/js/world/roadsWorker.js` | module worker around roadMesh.js |
 | `sim/js/world/roadShaders.js` | road / rail / taxiway / apron shader: surfaces, markings, lighting, depth bias |
-| `sim/js/world/AirportLights.js` | runway, approach, PAPI, taxiway and floodlight sprites |
+| `sim/js/world/AirportLights.js` | runway, approach, PAPI, taxiway, floodlight and street lamp sprites |
 | `sim/js/world/Traffic.js` | head and tail lights of cars on the main roads at night |
 
 Data: **© OpenStreetMap contributors, ODbL 1.0, via the Overture Maps Foundation** (release
@@ -40,6 +40,8 @@ Output (`sim/data/world/`, ~20 MB):
 * `roads/index.json`: release, attribution, tile layout, class / flag ids, km and polylines per
   class, `files` (the tiles that exist, `"ix,iz"`).
 * `roads/tile_<ix>_<iz>.bin`: one per terrain L0 tile that has roads (222 of 256, 19.5 MB).
+* `roads/lamps_<ix>_<iz>.bin`: the street lamps of a tile (197 tiles, 555 k lamps, 4.4 MB);
+  `index.json` `lamps.files` lists them with their counts.
 * `roads/check.txt`: the alignment check (below).
 * `airfields/airfields.json`: taxiways, aprons, holding positions, taxiway lights, floodlight
   masts and runway light configurations (0.2 MB).
@@ -73,10 +75,14 @@ ways, parking aisles, driveways, tunnels (cut out of their roads), roads under c
 abandoned, roads on runways (the terrain paints those).
 
 Flags (u8): `1` oneway (one carriageway; dual carriageways are two oneway ways), `2` bridge
-(level >= 1 or the bridge flag), `4` urban (ESA WorldCover built-up over half the way), `8`
-unpaved (surface or class track), `16` solid centre line (rural two-way trunk and primary), `32`
-lit (town roads; motorways and trunks within reach of built-up land), `64` taxiway edge
-markings (airfields.json only).
+(level >= 1 or the bridge flag), `4` urban: the land beside the road, 15-120 m beyond its edges
+on both sides, is mostly built-up (ESA WorldCover class 50 over half of it, 35 % for streets and
+service roads), with every road corridor (half the paved width plus 6 m) taken out of the land
+cover first: the classifier counts a 20 m wide motorway's own asphalt as built-up, which made
+84 % of the motorways "urban". Motorways and their ramps are never urban (no kerbs, sidewalks or
+zebra crossings on the Ayalon). `8` unpaved (surface or class track), `16` solid centre line
+(rural two-way trunk and primary), `32` lit (town roads; other roads where the land within
+~300 m is built-up), `64` taxiway edge markings (airfields.json only).
 
 ## Tile format `RDS1` (little endian)
 
@@ -94,7 +100,40 @@ A tile is 6400 m, tile (ix, iz) has its NW corner at world (-51200 + 6400 ix, -5
 textures continuous across the cut. Breaks are the junctions (Overture connectors shared by two
 or more roads) with the widest half-width meeting there plus a metre: the shader keeps markings
 out of them and puts stop lines, zebra crossings and kerb colours around them. Points are
-simplified to 0.15 m.
+simplified to 0.15 m. Pieces of one road meet on the same 0.1 m point (also across tiles: tile
+edges are multiples of 0.1 m and polylines are cut exactly on them): that is how the traffic
+carries on from one polyline to the next.
+
+Optional bridge deck section after the breaks (readers of the first version stop before it):
+
+```
+deck    8 B    char[4] 'DCK1', u32 nDecks
+        per deck polyline: u32 polyline index, f32 structure depth under the deck surface (m),
+                           f32 deck height (m) per point of the polyline
+```
+
+Bridge decks (`bridge_decks` in roads.py): the bridge pieces that share end points are one
+bridge; its ends on the ground (where a non-bridge road meets it, or a dead end) take the terrain
+height and the joints between them are interpolated along the bridge, so each piece gets a
+straight deck. Where the elevation model (a 30 m surface model: the valley under a viaduct)
+sags more than 2 m under that line the bridge gets a deck (297 bridges, 67 km; the A1 railway
+viaduct and Highway 1 at Motza 80-90 m over their valleys); smaller dips stay draped. Structure
+depth 1.6-4.5 m (a slab on an overpass, a girder on a tall viaduct).
+
+## Street lamp tiles `LMP1`
+
+```
+header  8 B    char[4] 'LMP1', u32 nLamps
+lamps   8 B    u16 x, u16 z (0.1 m from the tile's NW corner), u16 lamp head height (0.05 m
+               above -500 m), u8 flags (1 LED, 2 on a minor road: residential, service, track),
+               u8 rank (a hash, 0-255: thinning with distance)
+```
+
+Exactly where the road shader puts its pools of light (`street_lamps` in roads.py, the same
+rules as roadShaders.js): along lit roads every 42 m on main roads (high-pressure sodium on 12 m
+poles) and 33 m elsewhere (warm LED, 9 m), from u = S / 2 on (the polyline's u, continuous across
+tiles), in the median of a dual carriageway, staggered on both sides of a two-way road beyond the
+kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
 
 ## airfields.json
 
@@ -136,7 +175,19 @@ simplified to 0.15 m.
 * **Draping**: every ribbon polygon is clipped to the terrain's own triangles (25 m cells split
   NW-SE, exactly `HeightField.heightAt`), merged over planar areas in blocks of at most 100 m
   (the vertex shader's earth-curvature drop is quadratic), so roads lie exactly on the rendered
-  terrain. Normals are the terrain's. 36 bytes per vertex.
+  terrain. Normals are the terrain's. 38 bytes per vertex.
+* **Bridges**: on a deck polyline (DCK1) the surface is max(terrain, deck): each piece is split
+  along the line where the deck plane meets the terrain plane (both parts share that line: no
+  cracks), the lifted part takes the deck's plane and normal. Where the deck stands at least
+  0.3 m off the ground the structure is added (class 14, concrete): fascia walls down to the
+  structure depth, parapets 0.9 m high with their inner faces and caps, the underside, end walls
+  where the deck meets the ground and piers every 40 / 80 / 120 m (by height; 1.4 m + 3.5 % of the
+  height wide, two columns under decks over 14 m wide, none where another road passes under).
+  Not cast into the sun's shadow map.
+* **Thin ribbons**: a ribbon narrower than 1.5 px on screen is widened to 1.5 px in the vertex
+  shader (on the terrain's tangent plane along the mitred cross direction, aDir), with its
+  coverage lowered to match: distant roads stay continuous lines of the right weight instead of
+  dotted, crawling ones.
 * **Depth**: priority by class (rail and taxiways over motorways over streets, bridges over
   everything) as a depth bias written in the fragment shader (the logarithmic depth buffer
   writes `gl_FragDepth`, so `polygonOffset` does nothing): (priority + 7) steps of 2 units of a
@@ -152,25 +203,54 @@ simplified to 0.15 m.
   positions; aprons as 5 m concrete slabs with stains. Lit exactly as the terrain (sun through
   the atmosphere, sky, the aircraft's shadow) plus GGX sheen, then the same aerial perspective.
   At night: street lights along lit roads (sodium on main roads, warm LED in town) and apron
-  floodlights, with the eye's adaptation the capped exposure lacks once the sky is dark.
+  floodlights, with the eye's adaptation the capped exposure lacks once the sky is dark. The
+  terrain's own shadows (hills over valleys at a low sun) when gfx-terrain's horizon maps are in
+  (`terrain.horizon.uniforms` and `HORIZON_GLSL` of js/terrain/horizonMap.js, loaded only then;
+  one more sampler).
 * **Airfield lights** (`AirportLights.js`): one `THREE.Points` per airfield, camera-facing
   sprites. Each light has a colour and intensity (cd) per side of its axis and a beam; the
   vertex shader computes the illuminance at the eye through the atmosphere (`I T / d^2`) against
   the threshold of a point source on the background (Allard: `E_t = 10^(0.64 log B - 5.7)` lux,
-  `B` from the sun's elevation), and sizes (pixel-clamped) and brightens the sprite with the log
-  of the excess, in HDR (bright lights exceed 1 for bloom). PAPI white above its unit's angle,
-  red below (2 white 2 red on 3 deg). Runway, approach and taxiway lights on from sun 8 deg
-  (dimmer steps at night), floodlights from sunset, PAPI always.
-* **Traffic at night** (`Traffic.js`): cars on the lanes of motorways, trunk and primary roads
-  within 3.8 / 2.8 / 1.8 km (high / medium / low, at most 7000 / 3500 / 1200), right-hand
-  traffic, one sprite each with the lights' shader: warm white low beams seen from ahead (500 cd
-  within about 30 deg of the travel axis), red tail lights from behind (18 cd). Positions are a function of the clock
-  along each lane (rebuilding the set as the camera moves keeps the cars where they were). From
-  sunset to sunrise only: there are no car models by day.
+  `B` from the sun's elevation). The light's irradiance is spread over a Gaussian of at least
+  0.65 px (wider when bright, as glare) integrated over each pixel (erf), so a light keeps its
+  energy wherever it falls between pixel centres: no twinkling as it moves. A display cannot show
+  a point as bright as the eye sees it, so a light the eye sees well is at least as bright as its
+  excess over the threshold says (as star magnitudes), up to 0.85 of white; only physically
+  bright (near) lights saturate, up to 64 in HDR (the bloom). Radians per pixel from the drawing
+  buffer (HiDPI counted once). PAPI white above its unit's angle, red below (2 white 2 red on
+  3 deg); sequenced flashers held 40 ms (two or three frames; an 8 ms flash fell between
+  frames). Runway, approach and taxiway lights on from sun 8 deg (dimmer steps at night),
+  floodlights from sunset, PAPI always.
+* **Street lamps** (`AirportLights.js`, `lamps_<ix>_<iz>.bin`): one `THREE.Points` per road tile
+  within 20 / 14 / 8 km (high / medium / low), their own program (16 bytes a lamp). The luminaire
+  (cut-off optics: 3000 cd sodium / 1200 cd LED from below its horizontal plane, ~8 % of that from
+  above: the glow of its glass) and, beyond the range where the ribbons show the pool of light on
+  the road, the pool as a point (600 / 250 cd from straight above, Lambertian). Thinned with
+  distance to (4 km / d)^2 of the lamps (at least 1 in 16), the ones kept carrying the light of
+  the others; faded out at the end of the range. On with the street lights. Cities are lit lines
+  of lamps to the horizon instead of black beyond the road range. `Roads.lampRange`: where the
+  terrain's procedural city lights should start (gfx-terrain), so the two do not count twice.
+* **Traffic at night** (`Traffic.js`): cars on the lanes of motorways, trunk, primary, secondary
+  and tertiary roads and their ramps within 3.8 / 2.8 / 1.8 km (high / medium / low, at most
+  7000 / 3500 / 1200), right-hand traffic, one sprite each with the lights' shader: warm white
+  low beams seen from ahead (500 cd within about 30 deg of the travel axis), red tail lights from
+  behind (18 cd). The worker sends each tile's lanes (`trafficLanes` in roadMesh.js: centre lines
+  every <= 20 m with the height of the surface the ribbons lie on, bridge decks included, the
+  cross slope, and the end point keys); the main thread parses nothing. A car drives on from the
+  end of its polyline along one that starts there (mostly the straightest, a ramp now and then,
+  never against a one-way road or back), its lateral offset on the mitre of the two (no jump at
+  the joint), easing into its lane and speed on the new road. Where no road carries on (a
+  tunnel, a smaller street, the loaded tiles' edge) it fades out over its last 40 m; such a car,
+  one that falls behind the radius and the surplus after a quality change come back elsewhere,
+  fading in. Positions on the CPU (~0.3 ms a frame for 3500 cars here), uploaded for the slots in
+  use only. From sunset to sunrise only: there are no car models by day.
 * URL parameters: `roads=0` (no roads, airfield surfaces or lights), `airportlights=0` (no
   airfield lights, no traffic), `traffic=0`.
 * Shader samplers (the D3D11 limit is 16): the road program 5, 6 with the sun's shadow map
-  (atmosphere transmittance LUT, the two sky-view LUTs, noise, overview colour), the lights 0.
+  (atmosphere transmittance LUT, the two sky-view LUTs, noise, overview colour), 7 with the
+  terrain's horizon map; the lights and lamps 0.
+* Main thread: the noise texture is computed in the worker (it took 0.15-0.4 s at start-up), the
+  floodlight masts are chosen again only after 100 m of travel (no garbage per frame).
 
 ## Alignment check
 
@@ -185,8 +265,13 @@ them; the imagery's own roads show beyond the fade.
 
 * Overture has no lane counts, widths or markings: cross-sections are per class (with a few
   named roads); interchanges get the ramp class's width.
-* Bridges are drawn on the ground (flat on the terrain, over everything): no decks or piers.
-  Tunnels are left out.
+* Bridge decks come from the bridge's ends on the ground (straight between them): a deck that
+  really arches or bends in profile is drawn straight. Decks and piers cast no shadow. Overpasses
+  whose dip under the deck line is under 2 m stay draped on the terrain. Tunnels are left out.
+* The terrain's 25 m grid shows through steep cuttings: Highway 1 in the Sha'ar HaGai gorge sits
+  on a staircase of terrain triangles. The road surface is the terrain's (that is what keeps it
+  watertight with the terrain at every distance); smoothing it needs a benched road in the
+  terrain's height data (gfx-terrain).
 * Junctions are blended, not modelled: no turn lanes, islands or roundabout geometry beyond the
   OSM lines.
 * Sidewalks and kerbs only beside streets in built-up land (WorldCover), not along every street.
