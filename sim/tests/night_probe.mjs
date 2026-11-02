@@ -8,10 +8,14 @@
 //   papi(near)                          the four PAPI units next to `near` ([x, z]; by default the ones
 //                                       papiCam aimed at, else those nearest the camera): their elevation
 //                                       angle, the brightest pixel near each (rgb 0..255), r / g, CIE x y
-//   reds()                              the red lights in the frame: local maxima (3x3, luma) whose
-//                                       brightest channel is >= 100 and red (hue -20..18 deg, saturation
-//                                       >= 0.25): their count and CIE x (median and quartiles); a pale
-//                                       salmon counts, so a light washed out to white shows in its x
+//   reds()                              the red lights in the frame: local maxima (3x3) of redness (red
+//                                       over the brightest other channel) whose red is >= 100 and that
+//                                       are red (hue -20..18 deg, saturation >= 0.25; a pale salmon
+//                                       counts, so a light washed out to white shows): their count, CIE x
+//                                       as drawn (median, quartiles) and of what the light adds over its
+//                                       background (lightX: over the per-channel median of the ring 3 px
+//                                       out, in linear light; a far light is a pixel on the lit facade it
+//                                       sits on, which pales the pixel whatever the light's colour)
 //   tail()                              the jet's white tail light: its brightest pixel, the width (px) of
 //                                       the row through it at half its height over the background, its
 //                                       white core (the run at luma >= 200), the steepest step between
@@ -51,8 +55,9 @@ window.__np = {
   luma(c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; },
   lin(v) { const x = v / 255; return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); },
   /** CIE xy of an 8-bit sRGB colour. */
-  xy(c) {
-    const r = this.lin(c[0]), g = this.lin(c[1]), b = this.lin(c[2]);
+  xy(c) { return this.xyLin([this.lin(c[0]), this.lin(c[1]), this.lin(c[2])]); },
+  /** CIE xy of a linear sRGB colour. */
+  xyLin([r, g, b]) {
     const X = 0.4124 * r + 0.3576 * g + 0.1805 * b, Y = 0.2126 * r + 0.7152 * g + 0.0722 * b, Z = 0.0193 * r + 0.1192 * g + 0.9505 * b;
     const s = X + Y + Z || 1;
     return [+(X / s).toFixed(3), +(Y / s).toFixed(3)];
@@ -161,22 +166,38 @@ window.__np = {
     return { h, s: d / M };
   },
   reds() {
-    const f = this.frame(), xs = [];
-    for (let y = 1; y < f.h - 1; y++) for (let x = 1; x < f.w - 1; x++) {
+    const f = this.frame(), xs = [], ls = [];
+    const red = (c) => c[0] - Math.max(c[1], c[2]);
+    for (let y = 3; y < f.h - 3; y++) for (let x = 3; x < f.w - 3; x++) {
       const c = this.px(f, x, y);
       if (c[0] < 100 || c[0] < c[1] || c[0] < c[2]) continue;
       const hs = this.hue(c);
       if (hs.s < 0.25 || hs.h < -20 || hs.h > 18) continue;
-      const l = this.luma(c);
+      // the light's own pixel: a luma maximum next to a red light on a lit facade is often the facade
+      const k = red(c);
       let max = true;
       for (let j = -1; j <= 1 && max; j++) for (let i = -1; i <= 1; i++) {
-        if ((i || j) && this.luma(this.px(f, x + i, y + j)) > l) { max = false; break; }
+        if ((i || j) && red(this.px(f, x + i, y + j)) > k) { max = false; break; }
       }
-      if (max) xs.push(this.xy(c)[0]);
+      if (!max) continue;
+      xs.push(this.xy(c)[0]);
+      const ring = [[], [], []];
+      for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) {
+        if (Math.max(Math.abs(i), Math.abs(j)) !== 3) continue;
+        const p = this.px(f, x + i, y + j);
+        for (let ch = 0; ch < 3; ch++) ring[ch].push(this.lin(p[ch]));
+      }
+      const add = [0, 1, 2].map((ch) => {
+        const r = ring[ch].sort((a, b) => a - b);
+        return Math.max(0, this.lin(c[ch]) - r[r.length >> 1]);
+      });
+      ls.push(this.xyLin(add)[0]);
     }
+    const q = (v, p) => (v.length ? v[Math.min(v.length - 1, Math.floor(p * v.length))] : null);
     xs.sort((a, b) => a - b);
-    const q = (p) => (xs.length ? xs[Math.min(xs.length - 1, Math.floor(p * xs.length))] : null);
-    return { n: xs.length, medianX: q(0.5), p25: q(0.25), p75: q(0.75) };
+    ls.sort((a, b) => a - b);
+    return { n: xs.length, medianX: q(xs, 0.5), p25: q(xs, 0.25), p75: q(xs, 0.75),
+      lightX: q(ls, 0.5), lightP25: q(ls, 0.25), lightP75: q(ls, 0.75) };
   },
   tail() {
     const app = window.__sim.app, L = app.visual && app.visual.lights;

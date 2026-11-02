@@ -21,7 +21,7 @@
 //      streamed: no speckle on the facades (Buildings.speckleCheck), ground shadows by day,
 //      obstruction lights at night, no cross-fade left running; the gain of artificial lights
 //      (env.lightGain: 1 by day, 1400 / exposure at night); screenshots day and night; the red
-//      lights in the night frame stay red (CIE x).
+//      lights in the night frame stay red (CIE x of what they add over their background).
 //   6. lights at night, read off the drawn frame (tests/night_probe.mjs): the PAPI of Ben Gurion 26
 //      from the 3 deg path (two red, two white), the landing light's pool on short final and in
 //      the flare (x1.5 at least), the burner
@@ -424,10 +424,13 @@ async function main() {
       `${bn?.lights} lights, ${bn?.shadows} shadow decals`);
     await shot('12_tlv_azrieli_night', 800);
     // the red lights in that frame (the towers' obstruction lights, the cars' tail lights) keep their
-    // hue: AgX alone turned them white or salmon (median CIE x ~0.42, red's primary is 0.64)
+    // hue: AgX alone turned them white or salmon (CIE x ~0.42 as drawn, ~0.48 what they add over
+    // their background; red's primary is 0.64). Judged by what a light adds over its background: a
+    // far one is a pixel on the lit facade it sits on, which pales the pixel whatever the light's colour
     const redsTlv = await S(() => window.__np.reds());
-    check('red lights at night stay red (median CIE x >= 0.55)', redsTlv.n >= 3 && redsTlv.medianX >= 0.55,
-      `${redsTlv.n} red lights, CIE x ${redsTlv.medianX} (quartiles ${redsTlv.p25}-${redsTlv.p75})`);
+    check('red lights at night stay red (their own light: median CIE x >= 0.55)', redsTlv.n >= 3 && redsTlv.lightX >= 0.55,
+      `${redsTlv.n} red lights: their own light CIE x ${redsTlv.lightX} (quartiles ${redsTlv.lightP25}-${redsTlv.lightP75}); `
+        + `as drawn ${redsTlv.medianX} (${redsTlv.p25}-${redsTlv.p75})`);
     await S(() => {
       const app = window.__sim.app;
       app.cams.update = app._e2eCamUpdate;
@@ -455,17 +458,21 @@ async function main() {
     // ~370 m ahead, its ~0.5 lux tens of times the real moonlit ground's) and in the flare (~15 m)
     // (night, telnof_final flown down by the autopilot)
     await S(() => { window.__sim.start('telnof_final', { time: 21.5, camera: 'chase' }); window.__sim.autopilot('land', { approachKt: 145 }); });
-    let sF = null, sFinal = null, poolFinal = null;
-    for (let i = 0; i < 300; i++) {
-      sF = await step(12);
-      if (!sFinal && sF.agl_m < 65) { sFinal = sF; poolFinal = await S(() => window.__np.pool()); }
-      if (sF.crashed || sF.onGround || sF.agl_m < 15) break;
-    }
+    // flown down in the page, 0.1 s a step: the spawn is ~500 m up, ~2 min from short final
+    const down = (agl) => S((h) => {
+      const sim = window.__sim;
+      let s = sim.summary();
+      for (let t = 0; t < 150 && !(s.crashed || s.onGround || s.agl_m < h); t += 0.1) s = sim.step(12);
+      return s;
+    }, agl);
+    const sFinal = await down(65);
+    const poolFinal = sFinal.agl_m < 65 && !sFinal.onGround ? await S(() => window.__np.pool()) : null;
+    const sF = await down(15);
     const poolText = (p, s) => (p ? `${f2(s.agl_m, 1)} m up: the ground ${p.lamp} m ahead of the lamp x${p.ratio} (${p.off} -> ${p.on}; `
-      + `its light ${p.ground} lux as drawn, ${p.real} without the night's boosts)` : 'beam does not reach the ground');
+      + `its light ${p.ground} lux as drawn, ${p.real} without the night's boosts)` : `${f2(s.agl_m, 1)} m up: beam does not reach the ground`);
     check('landing light: its pool lights the runway on short final (x1.5 at least)', poolFinal && poolFinal.ratio >= 1.5, poolText(poolFinal, sFinal));
     await shot('14_telnof_flare_night_chase', 1200);
-    const pool = await S(() => window.__np.pool());
+    const pool = sF.agl_m < 15 && !sF.onGround ? await S(() => window.__np.pool()) : null;
     check('landing light: its pool lights the runway in the flare, brighter than on final', pool && pool.ratio >= 1.5
       && (!poolFinal || pool.ratio > poolFinal.ratio), poolText(pool, sF));
     // the burner at night with night vision on (the default): an orange flame, not pink
