@@ -7,8 +7,10 @@
 // sides (blended over the terrain's water, which is drawn first).
 //
 // Light and haze are the terrain's (atmoSunIrradianceAt with the cumulus shadows, uAmbient, the
-// ground bounce, atmoAerial), and every vertex is lowered with the earth's curvature like the
-// terrain's, so a breakwater and the sea around it fade alike and stay together far away.
+// ground bounce, basinAerial: atmoAerial, with the Dead Sea basin's haze below sea level as the
+// ground there has it, js/terrain/lakeShaders.js BASIN_HAZE_GLSL), and every vertex is lowered with
+// the earth's curvature like the terrain's, so a breakwater and the sea around it fade alike and
+// stay together far away.
 //
 // The armour stones are 3D cells (about 1.8 m) in the mesh's own coordinates: a stone's tone,
 // the dark gaps between stones and a facet per stone that catches the sun or not. Once a stone
@@ -24,6 +26,7 @@
 
 import { ATMOSPHERE_CORE, ATMOSPHERE_PARS } from '../env/atmosphereGLSL.js';
 import { EMITTER_GLSL } from '../env/emitters.js';
+import { BASIN_HAZE_GLSL } from '../terrain/lakeShaders.js';
 
 // surface kinds (aCol.a * 255), Shore.js
 export const KIND = { rubble: 0, crest: 1, deck: 2, wall: 3, steel: 4, panel: 5, dark: 6, facade: 7, roof: 8 };
@@ -96,6 +99,7 @@ export const SHORE_FRAG = /* glsl */ `
 #endif
 ${ATMOSPHERE_PARS}
 ${SAFE_H}
+${BASIN_HAZE_GLSL}
 ${EMITTER_GLSL}
 
 uniform vec4 uShore;          // albedo gain (the terrain's), fine detail on (1) / off (0), sea state (0 calm .. 1), share of windows lit for the hour
@@ -335,7 +339,9 @@ void main() {
   radiance = mix(radiance, foamR, clamp(foam, 0.0, 1.0) * 0.9);
   radiance += emit;
 
-  vec3 color = atmoAerial(radiance, V, dist, atmoSafeH(vH));
+  // the haze: the basin's below sea level (the ground and the lake round the Dead Sea's blocks
+  // have it), the same as atmoAerial above
+  vec3 color = basinAerial(radiance, V, dist, atmoSafeH(vH));
   // the lit windows' share of the pixel's light: where they make most of it, the pixel is a light
   // (js/env/emitters.js: Post.js keeps its hue), as the city's facades; by day a surface
   float lightShare = smoothstep(0.35, 0.8, max(emit.r, max(emit.g, emit.b)) / max(max(radiance.r, max(radiance.g, radiance.b)), 1e-12));

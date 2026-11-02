@@ -245,10 +245,10 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   lake, its distance and how lit it is, from the height field, 32 azimuths a frame, redone
   after 400 m), so the walls still darken the reflection at the right height. GGX sun glint.
   `?lakeDebug=1` shows the reflection alone, `2` the mirror lookup.
-* **Haze in the basin** (`BASIN_HAZE_GLSL`, terrain, lake and mirror): the atmosphere's
-  boundary-layer haze is anchored at sea level, which made the air at -427 m 1.4 times as hazy
-  as the coast's and drowned the walls 10-20 km across the lake; below 0 m its density stops
-  growing.
+* **Haze in the basin** (`BASIN_HAZE_GLSL`, terrain, lake, mirror and the shore's blocks): the
+  atmosphere's boundary-layer haze is anchored at sea level, which made the air at -427 m 1.4
+  times as hazy as the coast's and drowned the walls 10-20 km across the lake; below 0 m its
+  density stops growing.
 * **The rift strip** (`data/landscape/rift.bin`, `rift.json`, `rift_color.jpg`, built by
   `tools/terrain/rift.py`; `?rift=0` or no data: the far grid as before): the core stops at
   35.56 E / 31.34 N, so the Moab escarpment (1,300-1,500 m above the lake within 10 km, Wadi
