@@ -29,7 +29,8 @@ MIME types and no caching of the code. Any other static web server works too; op
 `index.html` as a file does not (browsers block ES modules from `file://`).
 
 **The data.** `sim/data/` is generated and not in git: `data/terrain/` comes from
-`sim/tools/terrain` (Copernicus DEM, ESA WorldCover imagery, OurAirports; see its README) and
+`sim/tools/terrain` (Copernicus DEM, ESA WorldCover imagery, OurAirports; see its README;
+its `fields.py` adds the optional field data in `data/terrain_extra/fields/`) and
 `data/aircraft/` from `sim/tools/aircraft` (the Blender model exported to glTF; see its README).
 Without it the loading screen says what is missing; `index.html?stubs=1` runs the app with
 stand-ins (a flat field with one runway, a box-and-wings jet and simple kinematics) to try the
@@ -343,9 +344,13 @@ then `page.evaluate(() => __sim.settle(2000))` and `page.screenshot()`.
   cover: © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021)
   processed by ESA WorldCover consortium (CC BY 4.0). Airports: OurAirports (public domain).
   The menu shows the attribution of the data set it loaded.
-* **Terrain detail** (field rows, crops, orchards, terraces, sand, salt, the runway digits),
-  the terrain's hill shadows and the city lights are procedural, made in the browser from the
-  data above; no other textures or data.
+* **Field data** (`data/terrain_extra/fields/`, from `sim/tools/terrain/fields.py`): field
+  outlines, orchards, vineyards and greenhouses © OpenStreetMap contributors, ODbL 1.0, via
+  Overture Maps Foundation (base theme, land use); the fields themselves are segmented from the
+  imagery above. Optional: without it each imagery tile is analysed in the browser.
+* **Terrain detail** (field rows, crops, orchards, vineyards, greenhouses, terraces, sand,
+  salt, the runway digits), the terrain's hill shadows and the city lights are procedural,
+  made in the browser from the data above; no other textures or data.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here.

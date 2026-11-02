@@ -59,8 +59,8 @@ extinction at the camera altitude, so standard three.js materials fade like the 
 | `terrain/terrainShaders.js` | terrain vertex and fragment shaders (ground materials, water, runway paint, city lights) |
 | `terrain/textures.js` | GPU textures: packed integer height / land cover grids, normal maps, L0 tile textures |
 | `terrain/detailTextures.js` | the procedural detail texture array (13 layers: relief, waves, runway glyphs), made at start |
-| `terrain/fieldAnalysis.js` | per L0 tile: segmentation of the imagery into fields, row direction and seed per field (pure JS) |
-| `terrain/tileWorker.js` | worker: fetch and decode an L0 tile, run the field analysis |
+| `terrain/fieldAnalysis.js` | the 16-bit field texel layout; per L0 tile without field data: segmentation of the imagery into fields, row direction and seed per field (pure JS) |
+| `terrain/tileWorker.js` | worker: fetch and decode an L0 tile and its field data (`data/terrain_extra/fields/`), or run the field analysis |
 | `terrain/horizonCore.js` | horizon angles toward the sun over a height field (pure JS) |
 | `terrain/horizonWorker.js` | worker: the near and far horizon maps |
 | `terrain/horizonMap.js` | terrain shadows: the maps on the GPU, `HORIZON_GLSL`, CPU queries |
@@ -97,18 +97,39 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   for grass, crops and shrubs, crowns for trees, stones for bare ground, blotches for
   built-up areas. The detail is mean-free, so it never shifts the imagery's tone, and fades
   out by 4 km.
-* **Ground materials near the camera** (where a pixel is under ~4-8 m; `uGroundDetail`, off
-  on low quality). Each L0 tile is analysed in a worker when it is loaded
-  (`fieldAnalysis.js`: Felzenszwalb-Huttenlocher graph segmentation of the imagery, then per
-  field its long axis and the 4-fold gradient direction of its texture): a 640 x 640 R16UI
-  texture holds per 10 m texel the land cover class, the field's row direction and a random
-  seed. The shader turns that into 0.3-40 m detail: ploughed fields (furrows across the
+* **Ground materials near the camera** (where a pixel's footprint is under ~4-8 m along its
+  short axis, but at least a quarter of its long axis (half on medium), so a grazing view
+  keeps its detail as far as it can resolve it; `uGroundDetail`; the `GROUND_DETAIL` define
+  per quality, see Settings). Per 10 m texel a 640 x 640 R16UI texture per L0 tile holds the
+  land cover class (WorldCover, plus orchards, vineyards and greenhouses mapped in
+  OpenStreetMap), the field's row direction and a random number. **Field data**: built
+  offline for the whole core by `tools/terrain/fields.py` into `data/terrain_extra/fields/`
+  (19 MB): one Felzenszwalb-Huttenlocher segmentation of the imagery in tile windows with
+  800 m of context, stitched into regions across the tile edges, OSM field outlines as extra
+  edges; per field the 4-fold gradient direction of its texture and a random number from its
+  world position. A field cut by a tile edge keeps its rows and seed: over the whole core the
+  row direction differs (> 15 deg) on 7.5 % of neighbouring crop texel pairs across tile edges
+  and 5.2 % inside the tiles (it was 44-56 % across the edges when each tile was analysed on
+  its own; `dev/terrain.analysis.test.mjs` checks it). Without the data the tile worker still
+  analyses each tile on its own (`fieldAnalysis.js`). **Field edges**: a pixel's class is
+  a vote of the four texels around it (bilinear weights; on high also weighted by how close
+  each texel's imagery colour is to the pixel's own, a joint bilateral upsampling, so the
+  6.25 m imagery places the edge inside the 10 m steps), sharpened toward the winner as
+  pixels get small: edges run as smooth lines, antialiased, not as 10 m stairs. The shader
+  turns that into 0.3-40 m detail: ploughed fields (furrows across the
   field's lands, clods), green crops (rows or beds with drip lines), stubble (harvester
-  passes, windrows, straw bales with shadows, tramlines), orchards (crowns on a grid along the
-  rows, with shadows), canopy and shrubs with cast shadows, grass, rock and soil, coastal sand
-  ripples, Dead Sea salt crust with shoreline bands and mud cracks, built-up ground, and
-  stone terraces on the Judean hills (risers and benches following the contours, wall
-  shadows). Every pattern is built around the imagery colour of its texel (mean-preserving
+  passes, windrows, straw bales with shadows (high), tramlines), orchards (each crown an
+  ellipsoid found along the view ray, so it hides the soil behind it, lit by its own normal,
+  its shadow traced along the sun's ray (high); further away, and on medium, hedgerow bands,
+  then their mean, all with the crown cover the eye sees, which grows toward the horizon),
+  vineyards (trellis rows with
+  rounded tops and shadows, the same view parallax), greenhouses (arched plastic bays,
+  gutters, film seams, dust), woodland canopy and shrubs with cast shadows, grass, rock and
+  soil, coastal sand ripples, Dead Sea salt crust with shoreline bands and mud cracks,
+  built-up ground, and stone terraces on the Judean hills (risers and benches following the
+  contours, wall shadows). Every periodic pattern fades to its mean before its period is down
+  to two pixels along its own axis, so rows seen end-on stay sharp while rows seen across
+  fade instead of aliasing. Every pattern is built around the imagery colour of its texel (mean-preserving
   mixes: shrubs, crowns and the soil between them are reference colours scaled to the
   imagery's mean, so they keep a natural hue), so from altitude the ground keeps the
   imagery's tone; the relief (slopes) lights with the sun. Patterns use exact camera-relative
@@ -117,7 +138,7 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   taken out when they are made (their coarse mips are flat): seen from a distance, a tile's
   repetition would otherwise show as a grid of light lines. `/dev/terrain.compile.html`
   checks that, and that every layer wraps without a seam. The imagery itself is magnified
-  with a B-spline bicubic filter within ~1 km (no 6 m blocks).
+  with a B-spline bicubic filter where a pixel is under ~1.5-3 m (high; no 6 m blocks).
 * **Terrain shadows** (`horizonMap.js`): two horizon maps toward the sun (near: 51.2 km at
   25 m, far: 204.8 km at 100 m on high quality; 512 / 1024 / 2048 texels a side on low /
   medium / high) in one R8 texture array, computed in a worker with a convex-hull sweep along
@@ -126,16 +147,39 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   Judean desert's cliffs shade the Dead Sea shore. Recomputed when the sun's azimuth moves
   0.5 deg (2 deg with a high sun) or the camera moves 1/8 of the near map; the old maps stay
   in use meanwhile (a few hundred ms on a desktop CPU), except after a time jump of more than
-  5 deg of sun azimuth, when the terrain casts no shadow until the new maps are there. Other modules can use
-  `HORIZON_GLSL` + `terrain.horizon.uniforms` (`terrainSunVisibility(xz, h, up)` in GLSL,
-  one sampler) or `terrain.sunVisibilityAt(x, y, z)` on the CPU.
+  5 deg of sun azimuth, when the terrain casts no shadow until the new maps are there. The
+  maps are double-buffered: a new pair goes to the GPU in bands of ~0.5 MB per frame
+  (`copyTextureToTexture` into the back texture, `horizon.setRenderer`), then the textures
+  swap, so there is no 8 MB upload in one frame. Other modules can use
+  `HORIZON_GLSL` + `terrain.horizon.uniforms` (`terrainSunVisibility(xz, h, up)` in GLSL for
+  the terrain surface, `terrainSunVisibilityAbove(xz, dh, up)` for a point dh metres above it,
+  e.g. a tree crown or a roof: the map is read where the sun's ray from that point comes down
+  to the ground; one sampler) or `terrain.sunVisibilityAt(x, y, z, dir)` on the CPU (a ray
+  march over the heights at any altitude, earth curvature included). **The jet in the hills'
+  shadow**: the terrain module dims `env.sunLight` (the DirectionalLight of the standard
+  three.js materials: the aircraft and the wingmen; the terrain, roads, buildings and trees
+  light themselves from the atmosphere uniforms and can use the GLSL functions above) by the
+  terrain's sun visibility at the light's target (the jet), smoothed over 0.15 s
+  (`terrain.sunOcclusion`, `stats.sunVisibility`); so at dawn over the Dead Sea or in a valley
+  at sunset the jet is in the shadow the ground shows (at 05:06 solar time, the sun 1.6 deg
+  up over the Moab plateau: 60 m over the water the jet is in shade with the sea, at 400 m
+  above sea level it is lit with the Judean cliffs; scenes `deadsea0506_60_chase` and
+  `deadsea0506_400_chase` of `dev/terrain.shots.mjs`). One factor for the light: a wingman
+  far from the jet gets the jet's.
 * **City lights at night** (`uNight`): street lamps along street grids turned to the
   district's direction (from the field analysis) in built-up land, sodium orange and LED
   white, main roads brighter, each lamp's pool of light stretched along its street so the
   streets read as lit lines between darker blocks; a lamp keeps its energy as a spot of at
   least one pixel, so it stays a point from altitude, and lamps closer than ~2 pixels merge
-  into the district's glow. Tel Aviv - Jaffa is brightest, then Jerusalem. `?cityLights=0`
-  turns them off.
+  into the district's glow. Lamp density and the share of white LEDs follow how urban the
+  surroundings are: the share of built-up land within ~3 km (a triangle filter, 100 m cells
+  in the core, 400 m outside), computed at load into a spare corner of the land cover texture
+  (`writeUrbanShare`), so city centres (Tel Aviv, Bnei Brak, Jerusalem: 0.7-0.85) are denser
+  and whiter than towns (Rehovot 0.4) and villages, with no city hard-coded. Where another
+  module draws real street lamps (`terrain.lampSource`: any object with a `lampRange` getter
+  in metres, such as the roads module), these synthetic lights only fade in beyond 0.8-1.0 of
+  that range, and only as the glow (no made-up street grid next to the real streets), so the
+  two do not double up. `?cityLights=0` turns them off.
 * **Samplers**: heights (core and far) are one packed R16UI texture, land cover (overview and
   far) one packed R8UI texture, all generated detail one texture array; the L0 material
   drops the far colour and far normal map. Every terrain program uses at most 12 texture
@@ -242,7 +286,7 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
 
 | | |
 |---|---|
-| quality (menu) | `low`: no near ground materials, 512^2 horizon maps; `medium`: materials, 1024^2; `high`: materials, 2048^2 (`TERRAIN_QUALITY` in `Terrain.js`) |
+| quality (menu) | `low`: `GROUND_DETAIL 0` (no near ground materials, the land cover macro detail only), 512^2 horizon maps; `medium`: `GROUND_DETAIL 1` (the materials without their second, larger soil / straw / grass layers, orchards as hedgerow bands without single crowns, no bales, field edges from the 10 m vote without the imagery's guidance, plain bilinear imagery; detail while the footprint's short axis is >= half its long one), 1024^2; `high`: `GROUND_DETAIL 2` (all of it), 2048^2 (`TERRAIN_QUALITY` in `Terrain.js`; the define is compiled in, so the cheaper tiers really cost less) |
 | `?terrainDetail=0` | near ground materials off (`terrain.groundDetail`) |
 | `?terrainShadows=0` | terrain shadows off (`terrain.shadows`) |
 | `?cityLights=0` | city lights off (`terrain.cityLights`) |
@@ -265,7 +309,8 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   (runways, water, surface types, airports.json consistency).
 * `node sim/dev/terrain.analysis.test.mjs`: horizon maps against brute force (with earth
   curvature), field analysis on synthetic fields, the overrun corrections.
-* `/dev/terrain.compile.html` (served `sim/`, any GPU): compiles the four terrain programs
+* `/dev/terrain.compile.html` (served `sim/`, any GPU): compiles the twelve terrain programs
+  (base and L0 material, `GROUND_DETAIL` 0 / 1 / 2, with and without the sun's shadow map)
   and lists their sampler units (at most 16 on ANGLE / D3D11), then builds the generated
   ground textures and checks every material layer for seams at its tile edges and for coarse
   content that would show the tile's repetition. `window.__terrainCheck` has the result.
@@ -296,7 +341,11 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   `terrain.group`, `terrain.dispose`; `terrain.groundDetail`, `terrain.shadows`,
   `terrain.cityLights` (switches), `terrain.setQuality(q)` and `terrain.module` (for
   `app.addModule`), `terrain.horizon` (the horizon maps: `uniforms`, `stats`),
-  `terrain.sunVisibilityAt(x, y, z)`, `terrain.setVegetationCover({range, fade})` (a 3D tree
+  `terrain.sunVisibilityAt(x, y, z, dir = sun)`, `terrain.sunOcclusion` (the factor on
+  `env.sunLight`), `terrain.setVegetationCover({range, fade})` (a 3D tree
   module tells the terrain where it draws trees, so the shader paints plain ground under them
-  instead of crowns); `coords.js` also exports `lonLatToEN`, `enToLonLat`,
+  instead of crowns), `terrain.lampSource` (an object with `lampRange` in m, e.g. the roads
+  module: the city lights fade in beyond it), `terrain.fields` (the field data's index when
+  loaded; its OSM attribution is added to `terrain.attribution`), `textures.hCore` (alias of
+  the packed height texture for other modules' shaders); `coords.js` also exports `lonLatToEN`, `enToLonLat`,
   `headingDegFromXZ`, `xzFromHeadingDeg`, `CORE_HALF`, `FAR_HALF`.
