@@ -339,7 +339,7 @@ ${detail ? `if ( uCkDetailOn > 0.5 ) {
   float ckG = ckD.b - 0.5;
   float ckS = ckD.g;
   diffuseColor.rgb *= 1.0 + uCkDetailAmt * ( 0.08 * ckG + 0.06 * ckS );
-  roughnessFactor = clamp( roughnessFactor * ( 1.0 + uCkDetailAmt * ( 0.12 * ckG - 0.3 * ckS ) ), 0.08, 1.0 );
+  roughnessFactor = clamp( roughnessFactor * ( 1.0 + uCkDetailAmt * ( 0.1 * ckG - 0.15 * ckS ) ), 0.08, 1.0 );
 }` : ''}`)
         .replace('#include <aomap_fragment>', `#include <aomap_fragment>
 {

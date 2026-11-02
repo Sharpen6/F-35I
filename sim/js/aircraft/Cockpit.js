@@ -87,15 +87,11 @@ export class Cockpit {
     this.pcd.setMaps(terrain).catch(() => {});
     this.detail = makeDetailTexture(512);
     this.interior = new Interior({ visual, detail: this.detail });
-    this.interior.start().then((s) => {
-      this.interiorStats = s;
-      // the patched materials need new programs: where the driver compiles in parallel
-      // (KHR_parallel_shader_compile, e.g. Chrome on D3D11) compile them in the background, so the
-      // first frame after the patch does not stall; elsewhere the next render compiles them
-      if (renderer && renderer.compileAsync && camera && scene && renderer.extensions.has('KHR_parallel_shader_compile')) {
-        renderer.compileAsync(visual.object3d, camera, scene).catch(() => {});
-      }
-    }).catch((e) => console.warn('Cockpit: interior:', e.message));
+    // (the patched materials need 5-9 new programs: the next render compiles them, once, normally
+    // behind the menu. A compileAsync here would not help: the materials are already patched, and
+    // behind a post chain the scene renders into a target with other program variants)
+    this.interior.start().then((s) => { this.interiorStats = s; })
+      .catch((e) => console.warn('Cockpit: interior:', e.message));
     this.canopy = new CanopyGlass({ root: visual.root, detail: this.detail });
     // the side-stick and the pedals from the pilot's inputs (rig nodes, re-posed after the rig)
     this._inceptors = visual.player ? visual.player.nodes.filter((n) => n.name in INCEPTORS && !n.hinge) : [];
