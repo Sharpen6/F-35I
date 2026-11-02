@@ -93,7 +93,7 @@ uniform mat4 uF35ViewToBody;     // view -> body
 uniform mat4 uAOMat;             // body -> occlusion map clip
 uniform sampler2D uAO;
 uniform vec4 uShadowG;           // depth range (m), body origin's map depth, map half size (m), texel (m)
-uniform vec4 uGround;            // shadow on, occlusion amount, -, reference plane (body y)
+uniform vec4 uGround;            // shadow's strength (0 off), occlusion amount, -, reference plane (body y)
 uniform vec3 uSunShare;          // the light's share of the light on the open ground, per channel
 uniform vec2 uAOScale;           // height scale (m), log2(map size / 256): the blur in metres
 uniform float uPull;             // log-depth pull (relative distance)
@@ -103,7 +103,7 @@ float sunVis(vec3 vp) {
   float vis = 1.0;
   vec4 c = uF35ShadowMat * vec4(vp, 1.0);
   vec3 s = c.xyz * 0.5 + 0.5;
-  if (uGround.x > 0.5 && all(greaterThan(s.xy, vec2(0.0))) && all(lessThan(s.xy, vec2(1.0)))) {
+  if (uGround.x > 0.0 && all(greaterThan(s.xy, vec2(0.0))) && all(lessThan(s.xy, vec2(1.0)))) {
     // the penumbra grows with the distance along the ray behind the jet's middle (sun's disc
     // 0.53 deg), from the filter's own width at the tyres
     float behind = max(s.z - uShadowG.y, 0.0) * uShadowG.x;
@@ -128,6 +128,8 @@ float sunVis(vec3 vp) {
     #endif
     // long shadows fade as the penumbra eats them (sunset)
     vis = mix(vis, 1.0, smoothstep(0.3, 0.6, rm));
+    // and the whole shadow with the height, towards GROUND.maxAgl (not at once)
+    vis = mix(1.0, vis, uGround.x);
   }
   return vis;
 }
@@ -561,13 +563,16 @@ export class JetShadow {
       share.set(lc.r * mu / Math.max(1e-6, lc.r * mu + amb.r), lc.g * mu / Math.max(1e-6, lc.g * mu + amb.g), lc.b * mu / Math.max(1e-6, lc.b * mu + amb.b));
     } else share.set(0, 0, 0);
     this.sunShare = (share.x + share.y + share.z) / 3;
-    const shadowOn = casting && L.y > 0.03 && agl < GROUND.maxAgl;
+    // the shadow fades out over the top 30 % of GROUND.maxAgl (cut at once, it vanished in one
+    // frame while still about two-thirds dark: in plain sight ahead of the jet on a midday take-off)
+    const fade = casting && L.y > 0.03 ? 1 - THREE.MathUtils.smoothstep(agl, 0.7 * GROUND.maxAgl, GROUND.maxAgl) : 0;
+    const shadowOn = fade > 0;
     const aoAmount = 1 - THREE.MathUtils.smoothstep(agl, 3, 14);
     this._aoUsed = aoAmount > 0;
     if (!shadowOn && aoAmount <= 0) { g.visible = false; return; }
     g.visible = true;
     const Gu = this.groundU;
-    Gu.uGround.value.set(shadowOn ? 1 : 0, aoAmount, 0, this.groundY);
+    Gu.uGround.value.set(fade, aoAmount, 0, this.groundY);
     this.agl = agl;
     Gu.uShadowG.value.set(this.depthRange || 40, this.originDepth ?? 0.5, this.halfSize || 9, this.texel || 0.01);
     // the grid: along the light's azimuth (away from it) from the jet, as far as its shadow reaches
