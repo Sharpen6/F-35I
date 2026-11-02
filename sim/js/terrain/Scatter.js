@@ -17,9 +17,10 @@
 //               the ground, where the sun's shadow map covers the ground around the camera, the
 //               closest trees cast into it instead (one shadow per tree either way)
 //
-// Meshes and impostors cross-fade with complementary dither over a narrow band; impostors thin
-// out by rank towards the far range, which grows with the height above the ground (the same
-// reach over the ground from a cruise as from low level). A cell uploads only the trees that
+// Meshes and impostors cross-fade over a narrow band (alpha to coverage where the target is
+// multisampled, else complementary dither); impostors thin out by rank towards the far range,
+// which grows with the height above the ground (the same reach over the ground from a cruise
+// as from low level). A cell uploads only the trees that
 // can be seen from its distance (the far fade's thinning), and more of them as the camera comes
 // closer. Everything is lit by the environment's sun and sky with the same aerial perspective
 // and logarithmic depth as the terrain. Quality: setQuality(), the table below. Off: ?vegetation=0
@@ -95,6 +96,20 @@ export class Scatter {
     this.stats = { cells: 0, instances: 0, capacity: 0, highWater: 0, near: 0, nearTris: 0, bakeMs: 0, atlasMB: 0, workerMs: 0, tileMs: 0, replies: 0, initMs: 0, startMs: 0,
       uploadFailures: 0, evicted: 0, compactions: 0, upgrades: 0, rebakes: 0, freed: 0 };
     this.tuning = { tintGain: 0.92, wind: 1, brightness: 1, shadowStrength: 0.75 };
+    // the mesh / impostor cross-fade (shaders.js, FADE) is by alpha to coverage where the target
+    // of the draw is multisampled (the canvas, or a post chain's target), else by dither: the
+    // flag (uVeg.w) follows the target, set before the impostors' and near meshes' draws
+    const ctxAA = !!renderer?.getContext?.()?.getContextAttributes?.()?.antialias;
+    this._msaaHook = (r) => {
+      const U = this._uniforms;
+      if (!U) return;
+      const rt = r.getRenderTarget();
+      const a2c = (rt ? rt.samples > 0 : ctxAA) ? 1 : 0;
+      if (U.uVeg.value.w === a2c) return;
+      U.uVeg.value.w = a2c;
+      // (draws of the same material in a row do not upload their uniforms again)
+      for (const m of [this._meshMat, this._impMat]) if (m) m.uniformsNeedUpdate = true;
+    };
     this._reset();
     // the terrain's horizon maps (when it has them): the hills toward a low sun shade the trees
     this._horizon = null;
@@ -211,6 +226,7 @@ export class Scatter {
       uploads: this._uploads.length, uploadFailures: s.uploadFailures, evicted: s.evicted, compactions: s.compactions, upgrades: s.upgrades,
       far: Math.round(this._farF), farScale: +this._farScale.toFixed(2), casting: this._casting, inView: this._inView,
       decals: !!(this._decalMesh && this._decalMesh.visible), horizon: !!this._horizon, rebakes: s.rebakes, freed: s.freed,
+      fade: this._uniforms ? (this._uniforms.uVeg.value.w ? 'coverage' : 'dither') : null,
       world: s.world || null, ...this._tileSummary(), memMB: this._memMB(),
       idle: this.idle(),
     };
@@ -448,6 +464,7 @@ export class Scatter {
       this._impMesh.renderOrder = 1;
       this._impMesh.receiveShadow = true;
       this._impMesh.matrixAutoUpdate = false;
+      this._impMesh.onBeforeRender = this._msaaHook;
       this._decalMesh = new THREE.Mesh(g, this._decalMat);
       this._decalMesh.name = 'VegetationShadows';
       this._decalMesh.frustumCulled = false;
@@ -493,6 +510,7 @@ export class Scatter {
         mesh.castShadow = !!this._casting;      // see _updateUniforms
         mesh.customDepthMaterial = this._depthMat;
         mesh.matrixAutoUpdate = false;
+        mesh.onBeforeRender = this._msaaHook;
         mesh.visible = false;
         mesh.userData.tris = src.index.count / 3;
         mesh.userData.cap = n;
@@ -960,7 +978,7 @@ export class Scatter {
     U.uMainCam.value.copy(cam);
     const meshR = Q.mesh * this._meshScale;
     U.uLod.value.set(meshR, Q.band, this._farF, 0.22);
-    U.uVeg.value.set(this.tuning.tintGain, this.tuning.wind, this.tuning.brightness, 0);
+    U.uVeg.value.set(this.tuning.tintGain, this.tuning.wind, this.tuning.brightness, U.uVeg.value.w);   // (w: _msaaHook)
     U.uShadow.value.set(Q.shadow, this.tuning.shadowStrength, 0.3, 1);
     // near the ground the sun's shadow map covers the ground around the camera (the lighting's
     // wide box): the near trees cast into it and their decals are left out (vegCasts). The

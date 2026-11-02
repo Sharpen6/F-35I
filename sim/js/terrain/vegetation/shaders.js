@@ -12,8 +12,9 @@
 //   decals       one draw: each tree's silhouette as seen from the sun, projected onto the
 //                ground: the shadow, blended over the terrain with its haze kept
 //
-// Meshes and impostors cross-fade with complementary screen-space dither over a narrow band at
-// the mesh range; impostors thin out (by rank) towards the far range. Light: sun through the
+// Meshes and impostors cross-fade over a narrow band at the mesh range (FADE: by alpha to
+// coverage where the target is multisampled, else with complementary screen-space dither);
+// impostors thin out (by rank) towards the far range. Light: sun through the
 // atmosphere (wrapped diffuse, the crown's ambient occlusion, translucency against the light),
 // sky and ground ambient, aerial perspective from the sky-view LUT, per vertex, as on the
 // terrain. The sun is hidden by the slope a tree stands on, by the hills toward it when the
@@ -55,7 +56,7 @@ const COMMON = /* glsl */ `
 uniform vec4 uSpA[VEG_NSP];   // tint amount, translucency, sway, far range factor
 uniform vec4 uSpB[VEG_NSP];   // fluff (ragged crown edge), specular, shadow density, unused
 uniform vec3 uSpC[VEG_NSP];   // the species' foliage colour (linear): the tint is a ratio to it
-uniform vec4 uVeg;            // x: tint gain, y: wind, z: brightness, w: unused
+uniform vec4 uVeg;            // x: tint gain, y: wind, z: brightness, w: 1 if the target is multisampled
 uniform vec4 uLod;            // x: mesh range, y: mesh fade band, z: far range, w: far fade fraction
 uniform vec3 uMainCam;        // the view camera (the shadow pass has its own cameraPosition)
 uniform vec4 uCast;           // x: range of the trees casting into the sun's shadow map (0: none), y: its clip units per m
@@ -91,6 +92,25 @@ float vegCanopySun(float y, float wImg, float wc) {
 float vegFarFade(float d, float rank, float farFactor) {
   float r = uLod.z * farFactor * (1.0 - 0.62 * rank);
   return 1.0 - smoothstep(r * (1.0 - uLod.w), r, d);
+}
+`;
+
+// The cross-fade of a tree's mesh and impostor over the band (m: the mesh weight, 1 -> 0), as
+// a factor on the fragment's alpha (fragment shaders only). Multisampled (uVeg.w), by alpha to
+// coverage, staggered: the impostor stays whole while the mesh comes in over the first half of
+// the band, then fades out under the whole mesh. (Alpha a and 1 - a would give both the same
+// samples, a coverage mask grows with alpha, and leave the others empty: the tree would turn
+// see-through mid-band.) The resolve blends the two smoothly: no screen-door pattern, and the
+// tree never thins. Without multisampling, complementary screen-space dither: each pixel the
+// one or the other.
+const FADE = /* glsl */ `
+float vegFadeMesh(float m) {
+  if (uVeg.w > 0.5) return min(1.0, 2.0 * m);
+  return vegIGN(gl_FragCoord.xy) < m ? 1.0 : 0.0;
+}
+float vegFadeImpostor(float m) {
+  if (uVeg.w > 0.5) return min(1.0, 2.0 - 2.0 * m);
+  return vegIGN(gl_FragCoord.xy) < m ? 0.0 : 1.0;
 }
 `;
 
@@ -299,6 +319,7 @@ export const MESH_FRAG = /* glsl */ `
 uniform bool receiveShadow;
 ${ATMOSPHERE_PARS}
 ${COMMON}
+${FADE}
 ${LIGHT}
 ${COVERAGE}
 varying vec3 vRel;
@@ -318,8 +339,9 @@ varying vec3 vIns;
 
 void main() {
   #include <logdepthbuf_fragment>
-  // complementary dither with the impostor of the same tree
-  if (vegIGN(gl_FragCoord.xy) >= vFade) discard;
+  // the cross-fade with the impostor of the same tree
+  float fade = vegFadeMesh(vFade);
+  if (fade <= 0.0) discard;
   int sp = int(vSp + 0.5);
   float dist = max(length(vRel), 1e-3);
   vec3 V = vRel / dist;
@@ -327,7 +349,7 @@ void main() {
   if (!gl_FrontFacing) N = -N;
   float leafAO;
   float cov = vegCoverage(vPart, vUv, vObj, abs(dot(N, V)), uSpB[sp].x, leafAO);
-  float alpha = clamp((cov - 0.5) / max(fwidth(cov), 1e-3) + 0.5, 0.0, 1.0);
+  float alpha = clamp((cov - 0.5) / max(fwidth(cov), 1e-3) + 0.5, 0.0, 1.0) * fade;
   if (alpha < 0.03) discard;
   #ifdef VEG_DEPTH
     gl_FragColor = vec4(1.0);
@@ -467,6 +489,7 @@ export const IMPOSTOR_FRAG = /* glsl */ `
 uniform bool receiveShadow;
 ${ATMOSPHERE_PARS}
 ${COMMON}
+${FADE}
 ${LIGHT}
 uniform highp sampler2DArray uAtlasA;   // albedo (sRGB) + coverage
 uniform highp sampler2DArray uAtlasN;   // normal x / y (billboard space), depth, ambient occlusion
@@ -484,12 +507,13 @@ varying vec3 vIns;
 varying vec3 vHb;
 
 void main() {
-  if (vegIGN(gl_FragCoord.xy) < vP.x) discard;    // the mesh draws these pixels
+  float fade = vegFadeImpostor(vP.x);              // the cross-fade with the tree's mesh
+  if (fade <= 0.0) discard;
   vec4 a0 = texture(uAtlasA, vec3(vUv, vLayer.x));
   vec4 a1 = texture(uAtlasA, vec3(vUv, vLayer.y));
   vec4 A = mix(a0, a1, vLayer.z);
   float cov = A.a;
-  float alpha = clamp((cov - 0.5) / max(fwidth(cov), 1e-3) + 0.5, 0.0, 1.0) * vP.y;
+  float alpha = clamp((cov - 0.5) / max(fwidth(cov), 1e-3) + 0.5, 0.0, 1.0) * vP.y * fade;
   if (alpha < 0.03) discard;
   vec4 n0 = texture(uAtlasN, vec3(vUv, vLayer.x));
   vec4 n1 = texture(uAtlasN, vec3(vUv, vLayer.y));
