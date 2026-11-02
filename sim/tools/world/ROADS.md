@@ -372,7 +372,8 @@ runways.bin: uint8 RGBA, layers x 32 rows x 1024 samples: rgb the imagery's pave
 elevated edge lights on lit runways (every <= 60 m, 1 m outside the edge: frangible stem, yellow
 body, clear dome; AirportLights.js lights them at night), distance-remaining signs 12 m beyond
 the shoulders (a white number on black, the other end's on the back), arresting gear signs
-(a yellow disc on black) and the arresting engines' housings 28 m beyond the shoulders.
+(a yellow disc on black) and the arresting engines' housings 28 m beyond the shoulders. They
+cast the sun's shadow (one draw per airfield in the shadow pass).
 
 **Taxiways and aprons** (`roadShaders.js`, the airfield track's part): concrete slabs on the
 taxiways from 60 m before each holding position to the runway (where jets wait and run up, oil
