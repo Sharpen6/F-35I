@@ -246,7 +246,9 @@ class App {
     const ctx = { renderer: this.renderer, scene: this.scene, camera: this.camera, env: this.env, terrain: this.terrain, visual: this.visual, app: this };
     void ctx;
     // --- graphics modules: one line each, e.g. this.addModule(new Buildings(ctx)); ---
-    if (!STUBS) this.cockpit = this.addModule(new Cockpit(ctx));   // cockpit track
+    // cockpit track; app.cockpit only while it is on (?cockpit=0: the glb's cockpit as exported, and
+    // modules that would drive its displays do not step aside for a module that is not there)
+    if (!STUBS) { const ck = new Cockpit(ctx); if (ck.enabled) this.cockpit = this.addModule(ck); }
   }
 
   /**
