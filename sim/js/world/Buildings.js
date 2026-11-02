@@ -332,7 +332,11 @@ export class Buildings {
    * The depth program is built by the shader warm-up (js/env/warmup.js compileDepth) as three's
    * shadow pass draws it: on the side the pass sets (the back faces: compiled on the front side it
    * was a program the pass never used, and the pass built its own in the first frame with
-   * shadows), with the sun casting, without the scene's fog, into a target.
+   * shadows), with the sun casting, without the scene's fog, into a target. The stand-ins have
+   * the real meshes' attribute layouts (the worker's array types) and are drawn once by the
+   * warm-up's stage pass before they are freed: on Direct3D the first draw with the integer
+   * attributes (iInfo, aFac, aInf, dA, dB: read as floats) builds a vertex shader of its own,
+   * which the first frame that showed buildings paid for.
    */
   _precompile() {
     const tmp = new THREE.Scene(), tmpD = new THREE.Scene();
@@ -340,8 +344,9 @@ export class Buildings {
     const g = new THREE.InstancedBufferGeometry();
     g.setIndex(this._template.index.clone());
     g.setAttribute('position', this._template.position.clone());
-    for (const k of ['iA', 'iB', 'iC', 'iInfo']) g.setAttribute(k, new THREE.InstancedBufferAttribute(new Float32Array(4), 4));
+    for (const k of ['iA', 'iB', 'iC']) g.setAttribute(k, new THREE.InstancedBufferAttribute(new Float32Array(4), 4));
     for (const k of ['iWall', 'iRoof']) g.setAttribute(k, new THREE.InstancedBufferAttribute(new Uint8Array(4), 4, true));
+    g.setAttribute('iInfo', new THREE.InstancedBufferAttribute(new Uint8Array(4), 4));
     g.instanceCount = 1;
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
@@ -399,6 +404,9 @@ export class Buildings {
     } finally {
       if (sun) sun.castShadow = cast;
     }
+    // (drawn once with the main scene's lights, the caster in its shadow pass too)
+    const w = this.app?.warmup;
+    if (typeof w?.stage === 'function') for (const t of [tmp, tmpD]) p.push(w.stage(t, { scene: this.scene }));
     Promise.all(p).then(done, (e) => { console.warn('Buildings: precompile', e); done(); });
   }
 

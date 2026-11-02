@@ -539,7 +539,9 @@ export class Scatter {
    * the bake program as it renders into the bake target, then the three drawn ones (through the
    * shader warm-up, js/env/warmup.js: for the frame's float target and both states of the sun's
    * shadow), and the near trees' shadow-map program as three's shadow pass draws it (they cast
-   * only near the ground: before, it was built in the first frame they did).
+   * only near the ground: before, it was built in the first frame they did). The warm-up's stage
+   * pass then draws the stand-ins once (the real buffers: on Direct3D a program's first draw with
+   * a vertex layout builds shaders of its own), the caster in its shadow pass; not waited for.
    */
   _compile(baker) {
     const r = this.renderer;
@@ -557,13 +559,14 @@ export class Scatter {
       tmp.add(m);
     }
     const w = this.app?.warmup;
-    if (w?.compileDepth) {
-      const caster = new THREE.Mesh(geo, this._meshMat);
-      caster.castShadow = true;
-      caster.customDepthMaterial = this._depthMat;
-      w.compileDepth(caster, this.camera);
-    }
-    return Promise.all([bake, r.compileAsync(tmp, this.camera, this.scene)]);
+    const caster = new THREE.Mesh(geo, this._meshMat);
+    caster.castShadow = true;
+    caster.customDepthMaterial = this._depthMat;
+    caster.frustumCulled = false;
+    w?.compileDepth?.(caster, this.camera);
+    const compiled = Promise.all([bake, r.compileAsync(tmp, this.camera, this.scene)]);
+    if (typeof w?.stage === 'function') for (const o of [tmp, caster]) w.stage(o, { scene: this.scene });
+    return compiled;
   }
 
   // ------------------------------------------------------------------------------ streaming

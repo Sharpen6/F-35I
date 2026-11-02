@@ -43,6 +43,16 @@ const KEEP = 900;                        // and dropped this far beyond it
 
 const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
 
+/** A chunk as the worker sends it (roadMesh.js), of one triangle: the warm-up's stand-ins (Roads.warmup). */
+function standInChunk(group) {
+  return {
+    pos: new Float32Array(9), uv: new Float32Array(6), jd: new Uint16Array(6), nrm: new Int8Array(6),
+    info: new Uint8Array(12), sect: new Uint8Array(12), rad: new Uint8Array(6), dir: new Int8Array(6),
+    idx: new Uint16Array([0, 1, 2]), minY: 0, maxY: 0, baseY: 0, ox: 0, oz: 0, group,
+  };
+}
+const STAND_IN_CELL = { ix: 0, iz: 0, cx: 0, cz: 0 };
+
 // ------------------------------------------------------------------------------------------
 // procedural noise texture (roadMesh.js makeNoiseData). The worker computes it (~0.1 s that the
 // main thread used to spend at start-up) and sends it before the first chunk; until then the
@@ -176,16 +186,20 @@ export class Roads {
    * quality change moves only ranges and uniforms): the road chunks of both groups (their meshes
    * come from the worker; to three only the material, the kind of object and whether the geometry
    * has normals select the program), and through AirportLights the airfield lights, street lamps
-   * and traffic (Points).
+   * and traffic (Points). The stand-ins are built as the real ones are, with the worker's arrays
+   * (one triangle), and drawn once by the warm-up's stage pass: on Direct3D the first draw with
+   * the chunks' integer attributes (aInfo, aSect, aRad) builds a vertex shader of its own, which
+   * the first frame that showed roads paid for. Freed once drawn.
    */
   warmup(w, camera) {
     const tmp = new THREE.Group();
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
-    if (this.enabled) for (const m of this.materials) { const mesh = new THREE.Mesh(g, m); mesh.receiveShadow = true; tmp.add(mesh); }
-    this.lights?.warmupObjects?.(tmp, g);
-    if (tmp.children.length) w.compile(tmp, camera, { scene: this.scene });
-    g.dispose();
+    if (this.enabled) for (let k = 0; k < this.materials.length; k++) tmp.add(this._makeMesh(standInChunk(k), STAND_IN_CELL));
+    this.lights?.warmupObjects?.(tmp);
+    if (!tmp.children.length) return;
+    w.compile(tmp, camera, { scene: this.scene });
+    const free = () => tmp.traverse((o) => o.geometry?.dispose());
+    if (typeof w.stage === 'function') w.stage(tmp, { scene: this.scene }).then(free, free);
+    else free();
   }
 
   async _load() {

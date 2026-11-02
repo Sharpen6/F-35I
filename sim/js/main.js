@@ -35,7 +35,7 @@ import { Roads } from './world/Roads.js';                 // roads, railways, ai
 import { Cockpit } from './aircraft/Cockpit.js';      // cockpit track: live PCD, interior, canopy glass
 import { DisplayLevels } from './env/displayLevels.js';   // lighting fix: the jet's displays at a picture level
 import { Scatter } from './terrain/Scatter.js';           // vegetation (trees, orchards, palms, shrubs)
-import { ShaderWarmup, warmUpApp } from './env/warmup.js';   // start-up: the shader programs before they are needed
+import { ShaderWarmup, warmUpApp, warmUpEarly } from './env/warmup.js';   // start-up: the shader programs before they are needed
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -152,6 +152,8 @@ class App {
       this.warmup.setScene(this.scene, [this.env.sunLight]);
       // the HDR frame and its output transform (the canvas has no MSAA or depth of its own then)
       if (POST && !STUBS) this.post = new (await import('./env/Post.js')).Post({ renderer: this.renderer, env: this.env, quality: this.settings.quality });
+      // the sky's and Post's programs, built by the driver while the data loads (js/env/warmup.js)
+      warmUpEarly(this);
       this.effects = new Effects(this.scene);
       // quality: compile only the tier in use at load (Terrain.js TERRAIN_QUALITY)
       this.terrain = new Terrain({ renderer: this.renderer, scene: this.scene, env: this.env, baseUrl: 'data/terrain/', quality: this.settings.quality });
@@ -335,14 +337,15 @@ class App {
     this.ui.syncMenu(this.settings, sp);
   }
 
-  setTimeOfDay(h, quiet = false) {
+  /** quiet: the menu is not synced; save false: not remembered (the warm-up's own views, js/env/warmup.js). */
+  setTimeOfDay(h, quiet = false, save = true) {
     h = ((h % 24) + 24) % 24;
     this.settings.time = h;
     this.env.setTime(h, (this.spawn && this.spawn.day_of_year) || 172);
     for (const m of this.modules) m.setTime?.(h, (this.spawn && this.spawn.day_of_year) || 172);
     this.env.snapExposure?.();
     this.warmup.check('time', this.camera);
-    this._saveSettings();
+    if (save) this._saveSettings();
     if (!quiet && this.state !== 'flying') this.ui.syncMenu(this.settings, this.spawn);
   }
 
@@ -351,8 +354,11 @@ class App {
     this.settings.quality = q;
     const Q = QUALITY[q];
     const pr = Math.min(window.devicePixelRatio || 1, Q.maxDpr) * Q.scale;
-    this.renderer.setPixelRatio(pr);
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    // (sizing the canvas clears it: the menu's backdrop would be blank while a new program finishes)
+    if (this.renderer.getPixelRatio() !== pr) {
+      this.renderer.setPixelRatio(pr);
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    }
     const sun = this.env.sunLight;
     if (sun && sun.shadow && sun.shadow.mapSize.x !== Q.shadow) {
       sun.shadow.mapSize.set(Q.shadow, Q.shadow);

@@ -336,10 +336,20 @@ export class AirportLights {
   /**
    * Stand-ins for the shader warm-up (js/env/warmup.js, through Roads.warmup): the airfield lights,
    * the street lamp tiles and the traffic (which draws with this.material) are Points of these two
-   * materials, loaded later, near the camera.
+   * materials, loaded later, near the camera. One point each, with the attributes of the real ones
+   * (the lamps' aLamp is bytes read as floats: on Direct3D its first draw builds a vertex shader
+   * of its own, and every program drawn as points a geometry shader for the sprites); the warm-up
+   * draws them once and Roads frees them.
    */
-  warmupObjects(group, geometry) {
-    group.add(new THREE.Points(geometry, this.material), new THREE.Points(geometry, this.lampMaterial));
+  warmupObjects(group) {
+    const lights = new THREE.BufferGeometry();
+    lights.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+    for (const k of ['aColA', 'aColB', 'aDir']) lights.setAttribute(k, new THREE.Float32BufferAttribute(new Float32Array(4), 4));
+    lights.setAttribute('aExt', new THREE.Float32BufferAttribute(new Float32Array(3), 3));
+    const lamps = new THREE.BufferGeometry();
+    lamps.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+    lamps.setAttribute('aLamp', new THREE.BufferAttribute(new Uint8Array(4), 4));
+    group.add(new THREE.Points(lights, this.material), new THREE.Points(lamps, this.lampMaterial));
   }
 
   setQuality(q) {

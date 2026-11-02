@@ -209,12 +209,16 @@ FIRST_JS = r"""new Promise((done) => {
 })"""
 
 # shader programs: a mark (the id the next one gets), the names of those made since a mark, the
-# warm-up's summary (js/env/warmup.js; its "late" list says what made each program after start-up)
+# warm-up's summary (js/env/warmup.js; its "late" list says what made each program after start-up:
+# 'drawn: ...' a frame, the stall, 'missed: ...' an event, 'compiled: ...' a module in the
+# background). The list keeps its last 200 entries: a place in it is kept as lateCount, the number
+# of entries ever made, and the entries since are the list's last (lateCount - mark).
 MARK_JS = "(() => { let id = -1; for (const p of window.__sim.app.renderer.info.programs) id = Math.max(id, p.id); return id + 1; })()"
 MADE_JS = "window.__sim.app.renderer.info.programs.filter((p) => p.id >= %d).map((p) => p.name || p.type || '?')"
 WARMUP_JS = "(() => { const w = window.__sim.app.warmup; return w && w.info ? w.info() : null; })()"
-LATE_JS = "(() => { const w = window.__sim.app.warmup; return w ? w.late.slice(%d) : []; })()"
-LATE_N_JS = "(() => { const w = window.__sim.app.warmup; return w ? w.late.length : 0; })()"
+LATE_JS = ("(() => { const w = window.__sim.app.warmup; if (!w) return []; const n = (w.lateCount ?? w.late.length) - %d;"
+           " return n > 0 ? w.late.slice(-n) : []; })()")
+LATE_N_JS = "(() => { const w = window.__sim.app.warmup; return w ? (w.lateCount ?? w.late.length) : 0; })()"
 
 
 def main():
