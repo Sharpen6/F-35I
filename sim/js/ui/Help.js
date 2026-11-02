@@ -4,14 +4,14 @@ export const CONTROLS = [
   {
     title: 'Flying (keyboard)',
     rows: [
-      ['<kbd>&darr;</kbd> / <kbd>&uarr;</kbd>', 'pull (nose up) / push (nose down): a tap is a small correction, held for half a second it is full stick'],
+      ['<kbd>&darr;</kbd> / <kbd>&uarr;</kbd>', 'pull (nose up) / push (nose down): a tap is a small correction; held on, it is full stick after about 0.7 s'],
       ['<kbd>&larr;</kbd> / <kbd>&rarr;</kbd>', 'roll left / right'],
       ['<kbd>Z</kbd> / <kbd>X</kbd>', 'rudder and nose-wheel steering left / right'],
       ['<kbd>Shift</kbd> / <kbd>Ctrl</kbd> or <kbd>+</kbd> / <kbd>-</kbd>', 'throttle up / down; it stops at MIL: hold on or press again for afterburner'],
       ['<kbd>Page Up</kbd> / <kbd>Page Down</kbd>', 'full afterburner / idle'],
-      ['<kbd>T</kbd>', 'auto-throttle on / off: with the gear down in the air it flies the approach AoA (13 deg) with the throttle; any throttle input takes over (on at the 10 km final start)'],
+      ['<kbd>Y</kbd>', 'auto-throttle on / off: with the gear down in the air it flies the approach AoA (13 deg) with the throttle; any throttle input takes over (on at the 10 km final start)'],
       ['<kbd>B</kbd> (hold)', 'wheel brakes (with <kbd>Ctrl</kbd> held too: throttle back and brakes)'],
-      ['<kbd>Shift</kbd>+<kbd>B</kbd>', 'parking brake on / off (set at the start)'],
+      ['<kbd>Shift</kbd>+<kbd>B</kbd>', 'parking brake on / off (set at the start); it locks the wheels: a take-off or landing on it bursts the tyres'],
       ['<kbd>G</kbd>', 'landing gear up / down'],
       ['<kbd>S</kbd>', 'speed brake'],
       ['<kbd>A</kbd>', 'high-AoA mode on / off: the AoA limit is 50 deg instead of 25 (HI AOA on the helmet display)'],
@@ -71,8 +71,8 @@ export const CONTROLS = [
     rows: [
       ['take-off', 'MIL or afterburner, release the parking brake (Shift+B); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (G) once climbing, then centre the stick: the jet holds the climb (a pull held on keeps the nose coming up)'],
       ['fly-by-wire', 'the stick commands g (pitch rate when slow) and roll rate; let go and the jet holds its flight path and bank; the FCS limits AoA to 25 deg and g to +9 / -3'],
-      ['landing', 'gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (T) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft); idle and brakes (B) after touchdown'],
-      ['helmet display', 'speed (KIAS) left, altitude (ft) right with radar altitude below 5,000 ft, magnetic heading on top; the circle with wings is where the jet is going, the W is where the nose points; dive rungs are dashed with minus numbers'],
+      ['landing', 'gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (Y) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft): the auto-throttle adds no power below 50 ft and closes the throttle from 10 ft (APC RETARD), the flare is yours; idle and brakes (B) after touchdown'],
+      ['helmet display', 'speed (KIAS) left, altitude (ft) right with radar altitude below 5,000 ft, magnetic heading on top; the circle with wings is where the jet is going (above about 15 deg AoA it would be on the cockpit displays: it stops at the glare shield, crossed out), the W is where the nose points; dive rungs are dashed with minus numbers'],
     ],
   },
 ];
@@ -84,6 +84,7 @@ export function helpHTML() {
     for (const [k, v] of sec.rows) h += `<tr><td>${k}</td><td>${v}</td></tr>`;
     h += '</table></div>';
   }
-  h += '<p class="help-note">Joysticks and HOTAS: open <b>Joystick &amp; gamepad</b> in the menu, press <b>Bind</b> next to an action and move the axis or press the button. Bindings are saved in this browser.</p>';
+  h += '<p class="help-note">Joysticks and HOTAS: open <b>Joystick &amp; gamepad</b> in the menu, press <b>Bind</b> next to an action and move the axis or press the button. Bindings are saved in this browser.'
+    + ' A throttle lever takes the throttle back only once it is moved through the throttle setting (after the auto-throttle, the keys or a restart set it; until then the helmet display shows <b>LVR</b> and where the lever is); pushed through MIL into afterburner it takes over at once (go-around).</p>';
   return h;
 }

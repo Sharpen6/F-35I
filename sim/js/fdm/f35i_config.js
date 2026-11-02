@@ -59,6 +59,11 @@ export const F35I_CONFIG = {
     pilotMisc: MASS_PILOT_MISC,
     fuelCapacity: FUEL_CAPACITY,
     fuelDefault: 0.6,                              // fraction at spawn
+    // An approach spawn (in the air, gear down, on a descending path) starts with approach fuel and
+    // the auto-throttle on unless the spawn says otherwise.  At 60 % fuel the 140 kt final is 14 deg
+    // AoA and a fixed throttle decays on the back of the drag curve; keeping these gameplay values
+    // here, versioned with the code that reads them, means the shared spawns.json need not carry them.
+    fuelApproach: 0.45, apcApproach: true,
     massRef: MASS_REF,
     // inertia at the reference mass (kg m^2, aero body axes x fwd / y right / z down), scaled with mass;
     // estimated from the F-16's (Stevens & Lewis) scaled by mass and size, fuel in the wings and body
@@ -171,6 +176,12 @@ export const F35I_CONFIG = {
     casterDamping: 2000,
     rollingResistance: { runway: 0.015, ground: 0.06, water: 0.2 },
     anchorStiffness: 4e5, anchorDamping: 6e4, anchorCapture: 0.10, anchorRelease: 0.6,
+    // Parking brake = locked main wheels (no anti-skid).  Sliding, a locked tyre grips skidMu of the
+    // surface friction (dry concrete: ~0.6 locked against ~0.8 at the peak).  Skidding wears the tread
+    // through: burstSkid m of skid bursts the tyre (counted in full above burstSpeed[1] m/s, 30 kt,
+    // not at all below burstSpeed[0]; a locked-wheel skid at landing speed bursts a fighter's tyre
+    // within a second or two).  On the rim: burstDrop m lower, rimRolling resistance, rimMu grip.
+    skidMu: 0.75, burstSkid: 100, burstSpeed: [3, 15], burstDrop: 0.12, rimRolling: 0.3, rimMu: 0.45,
     steering: { maxAngle: 60 * D, lateralAccel: 3.4, rate: 60 * D },   // NWS full lock while taxiing
     // Sink rate at a wheel's first contact.  Land-based fighter gear is designed for 10 ft/s
     // (3.05 m/s): beyond it the landing is logged and shown as HARD LANDING; the struts give way at
@@ -209,6 +220,10 @@ export const F35I_CONFIG = {
     groundLawSpeed: [15, 35],                      // m/s: direct stick-to-stabilator below, attitude law above
     groundRollGain: 0.5,
     takeoffModeTime: 10, takeoffModeMaxCas: 230 * 0.514444,
+    // A take-off roll: at least takeoffRollTime s on the wheels and takeoffRollGain m/s faster at
+    // lift-off than at the slowest point of the ground contact (a bounce or a landing roll only slows
+    // down).  After a bounce the attitude it left the runway with is held for up to bounceHoldTime s.
+    takeoffRollTime: 3, takeoffRollGain: 5, bounceHoldTime: 4,
     // s: a pull still held when the take-off law hands over to C* comes in over this time constant
     // (fcs.js).  Taken away for good, a held pull flew the path the jet had just after lift-off and
     // the nose sank while the pilot held it back (a scripted climb needed 150 s instead of 85); all
@@ -222,10 +237,16 @@ export const F35I_CONFIG = {
     // roll
     rollRateMax: 200 * D,
     rollQbar: [0.35, 1500, 11000],                 // fraction at low qbar, qbar (Pa) where it starts / is full
-    rollAlpha: [12 * D, 30 * D, 0.55],             // full below 12 deg AoA, down to 55 % at 30 deg (F-35 keeps
-                                                   // usable roll at high AoA: ~50 deg/s at 25 deg, 125 kt)
+    rollAlpha: [12 * D, 30 * D, 0.55],             // full below 12 deg AoA, down to 55 % at 30 deg
     rollMach: [1.1, 1.8, 0.55],
-    rollBetaMax: 6 * D, rollBetaGain: 3.0, rollCoordMin: 8 * D,   // high-AoA roll / yaw coordination (fcs.js)
+    // High-AoA roll / yaw coordination (fcs.js).  In slow flight the velocity-vector roll is limited by
+    // the yaw rate the rudders can build, not by the schedule above (which would allow ~57 deg/s at
+    // 25 deg AoA and 125 kt): full rudder adds ~11 deg/s^2 of yaw acceleration there, so the roll
+    // builds up to ~25-35 deg/s and 90 deg of bank takes ~3 s from 125 kt (the speed sags to ~111 kt
+    // meanwhile; ~2.2 s at 150 kt, ~1.9 s at 180 kt).
+    // Sideslip limit and its linear gain close to the limit, the share of the rudder authority the
+    // roll command plans with (the rest is left to the sideslip loop), and the floor of the cap.
+    rollBetaMax: 6 * D, rollBetaGain: 3.0, rollYawShare: 0.7, rollCoordMin: 8 * D,
     tauP: 0.12,
     kPhi: 1.2, bankSnap: 5 * D, bankHoldRate: 45 * D, bankHoldMaxPitch: 70 * D,
     // yaw
@@ -233,13 +254,19 @@ export const F35I_CONFIG = {
   },
 
   // ------------------------------------------------------------------------------ auto-throttle
-  // Approach power compensator (T key; on at the telnof_final spawn): with the gear down in the air
+  // Approach power compensator (Y key; on at approach spawns): with the gear down in the air
   // it flies the on-speed AoA with the engine while the FCS holds the flight path. On the back side
   // of the drag curve (the approach) a fixed throttle runs away in speed: from the trimmed 140 kt
   // the jet was at 300 kt on the runway 100 s later. Throttle per rad of AoA error (0.08 per deg),
   // its integral, damping on the acceleration along the path (per m/s^2, filtered over vdotTau s),
-  // the range (idle to MIL, never the afterburner) and the slew rate (per s).
-  apc: { alpha: 13 * D, kp: 4.6, ki: 1.2, kd: 0.03, vdotTau: 0.4, min: 0.03, max: 0.75, rate: 0.3 },
+  // the range (idle to MIL, never the afterburner) and the slew rate (per s).  Close to the runway
+  // (main-wheel height): no added power below noAddAgl (50 ft), so a flare is not fought with
+  // power (it used to float 7 s and land 620 m long at full approach speed), and RETARD to idle
+  // over retardTime from retardAgl (10 ft).  An airliner's retard comes at ~27 ft, but its flare
+  // is not limited by a tail: here the 14 deg tail-strike pitch limit caps the flare, and a retard
+  // from 30 ft landed firm (2.6-2.8 m/s against 1.5-2.1 from 10 ft; fdm.test "final").
+  apc: { alpha: 13 * D, kp: 4.6, ki: 1.2, kd: 0.03, vdotTau: 0.4, min: 0.03, max: 0.75, rate: 0.3,
+    noAddAgl: 50 * 0.3048, retardAgl: 10 * 0.3048, retardTime: 2.0 },
 
   // ------------------------------------------------------------------------------ actuators
   actuators: {

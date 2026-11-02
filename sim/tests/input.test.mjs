@@ -26,14 +26,19 @@ function check(name, cond, info) {
 const run = (n) => { let f; for (let i = 0; i < n; i++) f = inp.update(DT); return f; };
 
 // ---- keyboard stick: a tap is a small correction, a held key reaches full stick quickly
+// (what a press does to the jet, bank and g, is checked in fdm.test.mjs "keyboard stick")
 {
-  let x = 0, t = 0;
+  let x = 0, t = 0, press = 0;
   for (; t < 0.3 - 1e-9; t += DT) x = keyRamp(x, 1, DT);
   const tap = x;
+  for (; t < 0.4 - 1e-9; t += DT) x = keyRamp(x, 1, DT);
+  press = x;
   for (; x < 1; t += DT) x = keyRamp(x, 1, DT);
-  // a 0.3 s tap used to be 0.78 of full stick (20 deg of bank, or 5 g)
-  check('keyboard: a 0.3 s tap', tap > 0.3 && tap < 0.5, `${tap.toFixed(2)} of full stick`);
-  check('keyboard: full stick when held', t > 0.45 && t < 0.7, `after ${t.toFixed(2)} s`);
+  // a 0.3 s tap used to be 0.78 of full stick (20 deg of bank, or 5 g); then a 0.4 s press was
+  // still 0.68 (the second stage rose at 3 /s)
+  check('keyboard: a 0.3 s tap', tap > 0.3 && tap < 0.4, `${tap.toFixed(2)} of full stick`);
+  check('keyboard: a 0.4 s press', press > 0.4 && press < 0.5, `${press.toFixed(2)} of full stick`);
+  check('keyboard: full stick when held', t > 0.6 && t < 0.75, `after ${t.toFixed(2)} s`);
   let back = 0;
   for (x = 1; x > 0; back += DT) x = keyRamp(x, 0, DT);
   check('keyboard: back to centre when released', back < 0.25, `${back.toFixed(2)} s`);
@@ -98,16 +103,83 @@ const run = (n) => { let f; for (let i = 0; i < n; i++) f = inp.update(DT); retu
   check('A: high-AoA mode on / off', a === true && b === false, `${a} -> ${b}`);
 }
 
-// ---- T: the auto-throttle; any throttle input hands the throttle back to the pilot
+// ---- Y: the auto-throttle; any throttle input hands the throttle back to the pilot.  It was T:
+// Ctrl + T (Ctrl is "throttle down") opens a browser tab, which a page cannot cancel.
 {
   inp.setLevers({ throttle: 0.3, apc: true });
   const spawned = inp.update(DT).apc;
   key('keydown', 'Equal'); inp.update(DT); key('keyup', 'Equal');
   const afterKey = inp.levers.apc;
-  key('keydown', 'KeyT'); const on = inp.update(DT).apc; key('keyup', 'KeyT');
-  key('keydown', 'KeyT'); const off = inp.update(DT).apc; key('keyup', 'KeyT');
-  check('auto-throttle: on from the spawn, T toggles it, the throttle keys take over', spawned && !afterKey && on && !off,
-    `spawn ${spawned}, after = ${afterKey}, T ${on} -> ${off}`);
+  key('keydown', 'KeyY'); const on = inp.update(DT).apc; key('keyup', 'KeyY');
+  key('keydown', 'KeyT'); const t = inp.update(DT).apc; key('keyup', 'KeyT');
+  key('keydown', 'KeyY'); const off = inp.update(DT).apc; key('keyup', 'KeyY');
+  check('auto-throttle: on from the spawn, Y toggles it (T does nothing), the throttle keys take over', spawned && !afterKey && on && t && !off,
+    `spawn ${spawned}, after = ${afterKey}, Y ${on}, T ${t}, Y ${off}`);
+  // fullscreen: the Keyboard Lock API keeps Ctrl + W / T / N / Tab / Page Up / Page Down in the page
+  let locked = null, unlocked = false;
+  navigator.keyboard = { lock: (keys) => { locked = keys; return Promise.resolve(); }, unlock: () => { unlocked = true; } };
+  document.fullscreenElement = {};
+  (listeners.dfullscreenchange || []).forEach((fn) => fn());
+  document.fullscreenElement = null;
+  (listeners.dfullscreenchange || []).forEach((fn) => fn());
+  const want = ['KeyW', 'KeyT', 'KeyN', 'Tab', 'PageUp', 'PageDown'];
+  check('fullscreen: browser Ctrl shortcuts locked to the page, released after', !!locked && want.every((k) => locked.includes(k)) && unlocked,
+    `locked ${locked ? locked.join(' ') : 'nothing'}, unlocked ${unlocked}`);
+  delete navigator.keyboard;
+}
+
+// ---- HOTAS throttle lever: soft takeover.  It used to take the throttle wherever it was, so a
+// nudge with the auto-throttle on (here flying 45 %, the lever left at idle) cut it to idle.
+{
+  const stick = {
+    index: 1, id: 'test HOTAS throttle', mapping: '', connected: true, axes: [0, 0, -1],
+    buttons: Array.from({ length: 4 }, () => ({ pressed: false, value: 0 })),
+  };
+  inp.bindings.devices[stick.id] = { axes: { throttle: { type: 'axis', index: 2, invert: false } }, buttons: {} };
+  pads.push(stick);
+  const lever = (x) => { stick.axes[2] = 2 * x - 1; };
+  // the auto-throttle flies the throttle (main.js writes the engine command into the lever)
+  const apcFrames = (n, thr) => { let f; for (let i = 0; i < n; i++) { if (inp.levers.apc) inp.levers.throttle = thr(i); f = inp.update(DT); } return f; };
+  inp.setLevers({ throttle: 0.45, gearDown: true, apc: true });
+  lever(0); apcFrames(10, () => 0.45);
+  lever(0.05); apcFrames(10, () => 0.45);
+  const nudged = { thr: inp.levers.throttle, apc: inp.levers.apc, shown: inp.leverMismatch };
+  check('HOTAS: a nudge with the auto-throttle on does not move the throttle; the HMD shows the lever',
+    Math.abs(nudged.thr - 0.45) < 1e-9 && nudged.apc && Math.abs(nudged.shown - 0.05) < 1e-6,
+    `throttle ${nudged.thr.toFixed(3)}, auto-throttle ${nudged.apc}, lever shown ${nudged.shown}`);
+  // the auto-throttle's command passing a lever at rest does not pick it up
+  lever(0.40); apcFrames(40, () => 0.45);
+  apcFrames(30, (i) => 0.45 - 0.004 * i);
+  check('HOTAS: the throttle passing a lever at rest leaves the auto-throttle on', inp.levers.apc && inp.leverMismatch !== null,
+    `auto-throttle ${inp.levers.apc}, throttle ${inp.levers.throttle.toFixed(3)}, lever shown ${inp.leverMismatch}`);
+  // moved up through the throttle: picks it up there and the auto-throttle is off
+  inp.levers.throttle = 0.45;
+  let pick = null;
+  for (let x = 0.40; x <= 0.62 + 1e-9; x += 0.03) {
+    lever(x);
+    const was = inp.levers.throttle;
+    apcFrames(1, () => 0.45);
+    if (!pick && !inp.levers.apc) pick = { from: was, to: inp.levers.throttle };
+  }
+  apcFrames(5, () => 0.45);
+  check('HOTAS: moved through the throttle it takes over there, then follows the lever',
+    pick && Math.abs(pick.to - pick.from) < 0.04 && Math.abs(inp.levers.throttle - 0.61) < 0.011 && inp.leverMismatch === null,
+    pick ? `picked up at ${pick.to.toFixed(3)} (throttle was ${pick.from.toFixed(3)}), now ${inp.levers.throttle.toFixed(3)}, lever shown ${inp.leverMismatch}` : 'never picked up');
+  // the keys move the throttle: the lever lets go until it is moved through the throttle again
+  key('keydown', 'ShiftLeft', { shiftKey: true }); run(20); key('keyup', 'ShiftLeft');
+  const keyed = inp.levers.throttle;
+  lever(0.64); run(5);
+  check('HOTAS: after the throttle keys the lever must pick the throttle up again', keyed > 0.7 && Math.abs(inp.levers.throttle - keyed) < 1e-9 && Math.abs(inp.leverMismatch - 0.64) < 1e-9,
+    `keys -> ${keyed.toFixed(3)}, lever 0.64 -> throttle ${inp.levers.throttle.toFixed(3)}, lever shown ${inp.leverMismatch}`);
+  // go-around: pushed up through the MIL detent it takes over at once
+  inp.setLevers({ throttle: 0.45, gearDown: true, apc: true });
+  lever(0.6); apcFrames(30, () => 0.45);
+  for (const x of [0.66, 0.72, 0.78, 0.84, 0.9, 0.96, 1]) { lever(x); apcFrames(1, () => 0.45); }
+  check('HOTAS: pushed through the MIL detent (go-around) it takes over at once', !inp.levers.apc && inp.levers.throttle === 1,
+    `auto-throttle ${inp.levers.apc}, throttle ${inp.levers.throttle.toFixed(3)}`);
+  pads.length = 0;
+  delete inp.bindings.devices[stick.id];
+  inp.update(DT);
 }
 
 // ---- standard gamepad: right stick (rudder X, throttle Y) and L3

@@ -1,5 +1,8 @@
 // Landing gear: three oleo struts (spring + damper along the strut axis) with tyre friction
 // (rolling resistance, anti-skid braking, cornering), nose-wheel steering, parking brake.
+// The parking brake locks the main wheels (no anti-skid): a locked wheel that slides grips less,
+// has no cornering force and wears its tread through; a skid at speed bursts the tyre and the wheel
+// runs on its rim (state.wheels[i].burst, the TYRE BURST warning) until the next spawn.
 //
 // Geometry: each contact point is given in the aircraft body frame (+X right, +Y up, -Z forward,
 // origin = model reference point) at the STATIC position, i.e. where the tyre meets the ground when
@@ -19,7 +22,7 @@ export class LandingGear {
   constructor(cfg, cg, massRef) {
     this.cfg = cfg;
     this.units = [];
-    this.events = { touchdown: [], maxClosing: 0, bottomed: false, overload: false, water: false, maxForceRatio: 0 };
+    this.events = { touchdown: [], maxClosing: 0, bottomed: false, overload: false, water: false, maxForceRatio: 0, burst: [] };
     this.rollRate = 0;            // m/s of wheel travel (forward), for the spinning wheels
     this._t = {
       r: new Vector3(), P: new Vector3(), n: new Vector3(), up: new Vector3(), Pc: new Vector3(),
@@ -58,6 +61,7 @@ export class LandingGear {
         // runtime state
         wow: false, wasWow: false, compression: 0, compressionRate: 0, force: 0, steer: 0,
         anchored: false, anchor: new Vector3(), slip: 0,
+        skid: 0, burst: false,     // locked-wheel skid (m, at speed) and the burst tyre it ends in
       };
     });
   }
@@ -72,6 +76,8 @@ export class LandingGear {
       u.wow = u.wasWow = false;
       u.compression = u.compressionRate = u.force = u.steer = 0;
       u.anchored = false;
+      u.skid = 0;
+      u.burst = false;
     }
     this.rollRate = 0;
   }
@@ -105,6 +111,7 @@ export class LandingGear {
     const t = this._t;
     const ev = this.events;
     ev.touchdown.length = 0;
+    ev.burst.length = 0;
     ev.maxClosing = 0;
     ev.bottomed = false;
     ev.overload = false;
@@ -130,8 +137,9 @@ export class LandingGear {
       u.compressionRate = 0;
       if (!ctx.gearDown) { u.wasWow = false; u.anchored = false; continue; }
 
-      // ---- free (extended) contact point in the world
-      t.r.set(u.pos[0] - this.cg.x, u.pos[1] - u.cs - this.cg.y, u.pos[2] - this.cg.z).applyQuaternion(quat);
+      // ---- free (extended) contact point in the world (a burst tyre: the rim, burstDrop higher)
+      const drop = u.burst ? c.burstDrop : 0;
+      t.r.set(u.pos[0] - this.cg.x, u.pos[1] - u.cs + drop - this.cg.y, u.pos[2] - this.cg.z).applyQuaternion(quat);
       t.P.copy(pos).add(t.r);
       const hG = ground.heightAt(t.P.x, t.P.z);
       if (t.P.y > hG + 0.05) { u.wasWow = false; u.anchored = false; continue; }
@@ -184,12 +192,15 @@ export class LandingGear {
       if (!u.isNose) { rollSum += vf; rollN++; } else noseRoll = vf;
 
       let Fl = 0, Fy = 0;
-      // The parking brake is a full brake application: it holds a stopped wheel (the anchor below)
-      // and, once thrust or a slope makes the wheels slide, keeps braking like full pedals (it
-      // used to stop acting altogether the moment the anchor let go).
+      // The parking brake locks the wheel: it holds a stopped wheel (the anchor below) and, once
+      // thrust or a slope makes it slide, the locked wheel skids (below).  It used to brake like
+      // full pedals with anti-skid: a take-off or a landing with it set skidded for a kilometre
+      // with no consequence.
       const pedal = u.brakes ? (u.pos[0] < 0 ? ctx.brakeL : ctx.brakeR) : 0;
-      const brake = u.brakes && ctx.parking ? 1 : pedal;
+      const locked = u.brakes && ctx.parking;
+      const brake = locked ? 1 : pedal;
       const hold = u.brakes && brake >= c.holdBrake;
+      const muWheel = u.burst ? c.rimMu : mu;       // a rim on the runway grips far less than a tyre
       t.vpl.copy(t.vc).addScaledVector(t.n, -t.vc.dot(t.n));
       const vplane = t.vpl.length();
       if (hold && (u.anchored || vplane < c.anchorCapture)) {
@@ -199,7 +210,7 @@ export class LandingGear {
         t.D.copy(t.Pc).sub(u.anchor);
         t.D.addScaledVector(t.n, -t.D.dot(t.n));
         t.F.copy(t.D).multiplyScalar(-c.anchorStiffness).addScaledVector(t.vpl, -c.anchorDamping);
-        const lim = mu * Fn;
+        const lim = muWheel * Fn;
         const mag = t.F.length();
         if (mag > lim) {
           t.F.multiplyScalar(lim / mag);
@@ -208,22 +219,35 @@ export class LandingGear {
         if (vplane > c.anchorRelease) u.anchored = false;
         Fl = t.F.dot(t.f);
         Fy = t.F.dot(t.s);
+      } else if (locked) {
+        // ---- locked wheel sliding: kinetic friction (skidMu of the tyre's grip, the rim's on a
+        //      burst tyre) against the sliding direction, so no cornering force either.  The skid
+        //      wears the tread through: burstSkid m of it at speed bursts the tyre.
+        u.anchored = false;
+        const muK = u.burst ? c.rimMu : c.skidMu * mu;
+        const k = -muK * Fn * Math.tanh(vplane / 0.3) / Math.max(vplane, 1e-6);
+        Fl = k * vf;
+        Fy = k * vs;
+        if (!u.burst) {
+          u.skid += vplane * h * clamp((vplane - c.burstSpeed[0]) / (c.burstSpeed[1] - c.burstSpeed[0]), 0, 1);
+          if (u.skid > c.burstSkid) { u.burst = true; ev.burst.push(u.name); }
+        }
       } else {
         u.anchored = false;
         // rolling resistance and anti-skid braking (never locks: the brake force tracks the friction)
-        Fl = -muRoll * Fn * Math.tanh(vf / 0.3);
-        if (brake > 0) Fl += -brake * c.brakeMu * mu * Fn * Math.tanh(vf / 0.5);
+        Fl = -(u.burst ? c.rimRolling : muRoll) * Fn * Math.tanh(vf / 0.3);
+        if (brake > 0) Fl += -brake * (u.burst ? c.rimMu : c.brakeMu * mu) * Fn * Math.tanh(vf / 0.5);
         // cornering: tyre side force from the slip angle; a castering (free) nose wheel carries none
         if (u.steerable && !ctx.nwsOn) {
           Fy = -c.casterDamping * vs;
         } else {
           const slip = Math.atan2(vs, Math.max(Math.abs(vf), c.slipMinSpeed));
           u.slip = slip;
-          Fy = -c.lateralMu * mu * Fn * Math.tanh(slip / c.slipPeak);
+          Fy = -(u.burst ? c.rimMu : c.lateralMu * mu) * Fn * Math.tanh(slip / c.slipPeak);
         }
         // friction circle
         const Fh = Math.hypot(Fl, Fy);
-        const lim = mu * Fn;
+        const lim = muWheel * Fn;
         if (Fh > lim) { Fl *= lim / Fh; Fy *= lim / Fh; }
       }
 

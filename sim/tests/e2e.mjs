@@ -269,6 +269,10 @@ async function main() {
         finalShot = true;
         await S(() => window.__sim.camera('cockpit'));
         await shot('07_short_final_cockpit', 2000);
+        // flight track: on speed the flight path marker flies free, above the coaming
+        const hF = await S(() => window.__sim.hmd());
+        check('short final: the flight path marker is free, above the coaming', !hF.fpmLimited && hF.fpmY < hF.coamingY,
+          `AoA ${f2(hF.alphaDeg, 1)} deg, marker y ${f2(hF.fpmY, 0)} px, coaming ${f2(hF.coamingY, 0)} px`);
         await S(() => window.__sim.camera('chase'));
       }
       if (s.phase !== 'approach' || s.crashed) break;
@@ -288,6 +292,16 @@ async function main() {
     await step(720);
     const vC = await rigCheck('canopy open');
     check('canopy opens on the ground', vC.rig.canopy > 0.95, `canopy ${f2(vC.rig.canopy, 3)}`);
+
+    // flight track: pulled to 22 deg AoA the flight path marker would sit on the cockpit displays;
+    // it must be held above the coaming (crossed out)
+    await S(() => { window.__sim.start('telnof_final', { time: 12, camera: 'cockpit' }); window.__sim.setInput({ throttle: 0.75, pitch: 0.9 }); });
+    for (let i = 0; i < 80 && (await S(() => window.__sim.fdm().alpha)) < 22 * DEG; i++) await step(6);
+    await shot('08b_aoa22_cockpit', 1200);
+    const hA = await S(() => window.__sim.hmd());
+    check('22 deg AoA: the flight path marker is held above the coaming', hA.alphaDeg > 21.5 && hA.fpmLimited && hA.fpmY < hA.coamingY - 5,
+      `AoA ${f2(hA.alphaDeg, 1)} deg, marker y ${f2(hA.fpmY, 0)} px, coaming ${f2(hA.coamingY, 0)} px`);
+    await S(() => window.__sim.clearInput());
 
     // =============================================================== 4. Jerusalem at sunset
     log('--- jerusalem_sunset');

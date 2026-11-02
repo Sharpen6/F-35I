@@ -13,6 +13,8 @@ import { Vector3 } from 'three';
 import { FlightModel } from '../js/fdm/FlightModel.js';
 import { F35I_CONFIG, configWithRig } from '../js/fdm/f35i_config.js';
 import { atmosphere, tasFromCas, KT, G0 } from '../js/fdm/atmosphere.js';
+import { TestPilot } from '../js/test/TestPilot.js';
+import { keyRamp } from '../js/input/Input.js';
 
 const DT = 1 / 60;                    // the app's frame time; the FDM sub-steps at 240 Hz inside
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
@@ -41,6 +43,9 @@ function flatGround(elev, surface = (x, z) => ({ type: 'ground', friction: 0.5 }
 const runwayGround = flatGround(RWY.elev, (x, z) => (Math.abs(x) <= RWY.halfWidth && z <= RWY.zSouth && z >= RWY.zNorth
   ? { type: 'runway', friction: 0.8 } : { type: 'ground', friction: 0.5 }));
 const seaLevelLand = flatGround(0);
+// the runway for TestPilot (findRunway's shape): threshold of runway 36 at the south end, heading north
+const RUNWAY = { id: '36', thr: { x: 0, y: RWY.elev, z: RWY.zSouth }, far: { x: 0, y: RWY.elev, z: RWY.zNorth }, hdg: 0, dir: { x: 0, z: -1 },
+  length: RWY.zSouth - RWY.zNorth, width: 2 * RWY.halfWidth };
 
 // ------------------------------------------------------------------------------ reporting
 const results = [];
@@ -165,7 +170,7 @@ function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAft
   const st = fdm.state;
   const z0 = st.position.z;
   const inp = { ...base(), throttle, parkingBrake: parking };
-  let t = 0, rot = false, lo = null, maxPitch = 0, maxAlpha = 0, warnGround = false, warnAir = false;
+  let t = 0, rot = false, lo = null, maxPitch = 0, maxAlpha = 0, warnGround = false, warnAir = false, warnGearUp = false, burst = null;
   let hand = null, qHand = 0, pitchHand = null;   // the take-off -> air law hand-over; max |q| (deg/s) in the 1.5 s after
   while (t < 90 && !st.crashed) {
     if (st.ias_kt >= vr) rot = true;
@@ -175,7 +180,8 @@ function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAft
     fdm.step(DT, inp);
     t += DT;
     const w = st.warnings.includes('PARKING BRAKE');
-    if (st.onGround) warnGround ||= w; else warnAir ||= w;
+    if (st.onGround) warnGround ||= w; else if (st.gear > 0.99) warnAir ||= w; else warnGearUp ||= w;
+    if (!burst && st.tyreBurst) burst = { dist: z0 - st.position.z, ias: st.ias_kt };
     if (rot && !lo && !st.onGround) lo = { t, ias: st.ias_kt, dist: z0 - st.position.z };
     if (lo && hand === null && st.fcsMode === 'air') { hand = t; pitchHand = st.pitch * R2D; }
     if (hand !== null && t - hand <= 1.5) qHand = Math.max(qHand, Math.abs(st.q) * R2D);
@@ -185,7 +191,7 @@ function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAft
       if (t - lo.t > hold) break;
     }
   }
-  return { st, lo, maxPitch, maxAlpha, warnGround, warnAir, qHand, pitchHand };
+  return { st, lo, maxPitch, maxAlpha, warnGround, warnAir, warnGearUp, burst, qHand, pitchHand };
 }
 
 tests.handling = () => {
@@ -214,14 +220,43 @@ tests.handling = () => {
     check('pitch change after the hand-over, part pull held on', p.st.pitch * R2D - p.pitchHand, 2, 40, 'deg', 'the C* law answers a held pull, smoothly');
   }
   {
-    // parking brake left on with full afterburner: it brakes once the wheels slide; the warning only
-    // on the ground
+    // The parking brake locks the main wheels.  It holds the jet at part power (at MIL the thrust
+    // moves so much load onto the unbraked nose wheel that the mains slide: 0.8 x ~110 kN < 122 kN);
+    // a take-off or a landing on it skids the locked tyres until they burst.  Both used to skid for
+    // a kilometre with no consequence (it braked like full pedals with anti-skid).
+    const hold = newFdm();
+    hold.reset({ x: 0, y: RWY.elev, z: 1000, heading_deg: 0, on_ground: true, fuel: 0.6 });
+    const p0 = hold.state.position.clone();
+    for (let i = 0; i < 15 * 60; i++) hold.step(DT, { ...base(), throttle: 0.5, parkingBrake: true });
+    const creep = Math.hypot(hold.state.position.x - p0.x, hold.state.position.z - p0.z);
     const free = takeoffRun({ stick: 1, throttle: 1, vr: 140, hold: 5 });
-    const park = takeoffRun({ stick: 1, throttle: 1, vr: 140, hold: 5, parking: true });
-    info(`max A/B ground roll ${free.lo ? free.lo.dist.toFixed(0) : '-'} m; with the parking brake set ${park.lo ? park.lo.dist.toFixed(0) : '-'} m;`
-      + ` PARKING BRAKE warning on the ground ${park.warnGround}, in the air ${park.warnAir}`);
-    check('ground roll with the parking brake / without', park.lo && free.lo ? park.lo.dist / free.lo.dist : 0, 1.3, 3, '', 'the parking brake drags the sliding wheels like full brakes');
-    checkTrue('PARKING BRAKE warning on the ground only', park.warnGround && !park.warnAir, `ground ${park.warnGround}, air ${park.warnAir}`, 'meaningless once airborne');
+    const park = takeoffRun({ stick: 1, throttle: 1, vr: 140, hold: 5, parking: true, gearUpAfter: 3 });
+    info(`parking brake at 50 % throttle (${(hold.state.engine.thrust / 1000).toFixed(0)} kN): moved ${creep.toFixed(2)} m in 15 s;`
+      + ` max A/B take-off on it: tyres burst ${park.burst ? `${park.burst.dist.toFixed(0)} m into the roll at ${park.burst.ias.toFixed(0)} KIAS` : 'never'},`
+      + ` lift-off after ${park.lo ? park.lo.dist.toFixed(0) : '-'} m (${free.lo ? free.lo.dist.toFixed(0) : '-'} m without);`
+      + ` PARKING BRAKE warning on the ground ${park.warnGround}, in the air gear down ${park.warnAir}, gear up ${park.warnGearUp}`);
+    check('parking brake: holds the jet at 50 % throttle', creep, 0, 0.3, 'm', 'locked wheels on static friction');
+    check('parking brake take-off: the locked tyres burst', park.burst ? park.burst.dist : 1e4, 30, 250, 'm', 'a ~100 m skid at speed wears through the tread (it skidded 600 m with no damage)');
+    checkTrue('parking brake take-off: TYRE BURST shown, no crash', park.st.warnings.includes('TYRE BURST') && !park.st.crashed, park.st.crashReason || park.st.warnings.join(','), 'the wheels run on their rims until the next spawn');
+    checkTrue('PARKING BRAKE warning: with power on the ground and with the gear down in the air', park.warnGround && park.warnAir && !park.warnGearUp,
+      `ground ${park.warnGround}, gear down ${park.warnAir}, gear up ${park.warnGearUp}`, 'a landing on it would burst the tyres');
+  }
+  {
+    // a landing with the parking brake set: 140 KIAS onto the runway at ~1.4 m/s
+    const fdm = newFdm();
+    const r = fdm.reset({ x: 0, y: RWY.elev + 4, z: 0, heading_deg: 0, on_ground: false, gear: 1, speed_ms: tasFromCas(140 * KT, RWY.elev + 4), flight_path_deg: -1.2, fuel: 0.45 });
+    const st = fdm.state;
+    let td = null, burst = null, stop = null;
+    for (let i = 0; i < 90 * 60 && !st.crashed && !stop; i++) {
+      // nose held up for 2 s after the touchdown, then lowered
+      fdm.step(DT, { ...base(), parkingBrake: true, throttle: td ? 0 : r.throttle, pitch: td && i - td.i > 120 ? -0.2 : 0, yaw: clamp(-0.08 * st.position.x - 0.3 * st.velocity.x, -1, 1) });
+      if (!td && st.onGround) td = { z: st.position.z, i };
+      if (td && !burst && st.tyreBurst) burst = { dist: td.z - st.position.z, ias: st.ias_kt };
+      if (td && st.groundSpeed < 0.5) stop = { dist: td.z - st.position.z };
+    }
+    info(`landing on the parking brake: tyres burst ${burst ? `${burst.dist.toFixed(0)} m after the touchdown at ${burst.ias.toFixed(0)} KIAS` : 'never'}, stopped after ${stop ? stop.dist.toFixed(0) : '-'} m`);
+    check('landing on the parking brake: the tyres burst', burst ? burst.dist : 1e4, 20, 200, 'm', 'locked wheels at landing speed (it stopped in 785 m with no damage)');
+    checkTrue('landing on the parking brake: stops on the rims, no crash', stop && !st.crashed && Math.abs(st.position.x) < RWY.halfWidth, st.crashReason || `x ${st.position.x.toFixed(1)} m`, '');
   }
   {
     // slow flight at the 25 deg AoA limit, ~120 KCAS: full right stick
@@ -235,16 +270,27 @@ tests.handling = () => {
     }
     inp.pitch = 1; inp.roll = 1;
     const phi0 = st.roll;
-    let t90 = null, bMax = 0, pMax = 0;
+    const kias0 = st.ias_kt;
+    let t90 = null, t30 = null, bMax = 0, pMax = 0, pDip = 1;
     for (let i = 0; i < 6 * 60 && t90 === null; i++) {
       fdm.step(DT, inp);
+      const pNow = st.p * R2D;
       bMax = Math.max(bMax, Math.abs(st.beta * R2D));
-      pMax = Math.max(pMax, Math.abs(st.p * R2D));
+      pMax = Math.max(pMax, pNow);
+      if (pMax > 10) pDip = Math.min(pDip, pNow / pMax);      // fall-back of the roll rate after its first peak
+      if (t30 === null && Math.abs(st.roll - phi0) * R2D >= 30) t30 = (i + 1) * DT;
       if (Math.abs(st.roll - phi0) * R2D >= 90) t90 = (i + 1) * DT;
     }
-    info(`full stick at ${st.ias_kt.toFixed(0)} KIAS, ${(st.alpha * R2D).toFixed(1)} deg AoA: 90 deg of bank in ${t90 ? t90.toFixed(2) : '-'} s, peak ${pMax.toFixed(0)} deg/s, max sideslip ${bMax.toFixed(1)} deg`);
-    check('slow flight (25 deg AoA): time to 90 deg of bank', t90 ?? 99, 1.5, 3.25, 's', 'roll capped to what the rudders can coordinate; ailerons no longer wind down when the rudders saturate');
-    check('slow flight (25 deg AoA): sideslip in the roll', bMax, 0, 8, 'deg', 'coordination cap holds the sideslip near 6 deg');
+    info(`full stick at ${kias0.toFixed(0)} KIAS (${st.ias_kt.toFixed(0)} at 90 deg), ${(st.alpha * R2D).toFixed(1)} deg AoA: 30 deg of bank in ${t30 ? t30.toFixed(2) : '-'} s,`
+      + ` 90 deg in ${t90 ? t90.toFixed(2) : '-'} s, peak ${pMax.toFixed(0)} deg/s (never below ${(pDip * 100).toFixed(0)} % of it once rolling), max sideslip ${bMax.toFixed(1)} deg`);
+    // Yaw-limited: the rudders build the yaw rate of a velocity-vector roll at ~10 deg/s^2 here, so a
+    // 50 deg/s roll is out of reach (it would need ~4 times the yaw acceleration).  The roll must
+    // build up steadily with the yaw rate: the earlier cap let it overshoot to ~36 deg/s, run the
+    // sideslip into its limit and fall back to ~15 deg/s (a hesitation at ~20 deg of bank).
+    check('slow flight (25 deg AoA): time to 30 deg of bank', t30 ?? 99, 0.8, 1.4, 's', 'the first 30 deg as the yaw rate builds');
+    check('slow flight (25 deg AoA): time to 90 deg of bank', t90 ?? 99, 2.5, 3.2, 's', 'yaw-limited velocity-vector roll (it took 3.38 s before the coordination cap)');
+    check('slow flight (25 deg AoA): roll rate fall-back while rolling', (1 - pDip) * 100, 0, 25, '%', 'no hesitation: the roll rate builds with the yaw rate (it fell back by 63 %)');
+    check('slow flight (25 deg AoA): sideslip in the roll', bMax, 0, 7, 'deg', 'coordination cap holds the sideslip near 6 deg');
   }
 };
 
@@ -463,6 +509,37 @@ tests.roll = () => {
 };
 
 // ==============================================================================================
+tests.keyboard = () => {
+  // The arrow keys through Input's keyRamp, as the app feeds them (60 Hz frames).  The ramp's second
+  // stage used to rise at 3 /s from 0.3: a 0.4 s press was 0.68 of full stick, 18 deg of bank or
+  // 4.9 g, so a short correction overshot.
+  section('Keyboard stick: short presses are small corrections, a held key still reaches the limits');
+  const press = (axis, dur, cas, secs) => {
+    const fdm = newFdm(seaLevelLand);
+    const r = airSpawn(fdm, cas, 3000);
+    const st = fdm.state;
+    const inp = { ...base(), throttle: r.throttle, gearHandle: false };
+    for (let i = 0; i < 30; i++) fdm.step(DT, inp);
+    let x = 0, nMax = 0;
+    for (let i = 0; i < secs * 60; i++) {
+      x = keyRamp(x, i * DT < dur - 1e-9 ? 1 : 0, DT);
+      inp[axis] = x;
+      fdm.step(DT, inp);
+      nMax = Math.max(nMax, st.gLoad);
+    }
+    return { bank: st.roll * R2D, nMax };
+  };
+  const r04 = press('roll', 0.4, 350, 4), r10 = press('roll', 1.0, 350, 4);
+  const p04 = press('pitch', 0.4, 450, 4), p15 = press('pitch', 1.5, 450, 3);
+  info(`350 KCAS: a 0.4 s roll press banks ${r04.bank.toFixed(1)} deg, 1.0 s ${r10.bank.toFixed(0)} deg;`
+    + ` 450 KCAS: a 0.4 s pull peaks at ${p04.nMax.toFixed(2)} g, a 1.5 s pull ${p15.nMax.toFixed(2)} g`);
+  check('bank after a 0.4 s roll press', r04.bank, 4, 15, 'deg', 'a short press is a correction (it was 18 deg)');
+  check('bank after a 1 s roll press', r10.bank, 60, 160, 'deg', 'a held key still rolls briskly');
+  check('peak g of a 0.4 s pull at 450 KCAS', p04.nMax, 1.5, 4, 'g', 'a short pull is a correction (it was 4.9 g)');
+  check('peak g of a 1.5 s pull at 450 KCAS', p15.nMax, 8.5, 9.0, 'g', 'a held key still reaches the 9 g limit');
+};
+
+// ==============================================================================================
 tests.yaw = () => {
   section('Pedals in the air: sideslip command, 300 KCAS at 3,000 m');
   const fdm = newFdm(seaLevelLand);
@@ -677,6 +754,81 @@ tests.final = () => {
     check('auto-throttle: touchdown past the threshold', zTd !== null ? RWY.zSouth - zTd : -1, 100, 700, 'm', 'the 3 deg path from 15 m over the threshold, into the touchdown zone');
     checkTrue('auto-throttle: hard landing without a flare, no crash, then idle and off', !st.crashed && td && td.hard && st.engine.throttle === 0 && !st.apc,
       st.crashReason || `hard ${td ? td.hard : '-'}, throttle ${st.engine.throttle}, engaged ${st.apc}`, 'retards to idle at touchdown and lets go (the lever follows, main.js)');
+  }
+  {
+    // the auto-throttle left on through TestPilot's flare (from 46 ft, as the Help describes): it
+    // used to add power against the pull (0.26 -> 0.49), float ~7 s and land ~680 m long at the full
+    // approach speed.  Now it adds no power below 50 ft and retards to idle from 10 ft.
+    const fdm = newFdm();
+    const dist = 10000;
+    const y = RWY.elev + 15 + dist * Math.tan(3 * D2R);
+    const r = fdm.reset({ x: 0, y, z: RWY.zSouth + dist, heading_deg: 0, on_ground: false, speed_ms: tasFromCas(140 * KT, y), gear: true, flight_path_deg: -3, fuel: 0.45, apc: true });
+    const st = fdm.state;
+    const pilot = new TestPilot({ plan: 'land', runway: RUNWAY, approachKt: 140, apc: true, throttle: r.throttle });
+    let apc = r.apc, lever = r.throttle, thr50 = null, thrMaxLow = 0, retardFt = null, zTd = null, iasTd = 0, iasApp = 0;
+    for (let i = 0; i < 200 * 60 && !st.crashed && zTd === null; i++) {
+      const o = pilot.update(st, DT);
+      if (o.throttle != null) { apc = false; lever = o.throttle; }
+      if (apc && st.apc) lever = st.engine.throttle;          // main.js: the lever follows the APC
+      fdm.step(DT, { ...o, throttle: lever, apc });
+      const hm = pilot._gearHeight(st) / 0.3048;
+      if (hm > 100 && hm < 200) iasApp = st.ias_kt;
+      if (hm < 50 && !st.onGround) {
+        if (thr50 === null) thr50 = st.engine.throttle;
+        thrMaxLow = Math.max(thrMaxLow, st.engine.throttle);
+        if (retardFt === null && st.apcRetard) retardFt = hm;
+      }
+      if (st.onGround) { zTd = st.position.z; iasTd = st.ias_kt; }
+    }
+    const td = st.lastTouchdown;
+    info(`auto-throttle + TestPilot flare: throttle ${thr50 !== null ? thr50.toFixed(2) : '-'} at 50 ft, at most ${thrMaxLow.toFixed(2)} below; RETARD at ${retardFt !== null ? retardFt.toFixed(0) : '-'} ft;`
+      + ` touchdown ${zTd !== null ? (RWY.zSouth - zTd).toFixed(0) : '-'} m past the threshold at ${iasTd.toFixed(1)} KIAS (approach ${iasApp.toFixed(1)}), sink ${td ? td.sink.toFixed(2) : '-'} m/s`);
+    check('APC flare: touchdown past the threshold', zTd !== null ? RWY.zSouth - zTd : -1, 150, 450, 'm', 'no float (it landed 678 m long)');
+    check('APC flare: speed lost in the flare', iasApp - iasTd, 2, 15, 'kt', 'the flare bleeds the approach speed (it touched down 1.4 kt faster)');
+    check('APC flare: throttle rise below 50 ft', thrMaxLow - (thr50 ?? 0), 0, 0.005, '', 'no power against the flare pull (it went 0.26 -> 0.49)');
+    check('APC flare: RETARD height', retardFt ?? -1, 3, 11, 'ft', 'idle from 10 ft (main wheels), as airliner auto-throttles retard near the runway');
+    checkTrue('APC flare: a normal landing', td && !td.hard && !st.crashed, st.crashReason || `sink ${td ? td.sink.toFixed(2) : '-'} m/s`, 'below the 3.05 m/s hard-landing sink rate');
+  }
+  {
+    // a bounce with the flare pull still held (0.25 aft): it used to re-enter the take-off attitude
+    // law, which read the pull as a ~6 deg attitude and pushed the nose down in the air (11 -> 5 deg)
+    const fdm = newFdm();
+    const dist = 2500;
+    const y = RWY.elev + 15 + dist * Math.tan(3 * D2R);
+    const r = fdm.reset({ x: 0, y, z: RWY.zSouth + dist, heading_deg: 0, on_ground: false, speed_ms: tasFromCas(140 * KT, y), gear: true, flight_path_deg: -3, fuel: 0.45, apc: true });
+    const st = fdm.state;
+    let apc = r.apc, lever = r.throttle, pullT = null, td1 = null, lo = null, qUp = null, qCmdMin = 0, mode = '';
+    for (let i = 0; i < 120 * 60 && !st.crashed; i++) {
+      const hm = (st.agl || 0) - 2.44 * Math.sin(Math.max(0, st.pitch - 1.45 * D2R));
+      if (pullT === null && hm < 1.5) pullT = i;              // a late flare: a hard touchdown that bounces
+      if (apc && st.apc) lever = st.engine.throttle;
+      if (apc && st.onGround) { apc = false; lever = 0; }
+      fdm.step(DT, { ...base(), pitch: pullT !== null ? 0.25 : 0, throttle: lever, apc });
+      if (!td1 && st.onGround) td1 = { i, pitch: st.pitch * R2D };
+      if (td1 && !lo && !st.onGround) { lo = { i, pitch: st.pitch * R2D }; mode = st.fcsMode; }
+      if (lo) {
+        if (st.onGround || i - lo.i > 60) break;
+        qCmdMin = Math.min(qCmdMin, fdm.fcs.debug.qCmd * R2D);
+        if (qUp === null && st.q >= 0) qUp = (i - lo.i) * DT;
+      }
+    }
+    info(`bounce with 0.25 aft stick: touchdown at ${td1 ? td1.pitch.toFixed(1) : '-'} deg, left the runway at ${lo ? lo.pitch.toFixed(1) : '-'} deg (main-wheel slap-down), FCS mode ${mode};`
+      + ` nose-down rate stopped after ${qUp !== null ? qUp.toFixed(2) : '-'} s; pitch command at least ${qCmdMin.toFixed(1)} deg/s`);
+    checkTrue('bounce: airborne again after the touchdown', !!lo && !st.crashed, st.crashReason || `bounced ${!!lo}`, 'precondition (a 3.5 m/s touchdown)');
+    check('bounce: pitch-rate command while airborne', qCmdMin, -0.5, 99, 'deg/s', 'never nose-down: it holds the touchdown attitude (it commanded -3 deg/s toward 6 deg)');
+    check('bounce: nose-down rate stopped in the air', qUp ?? 99, 0, 0.5, 's', 'the slap-down from the main wheels is caught before the next contact');
+  }
+  {
+    // the gameplay values of an approach spawn live in the config (versioned with this code), so the
+    // shared spawns.json need not carry them: no fuel / apc fields -> 45 % fuel and the APC on
+    const fdm = newFdm();
+    const y = RWY.elev + 15 + 10000 * Math.tan(3 * D2R);
+    const r = fdm.reset({ x: 0, y, z: RWY.zSouth + 10000, heading_deg: 0, on_ground: false, speed_ms: tasFromCas(140 * KT, y), gear: 1, flight_path_deg: -3 });
+    const fuel = fdm.state.engine.fuelKg / CONFIG.mass.fuelCapacity;
+    const lvl = fdm.reset({ x: 0, y: 3000, z: 0, heading_deg: 0, on_ground: false, speed_ms: 200, gear: 0 });
+    checkTrue('approach spawn defaults: 45 % fuel, auto-throttle on (level spawn: neither)', Math.abs(fuel - 0.45) < 1e-6 && r.apc === true && lvl.apc === false
+      && Math.abs(fdm.state.engine.fuelKg / CONFIG.mass.fuelCapacity - CONFIG.mass.fuelDefault) < 1e-6,
+      `fuel ${(fuel * 100).toFixed(0)} %, apc ${r.apc}; level apc ${lvl.apc}`, 'cfg.mass.fuelApproach / apcApproach');
   }
   {
     // it needs the gear down, and gives way in the 50 deg mode

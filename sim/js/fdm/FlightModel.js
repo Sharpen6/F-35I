@@ -119,7 +119,7 @@ export class FlightModel {
       crashed: false, crashReason: '', warnings: [],
       // extras (SI unless named): handy for the HMD / HUD and tests
       ias_kt: 0, tas_kt: 0, alt_ft: 0, vs_fpm: 0, gamma: 0, groundSpeed: 0, qbar: 0, mass: 0, time: 0,
-      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false, apc: false,
+      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false, apc: false, apcRetard: false, tyreBurst: false,
     };
     this._stance = this._computeStance();
     this.reset({ x: 0, y: 0, z: 0, heading_deg: 0, on_ground: true });
@@ -172,13 +172,16 @@ export class FlightModel {
   // ------------------------------------------------------------------------------ reset / spawn
   /**
    * Spawn from spawns.json: {x, y, z, heading_deg, on_ground, speed_ms} plus optional throttle (0..1),
-   * gear (bool or 0..1), fuel (fraction) or fuelKg, flight_path_deg.  On the ground the wheels are put
-   * on the terrain at (x, z) (y is the ground height); in the air y is the altitude MSL and speed_ms
-   * the true airspeed, and the jet is trimmed for 1 g flight on that path (throttle too unless given).
-   * Returns {throttle, gearDown} so the input layer can match its levers.
+   * gear (bool or 0..1), fuel (fraction) or fuelKg, flight_path_deg, apc (bool).  On the ground the
+   * wheels are put on the terrain at (x, z) (y is the ground height); in the air y is the altitude MSL
+   * and speed_ms the true airspeed, and the jet is trimmed for 1 g flight on that path (throttle too
+   * unless given).  An approach spawn (air, gear down, descending) defaults to cfg.mass.fuelApproach
+   * and the auto-throttle on (cfg.mass.apcApproach).
+   * Returns {throttle, gearDown, apc} so the input layer can match its levers.
    */
   reset(spawn = {}) {
     const cfg = this.cfg;
+    const approach = spawn.on_ground === false && (spawn.gear === true || +spawn.gear >= 0.5) && (+spawn.flight_path_deg || 0) < 0;
     this.crashed = false;
     this.crashReason = '';
     this.lastTouchdown = null;
@@ -186,6 +189,8 @@ export class FlightModel {
     this._timeAirborne = 0;
     this._apcOn = false;
     this._apcRetard = false;
+    this._apcFlare = false;        // RETARD in the flare (below cfg.apc.retardAgl)
+    this._apcFlareRate = 0;
     this._apcI = 0;
     this._apcV = spawn.on_ground === false ? (+spawn.speed_ms || 0) : 0;
     this._apcVdot = 0;
@@ -197,8 +202,9 @@ export class FlightModel {
     this.speedbrake = 0;
     this.canopy = 0;
     this.gear.reset();
+    const fuelDefault = approach && cfg.mass.fuelApproach != null ? cfg.mass.fuelApproach : cfg.mass.fuelDefault;
     if (spawn.fuelKg != null) this.fuelKg = clamp(+spawn.fuelKg, 0, cfg.mass.fuelCapacity);
-    else this.fuelKg = cfg.mass.fuelCapacity * clamp(spawn.fuel != null ? +spawn.fuel : cfg.mass.fuelDefault, 0, 1);
+    else this.fuelKg = cfg.mass.fuelCapacity * clamp(spawn.fuel != null ? +spawn.fuel : fuelDefault, 0, 1);
 
     const x = +spawn.x || 0, z = +spawn.z || 0;
     const heading = (+spawn.heading_deg || 0) * D2R;
@@ -267,8 +273,9 @@ export class FlightModel {
     this._prevOrigin.copy(this._origin);
     this._prevQuat.copy(this._quat);
     this._publish(0, null);
-    // spawn.apc: start with the auto-throttle on (an approach spawn; it needs the gear down)
-    return { throttle, gearDown, apc: !onGround && gearDown && !!spawn.apc };
+    // spawn.apc: start with the auto-throttle on (it needs the gear down); approach spawns default to it
+    const apc = spawn.apc != null ? !!spawn.apc : approach && !!cfg.mass.apcApproach;
+    return { throttle, gearDown, apc: !onGround && gearDown && apc };
   }
 
   /**
@@ -277,8 +284,14 @@ export class FlightModel {
    * from the throttle in use (no jump) and gives way on the ground, with the gear moving, in the
    * 50 deg AoA mode and with the engine out; the input layer turns it off when the pilot moves the
    * lever, and follows its throttle with the lever meanwhile (main.js).
+   * Close to the runway (agl: the main wheels' height) it adds no more power below noAddAgl, and
+   * below retardAgl it closes the throttle to idle over retardTime (RETARD, as an airliner's
+   * auto-throttle does at ~27 ft): the flare then bleeds the approach speed.  Holding 13 deg AoA
+   * through the flare, it used to add power against the pull (0.26 -> 0.49): the jet floated ~7 s
+   * and landed 620 m long at full approach speed.  A climb back above noAddAgl (a balloon or a
+   * go-around flown on it) cancels the retard.
    */
-  _throttleCmd(h, inp, alpha, V, onGround) {
+  _throttleCmd(h, inp, alpha, V, onGround, agl = Infinity) {
     const c = this.cfg.apc;
     const lever = clamp(inp.throttle != null ? +inp.throttle : this._throttle, 0, 1);
     if (!c) return lever;
@@ -291,11 +304,18 @@ export class FlightModel {
     // the jet does not roll down the runway at approach power, nor bounce into a re-engagement
     if (this._apcOn && onGround && inp.apc) this._apcRetard = true;
     const on = !!inp.apc && !this._apcRetard && !onGround && this.gearPos > 0.999 && !inp.highAoA && V > 30 && !this.crashed && this.engine.running;
-    if (!on) { this._apcOn = false; return this._apcRetard ? 0 : lever; }
-    if (!this._apcOn) { this._apcOn = true; this._apcI = this._throttle; }
+    if (!on) { this._apcOn = false; this._apcFlare = false; return this._apcRetard ? 0 : lever; }
+    if (!this._apcOn) { this._apcOn = true; this._apcI = this._throttle; this._apcFlare = false; }
+    if (agl < c.retardAgl && !this._apcFlare) {
+      this._apcFlare = true;
+      this._apcFlareRate = Math.max(this._throttle, 0.05) / c.retardTime;
+    } else if (agl > c.noAddAgl) this._apcFlare = false;
+    if (this._apcFlare) return approach(this._throttle, 0, this._apcFlareRate * h);   // integrator frozen
     const e = alpha - c.alpha;                          // + = slow: more power
-    this._apcI = clamp(this._apcI + c.ki * e * h, c.min, c.max);
-    const cmd = clamp(this._apcI + c.kp * e - c.kd * this._apcVdot, c.min, c.max);
+    const low = agl < c.noAddAgl;
+    if (!low || e < 0) this._apcI = clamp(this._apcI + c.ki * e * h, c.min, c.max);
+    let cmd = clamp(this._apcI + c.kp * e - c.kd * this._apcVdot, c.min, c.max);
+    if (low) cmd = Math.min(cmd, this._throttle);
     return approach(this._throttle, cmd, c.rate * h);
   }
 
@@ -467,7 +487,7 @@ export class FlightModel {
     const onGround = wowMain || wowNose;
 
     // ---------------------------------------------------------------- discrete systems
-    const thr = this._throttleCmd(h, inp, alpha, V, onGround);
+    const thr = this._throttleCmd(h, inp, alpha, V, onGround, aglMains);
     this._throttle = thr;
     const handleDown = inp.gearHandle !== false;
     if (handleDown) this.gearPos = Math.min(1, this.gearPos + h / cfg.gear.retractTime);
@@ -721,12 +741,16 @@ export class FlightModel {
     st.onGround = this.gear.units.some((g) => g.wow);
     // wheels
     const units = this.gear.units;
-    if (st.wheels.length !== units.length) st.wheels = units.map((g) => ({ name: g.name, wow: false, compression: 0, steer: 0, force: 0, staticCompression: g.cs }));
+    if (st.wheels.length !== units.length) st.wheels = units.map((g) => ({ name: g.name, wow: false, compression: 0, steer: 0, force: 0, staticCompression: g.cs, burst: false }));
+    let burst = false;
     for (let i = 0; i < units.length; i++) {
       const g = units[i], o = st.wheels[i];
       o.name = g.name; o.wow = g.wow; o.compression = g.compression; o.steer = g.steer; o.force = g.force;
       o.staticCompression = g.cs;
+      o.burst = g.burst;                     // the tyre burst (a locked-wheel skid): on the rim
+      if (g.burst) burst = true;
     }
+    st.tyreBurst = burst;
     st.gear = this.gearPos;
     // engine
     const e = this.engine;
@@ -759,6 +783,7 @@ export class FlightModel {
     st.lastTouchdown = this.lastTouchdown;
     st.highAoA = !!(inp && inp.highAoA);
     st.apc = this._apcOn;                  // the auto-throttle is flying the throttle
+    st.apcRetard = this._apcOn && this._apcFlare;   // ... closing it in the flare (RETARD)
     // warnings
     const wn = st.warnings;
     wn.length = 0;
@@ -775,8 +800,10 @@ export class FlightModel {
       if (st.ias > lim.vne || st.mach > lim.mmo + 0.05) wn.push('OVERSPEED');
       if (!e.running) wn.push('ENGINE');
       else if (this.fuelKg < 800) wn.push('BINGO FUEL');
-      // taking off against the parking brake (it drags the wheels now); meaningless once airborne
-      if (inp && inp.parkingBrake && this._throttle > 0.5 && st.onGround) wn.push('PARKING BRAKE');
+      // taking off against the parking brake (it locks the wheels: the tyres burst), or about to
+      // land on it (gear down in the air)
+      if (inp && inp.parkingBrake && (st.onGround ? this._throttle > 0.5 : gearDown)) wn.push('PARKING BRAKE');
+      if (burst) wn.push('TYRE BURST');
       if (this._hardTimer > 0) wn.push('HARD LANDING');
     }
     return st;
