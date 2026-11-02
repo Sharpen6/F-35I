@@ -32,7 +32,7 @@ import {
 } from './atmosphereGLSL.js';
 import { sunDirection as solarDirection } from './sun.js';
 import { moonDirection, celestialFrame } from './moon.js';
-import { installCloudShadowChunk, CLOUD_SHADOW_LAYER, CLOUD_SHADOW_WIND } from './cloudShadowChunk.js';
+import { installCloudShadowChunk, CLOUD_SHADOW_LAYER, CLOUD_SHADOW_WIND, CLOUD_SHADOW_FIELD } from './cloudShadowChunk.js';
 import { SkyGlow, LP_N, NATURAL_SKY } from './lightPollution.js';
 
 export { ATMOSPHERE_PARS, ATMOSPHERE_CORE, ATMOSPHERE_SKYVIEW };
@@ -320,7 +320,9 @@ export class Environment {
       uLPHorizon: { value: new THREE.Color(0, 0, 0) },
       // the cumulus layer (set by js/env/Clouds.js; w = 0: no clouds, no cloud shadows)
       uCloudLayer: { value: new THREE.Vector4(1300, 2300, 1, 0) },
-      uCloudWind: { value: new THREE.Vector4(0, 0, 3000, 0) },
+      uCloudWind: { value: new THREE.Vector4(0, 0, 4500, 0) },
+      // the cumulus field's coverage over the land and the sea, streets, heights (js/env/cloudField.js)
+      uCloudField: { value: new THREE.Vector4(0.12, 0.12, 0, 1) },
       uTransmittanceLUT: { value: null },
       uMultiScatLUT: { value: null },
       uSkyViewLUT: { value: null },
@@ -959,6 +961,7 @@ export class Environment {
     // the cumulus layer for the cloud shadows on three's materials (js/env/cloudShadowChunk.js)
     U.uCloudLayer.value.toArray(CLOUD_SHADOW_LAYER);
     U.uCloudWind.value.toArray(CLOUD_SHADOW_WIND);
+    U.uCloudField.value.toArray(CLOUD_SHADOW_FIELD);
   }
 
   /** Render targets this module owns (GPU memory estimate; the PMREM is scene.environment). */

@@ -7,52 +7,45 @@
 // cloud darkened every building in the sunshine around it, and the jet in the sun lit everything
 // that stood in a cloud's shadow. Here three's light loop gets one more factor: each fragment's
 // directional light is multiplied by the transmittance of the cumulus field along the light's
-// ray, at the fragment's own world position, with the same field (same hash, octaves and
-// threshold) as the terrain's shadows and the CPU twin js/env/cloudField.js.
+// ray, at the fragment's own world position, with the same field (the same GLSL, from
+// js/env/cloudField.js cloudFieldGLSL, and threshold) as the terrain's shadows and the CPU twin.
 //
-// The uniforms (csCloudLayer, csCloudWind) carry their own names so no shader that also includes
-// the atmosphere code can clash with them. Their values are shared Float32Arrays: three clones a
+// The uniforms (csCloudLayer, csCloudWind, csCloudCov) carry their own names so no shader that
+// also includes the atmosphere code can clash with them. Their values are shared Float32Arrays: three clones a
 // material's uniforms from ShaderLib, but keeps typed arrays by reference, so writing the arrays
 // once a frame (Environment.update) reaches every material. A ShaderMaterial that uses three's
 // light chunks without these uniforms reads zeros: no shadow, never a broken shader.
 
 import * as THREE from 'three';
+import { cloudFieldGLSL, EDGE } from './cloudField.js';
 
 /** base, top (m MSL), field threshold, optical depth (0: no clouds): Environment's uCloudLayer. */
 export const CLOUD_SHADOW_LAYER = new Float32Array(4);
-/** field offset x, z (m), feature scale (m), -: Environment's uCloudWind. */
-export const CLOUD_SHADOW_WIND = new Float32Array([0, 0, 3000, 0]);
+/** field offset x, z (m), the big cells' size (m), -: Environment's uCloudWind. */
+export const CLOUD_SHADOW_WIND = new Float32Array([0, 0, 4500, 0]);
+/** coverage over the land, over the sea, streets, vertical development: Environment's uCloudField. */
+export const CLOUD_SHADOW_FIELD = new Float32Array([0.12, 0.12, 0, 1]);
 
 const PARS = /* glsl */`
 #if NUM_DIR_LIGHTS > 0
 #define CS_CLOUD_SHADOW
 uniform vec4 csCloudLayer;
 uniform vec4 csCloudWind;
-float csHash2(ivec2 p) {
-  uvec2 q = uvec2(p);
-  uint h = (q.x * 1597334677u) ^ (q.y * 3812015801u);
-  h = h * 747796405u + 2891336453u;
-  h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
-  h = (h >> 22u) ^ h;
-  return float(h) * (1.0 / 4294967295.0);
-}
-float csNoise(vec2 x) {
-  vec2 i = floor(x), f = x - i;
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  ivec2 c = ivec2(i);
-  return mix(mix(csHash2(c), csHash2(c + ivec2(1, 0)), u.x), mix(csHash2(c + ivec2(0, 1)), csHash2(c + ivec2(1, 1)), u.x), u.y);
-}
+uniform vec4 csCloudCov;
+${cloudFieldGLSL('cs', 'csCloudLayer', 'csCloudWind', 'csCloudCov')}
 // transmittance of the cumulus layer towards a directional light, at a view-space position
+// (one return: ANGLE's HLSL warns X4000 on an early one)
 float csCloudShadow(vec3 viewPos, vec3 viewLightDir) {
-  if (csCloudLayer.w <= 0.0) return 1.0;
+  float s = 1.0;
   vec3 wp = ((vec4(viewPos, 1.0) - viewMatrix[3]) * viewMatrix).xyz;
-  if (wp.y > csCloudLayer.y) return 1.0;
-  vec3 L = (vec4(viewLightDir, 0.0) * viewMatrix).xyz;
-  float mid = 0.5 * (csCloudLayer.x + csCloudLayer.y);
-  vec2 xz = wp.xz + L.xz * ((mid - wp.y) / max(L.y, 0.06));
-  vec2 p = (xz + csCloudWind.xy) / csCloudWind.z;
-  float v = 0.5 * csNoise(p) + 0.25 * csNoise(p * 2.03 + 17.1) + 0.125 * csNoise(p * 4.07 + 31.7) + 0.0625 * csNoise(p * 8.13 + 7.3);
-  return exp(-csCloudLayer.w * smoothstep(csCloudLayer.z, csCloudLayer.z + 0.06, v / 0.9375));
+  if (csCloudLayer.w > 0.0 && wp.y <= csCloudLayer.y) {
+    vec3 L = (vec4(viewLightDir, 0.0) * viewMatrix).xyz;
+    float mid = 0.5 * (csCloudLayer.x + csCloudLayer.y);
+    vec2 xz = wp.xz + L.xz * ((mid - wp.y) / max(L.y, 0.06));
+    float v = csCloudField((xz + csCloudWind.xy) / csCloudWind.z);
+    s = exp(-csCloudLayer.w * smoothstep(csCloudLayer.z, csCloudLayer.z + ${EDGE.toFixed(4)}, v));
+  }
+  return s;
 }
 #endif
 `;
@@ -81,6 +74,7 @@ export function installCloudShadowChunk() {
     if (!lib) continue;
     lib.uniforms.csCloudLayer = { value: CLOUD_SHADOW_LAYER };
     lib.uniforms.csCloudWind = { value: CLOUD_SHADOW_WIND };
+    lib.uniforms.csCloudCov = { value: CLOUD_SHADOW_FIELD };
   }
   return true;
 }

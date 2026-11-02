@@ -3,27 +3,37 @@
 //   const clouds = new Clouds(ctx);      // a graphics module (main.js _addGraphicsModules)
 //   ?clouds=clear|few|scattered|broken|cirrus, or the Weather buttons in the menu (settings.clouds)
 //
-// Where the cumulus stand is one procedural field (js/env/cloudField.js, and its GLSL twin
-// atmoCloudCover in atmosphereGLSL.js), drifting with the wind. Every frame:
+// Where the cumulus stand is one procedural field (js/env/cloudField.js: three levels of cells,
+// each holding at most one cloud footprint, so many small puffs and fewer big clouds, grouped in
+// clusters, sometimes in streets, thinner over the sea; js/env/cloudsWeather.js sets it from the
+// preset and the time of day), drifting with the wind. Every frame:
 //
-//   1. cover     the field around the camera, in the wind's frame, in a 1024 x 1024 map (+-60 km),
-//                so the ray marcher reads one texel instead of evaluating the noise at every step.
-//                It is redrawn only when the camera or the drift has moved it by a texel.
+//   1. cover     the field around the camera, in the wind's frame, in two maps: near (+-20 km, 39 m
+//                texels) and far (+-150 km, 293 m, without the small puffs). Each texel holds the
+//                signed distance to the nearest cloud's footprint and that cloud's height, radius
+//                and raggedness. Redrawn only when the camera has moved a good part of the window
+//                or the field's parameters changed (the time of day).
 //   2. march     at half (high, medium) or quarter (low) resolution, each pixel's ray crosses the
 //                cumulus slab (spherical shells: the deck curves away at the horizon) up to the
-//                scene's depth. Density: the field's footprint, pushed around in 3D by the noise and
-//                narrowing towards the top, times a height profile (flat base, rounded top, taller in
-//                the middle of a cloud), eroded by a tiling 3D Perlin-Worley noise (64^3, made on the
-//                GPU at start-up) and, near the camera, by a finer Worley octave (~100 m cells):
-//                wispy at the base, billowy above. Empty air is crossed in long steps, cloud in short
-//                ones (12 m near the camera on high). Lit by the sun (or the moon at night) through
-//                a short light march with a multiple scattering approximation, a two-lobe phase
-//                function and the "powder" darkening of the sunlit creases; by the sky from above
-//                and the ground from below, each dimmed by the cloud between (the base is darker
-//                than the top); at night also by the cities' light from below (lightPollution.js:
-//                orange-grey bases over Gush Dan, dark ones over the desert). The sun's colour is
-//                taken at the cloud's height, so clouds stay lit after sunset on the ground. Then the
-//                cirrus sheet (2D, streaked along the wind) above. Aerial perspective to the cloud.
+//                scene's depth. Empty air is skipped by the maps' distance. A cloud is shaped in
+//                metres: a dome over its footprint (near-vertical sides, a rounded top, a flat base
+//                at the condensation level), its surface pushed out and in by a tiling 3D Perlin-
+//                Worley noise (turrets of ~600-75 m, bigger on bigger clouds) and near the camera by
+//                a finer octave (~80-20 m): billows within billows above, ragged wisps low on the
+//                sides and on the small fragments. The density rises from nothing to full within
+//                ~10 m of that surface (40 m in the wisps; wider where a pixel covers more), so the
+//                outlines are as sharp as a real cumulus' (a mean free path of ~20 m), and the step
+//                follows the pixel's footprint: crisp at 1080p near and far, and in a telephoto.
+//                Lit by the sun (or the moon at night): the optical depth towards it from six short
+//                steps (12 m doubling, the first two with the fine octave: the shadowed creases
+//                between billows) and three long ones through the other clouds' domes (1.2-4.8 km:
+//                clouds shading each other at a low sun); single scattering with a two-lobe phase
+//                function (the silver lining) plus multiple scattering as diffusion; the sky's light
+//                from above and the ground's from below, dimmed by the cloud above and below; at
+//                night also the cities' light from below (lightPollution.js: orange-grey bases over
+//                Gush Dan). The light's colour is taken at the cloud's height (still lit after
+//                sunset on the ground). Then the cirrus sheet (2D, streaked along the wind) above.
+//                Aerial perspective to the cloud.
 //   3. resolve   the march starts each ray at a different offset every frame (interleaved gradient
 //                noise, a 16-frame cycle); a temporal filter reprojects last frame's result to this
 //                frame (by the cloud's own distance, so it holds while the camera turns and flies),
@@ -46,38 +56,32 @@
 import * as THREE from 'three';
 import { ATMOSPHERE_PARS } from './atmosphereGLSL.js';
 import { LP_GLSL } from './lightPollution.js';
-import { thresholdFor, shadowAt, fieldAt } from './cloudField.js';
+import { FIELD, thresholdFor, shadowAt, cloudAt, cloudMapGLSL } from './cloudField.js';
+import { CLOUD_PRESETS, DEFAULT_CLOUDS, fieldParams } from './cloudsWeather.js';
+
+export { CLOUD_PRESETS, DEFAULT_CLOUDS };
 
 /**
- * Weather presets: cumulus coverage (fraction of the sky), base and top (m MSL), feature scale (m),
- * extinction (1/m). Fair-weather cumulus over Israel in summer: bases ~1500-2000 m, tops ~2500-3200 m
- * (the bases were ~1300 m: the Jerusalem sunset start at 1500 m was inside the clouds).
- */
-export const CLOUD_PRESETS = {
-  clear: { label: 'Clear' },
-  few: { label: 'Few cumulus', cu: { coverage: 0.12, base: 1800, top: 2850, scale: 2600, density: 0.05 } },
-  scattered: { label: 'Scattered', cu: { coverage: 0.32, base: 1700, top: 3150, scale: 3200, density: 0.055 } },
-  broken: { label: 'Broken', cu: { coverage: 0.62, base: 1500, top: 2850, scale: 4200, density: 0.06 } },
-  cirrus: { label: 'High cirrus', ci: { coverage: 0.5, alt: 9500, opacity: 0.5 }, cu: { coverage: 0.04, base: 1900, top: 2650, scale: 2600, density: 0.05 } },
-};
-export const DEFAULT_CLOUDS = 'few';
-
-/**
- * Per quality: resolution divisor, most steps along a ray, fewest steps across the cloud slab
- * (a deck seen edge-on), light steps, detail erosion, the shortest step (m) and its growth with the
- * distance (a pixel covers more there), the distance (m) where the fine detail is gone.
+ * Per quality: resolution divisor, most steps along a ray, short and long light steps, the fine
+ * detail octave (0/1), the shortest step (m) and the step per pixel footprint (a step of
+ * stepPix x the width a pixel covers at that distance).
  */
 export const CLOUD_TIERS = {
-  low: { div: 4, steps: 64, minSteps: 14, lightSteps: 3, detail: 0, dtMin: 30, dtGrow: 0.03, detailDist: 0 },
-  medium: { div: 2, steps: 104, minSteps: 20, lightSteps: 4, detail: 1, dtMin: 18, dtGrow: 0.022, detailDist: 6000 },
-  high: { div: 2, steps: 144, minSteps: 28, lightSteps: 5, detail: 1, dtMin: 12, dtGrow: 0.016, detailDist: 9000 },
+  low: { div: 4, steps: 80, lightSteps: 4, farSteps: 1, detail: 0, dtMin: 30, stepPix: 1.6 },
+  medium: { div: 2, steps: 120, lightSteps: 5, farSteps: 2, detail: 1, dtMin: 14, stepPix: 1.25 },
+  high: { div: 2, steps: 160, lightSteps: 6, farSteps: 3, detail: 1, dtMin: 8, stepPix: 1.0 },
 };
 
-const COVER_N = 1024;
-const COVER_HALF = 60000;            // m: the cover map spans +-60 km around the camera
+const NEAR_N = 1024;
+const NEAR_HALF = 20000;             // m: the near map spans +-20 km around the camera (39 m texels)
+const FAR_N = 1024;
+const FAR_HALF = 150000;             // m: the far map +-150 km (293 m texels, the big clouds only)
 const MAX_DIST = 150000;             // m: the march ends here (the deck dissolves into the haze)
 const NOISE_N = 64;
+const P_SHAPE = 2400;                // m: the period of the shape noise (turrets ~600-75 m)
+const P_DETAIL = 620;                // m: of the detail noise (~80-20 m); not a divisor of P_SHAPE
 const WIND = [5.5, 0, 1.5];          // m/s: a summer day's westerly sea breeze (towards the east)
+const RISE = 0.9;                    // m/s: the noise rises through the clouds (turrets grow and fade)
 // cloud shadows: the sun's light under a cumulus is exp(-SHADOW_DEPTH) of the clear value. Not the
 // cloud's optical depth (~50): most of the light gets through diffusely (~15 % under a 1 km cumulus)
 const SHADOW_DEPTH = 1.8;
@@ -136,17 +140,19 @@ const NOISE_FRAG = /* glsl */`
   }`;
 
 // ---------------------------------------------------------------------------------------
-// cover map: the raw field around the camera, in field coordinates (world xz + the drift)
+// cover maps: the field around the camera (cloudField.js cloudAt): signed distance (m), the cloud's
+// height above the base (m), radius (m), raggedness
 
 const COVER_FRAG = /* glsl */`
   precision highp float;
-  uniform vec4 uWin;              // x0, z0 (field coordinates, min corner), size (m)
+  uniform vec4 uWin;              // x0, z0 (field coordinates, min corner), size (m), levels
   in vec2 vUv;
   out vec4 outColor;
   ${ATMOSPHERE_PARS}
+  ${cloudMapGLSL('atmo', 'uCloudLayer', 'uCloudWind', 'uCloudField')}
   void main() {
-    vec2 f = uWin.xy + vUv * uWin.z;
-    outColor = vec4(atmoCloudField(f / uCloudWind.z), 0.0, 0.0, 1.0);
+    vec4 m = atmoCloudMap(uWin.xy + vUv * uWin.z, uWin.w);
+    outColor = vec4(clamp(m.x, -30000.0, 8000.0), m.yzw);
   }`;
 
 // ---------------------------------------------------------------------------------------
@@ -167,22 +173,24 @@ const MARCH_FRAG = /* glsl */`
   precision highp sampler3D;
   uniform sampler2D tDepth;
   uniform sampler3D tNoise;
-  uniform sampler2D tCover;
-  uniform vec4 uCoverWin;         // x0, z0 (field coordinates), 1 / size, -
+  uniform sampler2D tNear;        // cover maps: signed distance (m), height (m), radius (m), raggedness
+  uniform sampler2D tFar;
+  uniform vec4 uNearWin;          // x0, z0 (field coordinates, m), 1 / size, -
+  uniform vec4 uFarWin;
   uniform vec2 uFullSize;
   uniform float uDiv;
   uniform mat4 uProjInv;
   uniform mat4 uViewInv;
   uniform vec4 uDepthParams;      // near, far, log2(far + 1), mode (0 log, 1 reversed, 2 standard)
-  uniform vec4 uMarch;            // most steps, light steps, fewest steps across the slab, frame (0..15)
-  uniform vec4 uStep;             // shortest step (m), growth with distance, detail distance (m), -
+  uniform vec4 uMarch;            // most steps, short light steps, long light steps, frame (0..15)
+  uniform vec4 uStep;             // shortest step (m), step per pixel footprint, low-res pixel (rad), detail (0/1)
   uniform vec4 uLight;            // direction to the sun (or the moon), irradiance above the atmosphere
   uniform vec3 uLightTint;
   uniform vec3 uAmbSky;           // mean sky radiance on the clouds (scene units; not the moon itself)
   uniform vec3 uAmbGround;        // radiance of the ground below
-  uniform vec4 uShape;            // shape period, detail period (m), extinction (1/m), detail (0/1)
+  uniform vec4 uShape;            // -, -, extinction (1/m), -
   uniform vec4 uCirrus;           // altitude (m), field threshold, opacity (0: none), scale (m)
-  uniform vec2 uWindXZ;           // drift of the 3D noise (m)
+  uniform vec2 uEvolve;           // the noise's rise (m): shape, detail
   in vec2 vUv;
   layout(location = 0) out vec4 outColor;   // in-scattered light, transmittance
   layout(location = 1) out vec4 outDist;    // distance to the cloud (km, light weighted), 0: none
@@ -194,55 +202,49 @@ const MARCH_FRAG = /* glsl */`
     float g2 = g * g;
     return (1.0 - g2) / (4.0 * 3.14159265 * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
   }
-  float remap01(float v, float lo, float hi) { return clamp((v - lo) / max(hi - lo, 1e-4), 0.0, 1.0); }
-  // the footprint field at field coordinates (world xz + drift)
-  // (one return: ANGLE's HLSL for D3D11 warned X4000 "potentially uninitialized" on the early one)
-  float coverAt(vec2 f) {
-    vec2 uv = (f - uCoverWin.xy) * uCoverWin.z;
-    float v = 0.0;
-    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) v = atmoCloudField(f / uCloudWind.z);
-    else v = texture(tCover, uv).r;
-    return v;
+  // the cover maps at field point q (m): the near one where it reaches (blended out towards its
+  // edge), the far one beyond
+  vec4 foot(vec2 q) {
+    vec2 un = (q - uNearWin.xy) * uNearWin.z;
+    vec4 f = textureLod(tFar, (q - uFarWin.xy) * uFarWin.z, 0.0);
+    vec2 e = abs(un - 0.5) * 2.0;
+    float wn = 1.0 - smoothstep(0.72, 0.92, max(e.x, e.y));
+    if (wn > 0.0) f = mix(f, textureLod(tNear, un, 0.0), wn);
+    return f;
   }
-  // The footprint is pushed around by up to +-WARP m (the noise's ~270 m Worley octaves): the
-  // walls lean, bulge and break up with height instead of standing as extruded outlines. Empty air
-  // (EMPTY: no footprint even after the push) is crossed in long steps.
-  const float WARP = 150.0;
-  const float EMPTY = 0.07;
-  // cumulus density 0..1 at world position p, height h (m MSL); lod 0: all the detail .. 1: none.
-  // aoSky / aoGround: how much of the sky above / the ground below reaches this point
-  float density(vec3 p, float h, float lod, out float aoSky, out float aoGround) {
-    aoSky = 1.0; aoGround = 1.0;
-    float base = uCloudLayer.x, top = uCloudLayer.y;
-    float hf = (h - base) / (top - base);
-    if (hf <= 0.0 || hf >= 1.0) return 0.0;
-    vec4 n = texture(tNoise, vec3(p.x + uWindXZ.x, h, p.z + uWindXZ.y) / uShape.x);
-    vec2 warp = (n.gb - vec2(0.55, 0.5)) * (2.0 * WARP);
-    float v = coverAt(p.xz + uCloudWind.xy + warp);
-    // narrower towards the top (towers, not prisms)
-    float th = uCloudLayer.z + 0.08 * hf * hf;
-    float cell = smoothstep(th - 0.02, th + 0.1, v);
-    if (cell <= 0.0) return 0.0;
-    // flat base, rounded top; the middle of a cloud towers higher
-    float topF = 0.35 + 0.65 * smoothstep(th, th + 0.18, v);
-    float prof = smoothstep(0.0, 0.07, hf) * smoothstep(topF, topF * 0.4, hf);
-    float shape = cell * prof;
-    if (shape <= 0.0) return 0.0;
-    // erosion: the noise eats the edges and the top first (a remap, so the core stays solid)
-    float billow = n.r * 0.6 + n.g * 0.4;
-    float d = remap01(shape, (1.0 - billow) * 0.72, 1.0);
-    if (d <= 0.0) return 0.0;
-    // near the camera: the fine Worley octaves (~100, 50, 25 m), wispy below, billowy above
-    if (lod < 0.999 && d < 0.75) {
-      vec4 nd = texture(tNoise, vec3(p.x + uWindXZ.x * 1.6, h, p.z + uWindXZ.y * 1.6) / uShape.y);
-      float det = mix(nd.g, 1.0 - nd.g, smoothstep(0.1, 0.5, hf));
-      d = remap01(d, det * 0.38 * (1.0 - lod), 1.0);
+  // the size of the billows (m) on a cloud of height H and radius R
+  float billowSize(vec4 F) { return clamp(0.4 * min(F.y, F.z), 30.0, 320.0); }
+  // the dome over a cloud's footprint at height z above the base: signed distance (m), > 0 inside.
+  // Near-vertical sides and a rounded top (a super-ellipse), cut flat at the base
+  float dome(vec4 F, float z) {
+    float H = max(F.y, 20.0), R = max(F.z, 20.0);
+    float zt = clamp(z / H, 0.0, 1.0);
+    float shrink = pow(max(1.0 - pow(zt, 2.5), 0.0), 0.4);
+    return min(F.x - R * (1.0 - shrink), H - z);
+  }
+  // cumulus density 0..1 at field point q (m), height z above the base, F: the cover map there;
+  // pix: the width (m) of a pixel (or a light step) there; detail: 0..1 the fine octave. sdf: the
+  // signed distance (m, approximate) to the cloud's surface
+  float density(vec2 q, float z, vec4 F, float pix, float detail, out float sdf) {
+    float H = max(F.y, 20.0);
+    float zt = z / H;
+    // billows: the shape noise, more of it on bigger clouds, less where its finest octave would
+    // be below a pixel (no shimmer)
+    float A = billowSize(F) * (1.0 - 0.5 * smoothstep(60.0, 240.0, pix));
+    vec4 n = textureLod(tNoise, vec3(q.x, z - uEvolve.x, q.y) * ${(1 / P_SHAPE).toFixed(8)}, 0.0);
+    float bill = 0.55 * n.r + 0.45 * n.g;
+    sdf = dome(F, z) + A * (bill - 0.5);
+    // wispy low on the cloud and on the ragged small ones
+    float wisp = max(F.w, 1.0 - smoothstep(0.04, 0.3, zt));
+    if (detail > 0.0 && abs(sdf) < 70.0) {
+      vec4 nd = textureLod(tNoise, vec3(q.x, z - uEvolve.y, q.y) * ${(1 / P_DETAIL).toFixed(8)} + 0.37, 0.0);
+      float d = mix(nd.g, 1.0 - nd.b, wisp);
+      sdf += detail * mix(30.0, 60.0, wisp) * (d - 0.5);
     }
-    // the cloud above and below this point (a column of ~1 km leaves ~20 % of the sky's light)
-    float hTop = base + topF * (top - base) * 0.92;
-    aoSky = mix(0.18, 1.0, exp(-max(hTop - h, 0.0) * cell / 380.0));
-    aoGround = mix(0.35, 1.0, exp(-max(h - base, 0.0) * cell / 260.0));
-    return clamp(d * 1.5, 0.0, 1.0);
+    // from nothing to full within ~10 m of the surface (40 m in the wisps), wider where a pixel
+    // is wider; the base flat and sharp
+    float w = mix(10.0, 40.0, wisp) + 0.7 * pix;
+    return clamp(sdf / w, 0.0, 1.0) * clamp(z / (5.0 + 0.7 * pix), 0.0, 1.0);
   }
   float heightOf(vec3 rel, float rc) {
     return length(vec3(rel.x, rel.y + rc, rel.z)) - uAtmoGeom.x;
@@ -252,13 +254,39 @@ const MARCH_FRAG = /* glsl */`
     float b = rc * d.y;
     float c = rc * rc - R * R;
     float disc = b * b - c;
-    if (disc < 0.0) return vec2(-1.0);
-    float s = sqrt(disc);
-    return vec2(-b - s, -b + s);
+    vec2 r = vec2(-1.0);
+    if (disc >= 0.0) { float s = sqrt(disc); r = vec2(-b - s, -b + s); }
+    return r;
   }
   // interleaved gradient noise (Jimenez 2014), a new offset each frame: with the temporal filter
   // the ray starts cover a step evenly over 16 frames
   float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+
+  // optical depth towards the light from field point q, height z: short steps through this cloud
+  // with its billows (12 m doubling; the first two with the fine octave: the creases between the
+  // billows are in their neighbours' shadow), then long ones through the other clouds' domes
+  // (1.2, 2.4, 4.8 km: at a low sun the clouds shade each other)
+  float lightDepth(vec2 q, float z, vec3 Ld, float lu, float detail, float sigma0) {
+    float tau = 0.0, lt = 0.0, ls = 12.0, sd;
+    for (int k = 0; k < 6; k++) {
+      if (k >= int(uMarch.y)) break;
+      lt += ls * 0.5;
+      vec2 qk = q + Ld.xz * lt;
+      float zk = z + lu * lt;
+      vec4 Fk = foot(qk);
+      if (Fk.x > -billowSize(Fk) && zk > 0.0) tau += density(qk, zk, Fk, ls * 0.5, k < 2 ? detail : 0.0, sd) * ls;
+      lt += ls * 0.5;
+      ls *= 2.0;
+    }
+    for (int k = 0; k < 3; k++) {
+      if (k >= int(uMarch.z)) break;
+      float d = 1200.0 * exp2(float(k));
+      float zk = z + lu * d;
+      vec4 Fk = foot(q + Ld.xz * d);
+      if (zk > 0.0) tau += clamp(dome(Fk, zk) / 120.0, 0.0, 1.0) * 400.0 * exp2(float(k));
+    }
+    return tau * sigma0;
+  }
 
   // Light scattered towards the eye by a unit of cloud at optical depth tau from the sun:
   //   single scattering   phase (a strong forward lobe: the silver lining, and a weak backward
@@ -308,75 +336,57 @@ const MARCH_FRAG = /* glsl */`
       t0 = max(t0, 0.0);
       t1 = min(t1, tEnd);
       if (t1 > t0) {
-        // step: short near the camera, growing with distance, but at least uMarch.z steps across
-        // the slab, so a cloud deck seen edge-on is not skipped; three times longer in empty air
+        // steps: empty air is skipped by the cover maps' distance; near a cloud the step follows
+        // the pixel's footprint (never shorter than uStep.x), outside the surface it is part of the
+        // distance to it
         int steps = int(uMarch.x);
-        float dtSpan = max((t1 - t0) / uMarch.z, uStep.x);
-        float t = t0;
-        float dt = min(uStep.x + t * uStep.y + t * t / 250000.0, dtSpan);
-        t += dt * jit;
-        vec3 sunE = vec3(-1.0), city = vec3(0.0);
         float sigma0 = uShape.z;
-        bool coarse = true, wasLong = false;
-        int emptyRun = 0;
-        float aoS, aoG, aoS2, aoG2;
-        for (int i = 0; i < 200; i++) {
+        float t = t0 + max(uStep.x, t0 * uStep.z * uStep.y) * jit;
+        vec3 sunE = vec3(-1.0), city = vec3(0.0);
+        for (int i = 0; i < 256; i++) {
           if (i >= steps || t > t1 || T < 0.01) break;
-          dt = min(uStep.x + t * uStep.y + t * t / 250000.0, dtSpan);
           vec3 rel = dir * t;
           vec3 p = uCameraPos + rel;
-          float h = heightOf(rel, rc);
-          if (coarse) {
-            // empty air: no footprint here even after the warp, or above the tallest top it allows
-            float v = coverAt(p.xz + uCloudWind.xy) + EMPTY;
-            float th = uCloudLayer.z;
-            float hfTop = 0.35 + 0.65 * smoothstep(th, th + 0.18, v);
-            if (v < th || (h - base) / (top - base) > hfTop + 0.03) { t += dt * 3.0; wasLong = true; continue; }
-            // a cloud may start within the last long step: go back and walk in short steps (not
-            // after short ones: back in a footprint whose cloud was eroded away, walk on)
-            coarse = false;
-            if (wasLong) { t = max(t0, t - dt * 2.0); wasLong = false; continue; }
+          float z = heightOf(rel, rc) - base;
+          float pix = t * uStep.z;
+          float dtF = max(uStep.x, pix * uStep.y);
+          vec2 q = p.xz + uCloudWind.xy;
+          vec4 F = foot(q);
+          // far from any footprint (more than its billows reach): skip by the horizontal distance
+          float reach = 0.5 * billowSize(F) + 45.0 + pix;
+          if (F.x < -reach) { t += max(-F.x - reach, dtF); continue; }
+          float detail = uStep.w * (1.0 - smoothstep(12.0, 35.0, pix));
+          float sdf;
+          float dens = density(q, z, F, pix, detail, sdf);
+          if (dens <= 0.0) { t += max(dtF, -sdf * 0.6); continue; }
+          vec3 up = normalize(vec3(rel.x, rel.y + rc, rel.z));
+          float lu = dot(up, uLight.xyz);
+          if (sunE.x < 0.0) {
+            // the light at the cloud's height (still lit when the sun has set on the ground), and
+            // at night the cities' light under the cloud's base here (lightPollution.js)
+            sunE = uLight.w * uLightTint * atmoTransmittance(Rg + base + z, lu);
+            if (uLPBase.y > 0.0) city = lpCloudBase(p.xz);
           }
-          wasLong = false;
-          float lod = uShape.w > 0.5 ? smoothstep(uStep.z * 0.5, uStep.z, t) : 1.0;
-          float dens = density(p, h, lod, aoS, aoG);
-          if (dens > 0.0) {
-            emptyRun = 0;
-            vec3 up = normalize(vec3(rel.x, rel.y + rc, rel.z));
-            float lu = dot(up, uLight.xyz);
-            if (sunE.x < 0.0) {
-              // the light at the cloud's height (still lit when the sun has set on the ground), and
-              // at night the cities' light under the cloud's base here (lightPollution.js)
-              sunE = uLight.w * uLightTint * atmoTransmittance(Rg + h, lu);
-              if (uLPBase.y > 0.0) city = lpCloudBase(p.xz);
-            }
-            // optical depth towards the light: steps of 70 m doubling (to ~2 km)
-            float tau = 0.0, ls = 70.0, lt = 0.0;
-            for (int k = 0; k < 6; k++) {
-              if (k >= int(uMarch.y)) break;
-              lt += ls * 0.5;
-              tau += density(p + uLight.xyz * lt, h + lu * lt, 1.0, aoS2, aoG2) * sigma0 * ls;
-              lt += ls * 0.5;
-              ls *= 2.0;
-            }
-            float powder = mix(1.0, 1.0 - 0.5 * exp(-2.0 * tau - dens * 4.0), 0.5 - 0.5 * cosT);
-            vec3 S = sunScatter(sunE, tau, cosT, powder);
-            // sky light from above, the ground's from below; the cities' light lights the base
-            // and fades faster into the cloud, down to the ~15 % a thick cumulus lets through
-            // diffusely (orange-grey bases; seen from above, a dim glow in the tops)
-            float aoC = 0.15 + 0.85 * clamp((aoG - 0.35) / 0.65, 0.0, 1.0);
-            S += uAmbSky * aoS + uAmbGround * aoG * 0.8 + city * aoC * 0.8;
-            float sigma = dens * sigma0;
-            float sT = exp(-sigma * dt);
-            L += T * S * (1.0 - sT);
-            float w = T * (1.0 - sT);
-            tw += t * w; wsum += w;
-            T *= sT;
-          } else if (++emptyRun > 6) {
-            coarse = true;
-            emptyRun = 0;
-          }
-          t += dt;
+          float tau = lightDepth(q, z, uLight.xyz, lu, detail, sigma0);
+          float powder = mix(1.0, 1.0 - 0.5 * exp(-2.0 * tau - dens * 4.0), 0.5 - 0.5 * cosT);
+          vec3 S = sunScatter(sunE, tau, cosT, powder);
+          // sky light from above, the ground's from below, each dimmed by the cloud between (the
+          // dome above this point, the height above the base); the cities' light lights the base
+          // and fades faster into the cloud, down to the ~15 % a thick cumulus lets through
+          // diffusely (orange-grey bases; seen from above, a dim glow in the tops)
+          float H = max(F.y, 20.0), R = max(F.z, 20.0);
+          float rr = clamp(1.0 - F.x / R, 0.0, 1.0);
+          float zTop = H * pow(max(1.0 - pow(rr, 2.5), 0.0), 0.4);
+          float aoSky = 0.2 + 0.8 / (1.0 + 0.008 * max(zTop - z, 0.0));
+          float aoGround = 0.3 + 0.7 / (1.0 + 0.01 * max(z, 0.0));
+          float aoC = 0.15 + 0.85 / (1.0 + 0.02 * max(z, 0.0));
+          S += uAmbSky * aoSky + uAmbGround * aoGround * 0.8 + city * aoC * 0.8;
+          float sT = exp(-dens * sigma0 * dtF);
+          L += T * S * (1.0 - sT);
+          float w = T * (1.0 - sT);
+          tw += t * w; wsum += w;
+          T *= sT;
+          t += dtF;
         }
       }
     }
@@ -389,7 +399,7 @@ const MARCH_FRAG = /* glsl */`
       L = inA * (1.0 - T) + tA * L;
     }
 
-    // cirrus: a thin sheet high above. Patches (a low-frequency field, threshold from the preset's
+    // cirrus: a thin sheet high above. Patches (a low-frequency fBm, threshold from the preset's
     // coverage) of fibres: long streaks along the upper wind, 0.5-1 km across, bent by a domain warp
     if (uCirrus.z > 0.0 && uCamAltitude < uCirrus.x && T > 0.01) {
       vec2 sc = sphere(rc, dir, Rg + uCirrus.x);
@@ -399,12 +409,14 @@ const MARCH_FRAG = /* glsl */`
         vec2 w = normalize(vec2(${WIND[0].toFixed(2)}, ${WIND[2].toFixed(2)}));
         vec2 xz = p.xz + uCloudWind.xy * 2.5;
         vec2 r = vec2(dot(xz, w), dot(xz, vec2(-w.y, w.x))) / uCirrus.w;   // along, across the wind
-        float patchv = atmoCloudField(r * vec2(0.35, 0.6) + vec2(13.7, 4.1));
+        vec2 pr = r * vec2(0.35, 0.6) + vec2(13.7, 4.1);
+        float patchv = (0.5 * atmoValueNoise(pr) + 0.25 * atmoValueNoise(pr * 2.03 + 17.1)
+          + 0.125 * atmoValueNoise(pr * 4.07 + 31.7) + 0.0625 * atmoValueNoise(pr * 8.13 + 7.3)) / 0.9375;
         float mask = smoothstep(uCirrus.y, uCirrus.y + 0.2, patchv);
         float alpha = 0.0;
         if (mask > 0.0) {
-          vec2 q = r + 0.6 * vec2(atmoValueNoise(r * 0.9 + 3.1), atmoValueNoise(r * 0.9 + 7.7)) - 0.3;
-          float fib = atmoValueNoise(q * vec2(1.2, 9.0)) * 0.65 + atmoValueNoise(q * vec2(2.6, 21.0)) * 0.35;
+          vec2 qc = r + 0.6 * vec2(atmoValueNoise(r * 0.9 + 3.1), atmoValueNoise(r * 0.9 + 7.7)) - 0.3;
+          float fib = atmoValueNoise(qc * vec2(1.2, 9.0)) * 0.65 + atmoValueNoise(qc * vec2(2.6, 21.0)) * 0.35;
           alpha = uCirrus.z * mask * smoothstep(0.42, 0.85, fib);
         }
         alpha *= smoothstep(400000.0, 150000.0, tc);
@@ -550,6 +562,25 @@ function lowTarget(w, h, count = 1) {
 const _v = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+const _cell = { sdf: 0, h: 0, r: 0, rag: 0 };
+
+/** A cover map's target: half floats (metres), linear filtering, clamped at the window's edge. */
+function coverTarget(n) {
+  const t = new THREE.WebGLRenderTarget(n, n, {
+    type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false,
+    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
+    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+  });
+  t.texture.colorSpace = THREE.NoColorSpace;
+  return t;
+}
+
+// the cirrus patches' threshold for a coverage: the value-noise fBm the march uses for them
+// clusters around 0.5 (a fixed table: its quantiles)
+function cirrusThreshold(coverage) {
+  const c = Math.min(0.95, Math.max(0.05, coverage));
+  return 0.5 + (0.5 - c) * 0.42;
+}
 
 export class Clouds {
   constructor(ctx) {
@@ -561,7 +592,11 @@ export class Clouds {
     this.preset = null;
     this.quality = 'high';
     this.tier = CLOUD_TIERS.high;
-    this.wind = [0, 0];                // field offset (m)
+    this.wind = [0, 0];                // field offset (m): field coordinates = world xz + wind
+    FIELD.drift = this.wind;           // the CPU twin of the field drifts with it (cloudField.js)
+    this._hour = 12;
+    this._doy = 172;
+    this._time = 0;                    // s, for the noise's rise
     /** The temporal filter (off: every frame stands alone, as noisy as the march). */
     this.temporal = true;
     /** GPU time budget of the clouds on high (ms; null: never step down). */
@@ -591,14 +626,12 @@ export class Clouds {
     this._noiseMat = fsMaterial('CloudNoise', NOISE_FRAG, { uLayer: { value: 0 } });
     this._noiseReady = false;
 
-    // cover map (redrawn when its window moves: see render())
-    this._coverRT = new THREE.WebGLRenderTarget(COVER_N, COVER_N, {
-      type: THREE.UnsignedByteType, format: THREE.RedFormat, depthBuffer: false,
-      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
-    });
-    this._coverRT.texture.colorSpace = THREE.NoColorSpace;
+    // cover maps, near and far (redrawn when their window moves or the field changes: see render())
+    this._nearRT = coverTarget(NEAR_N);
+    this._farRT = coverTarget(FAR_N);
     this._coverMat = fsMaterial('CloudCover', COVER_FRAG, { ...U, uWin: { value: new THREE.Vector4() } });
-    this._coverKey = '';
+    this._nearKey = '';
+    this._farKey = '';
 
     // march (two targets: light + transmittance, distance), temporal filter (two, ping-pong)
     this._marchRT = null;
@@ -611,15 +644,17 @@ export class Clouds {
     this._prevDir = new THREE.Vector3();
     this._marchMat = fsMaterial('CloudMarch', MARCH_FRAG, {
       ...U,
-      tDepth: { value: null }, tNoise: { value: nt }, tCover: { value: this._coverRT.texture },
-      uCoverWin: { value: new THREE.Vector4() }, uFullSize: { value: new THREE.Vector2() }, uDiv: { value: 2 },
+      tDepth: { value: null }, tNoise: { value: nt },
+      tNear: { value: this._nearRT.texture }, tFar: { value: this._farRT.texture },
+      uNearWin: { value: new THREE.Vector4() }, uFarWin: { value: new THREE.Vector4() },
+      uFullSize: { value: new THREE.Vector2() }, uDiv: { value: 2 },
       uProjInv: { value: new THREE.Matrix4() }, uViewInv: { value: new THREE.Matrix4() },
       uDepthParams: { value: new THREE.Vector4() }, uMarch: { value: new THREE.Vector4() },
       uStep: { value: new THREE.Vector4() },
       uLight: { value: new THREE.Vector4() }, uLightTint: { value: new THREE.Color(1, 1, 1) },
       uAmbSky: { value: new THREE.Color() }, uAmbGround: { value: new THREE.Color() },
-      uShape: { value: new THREE.Vector4(2200, 800, 0.05, 0) }, uCirrus: { value: new THREE.Vector4() },
-      uWindXZ: { value: new THREE.Vector2() },
+      uShape: { value: new THREE.Vector4(0, 0, 0.05, 0) }, uCirrus: { value: new THREE.Vector4() },
+      uEvolve: { value: new THREE.Vector2() },
     });
     this._resolveMat = fsMaterial('CloudResolve', RESOLVE_FRAG, {
       tCur: { value: null }, tDist: { value: null }, tHist: { value: null },
@@ -661,15 +696,30 @@ export class Clouds {
     const P = CLOUD_PRESETS[name];
     const U = this.env.uniforms;
     if (P.cu) {
-      this.layer = { base: P.cu.base, top: P.cu.top, scale: P.cu.scale, threshold: thresholdFor(P.cu.coverage), opticalDepth: SHADOW_DEPTH, density: P.cu.density };
-      U.uCloudLayer.value.set(P.cu.base, P.cu.top, this.layer.threshold, this.enabled ? this.layer.opticalDepth : 0);
+      // the threshold trims the field to the preset's coverage at the afternoon peak over the land
+      // (cloudsWeather.js); other hours and the sea have less through the field's own parameters
+      const peak = { ...FIELD, ...fieldParams(P.cu, 14, this._doy, this.env.year || 2026) };
+      const threshold = thresholdFor(P.cu.coverage, peak);
+      this.layer = { base: P.cu.base, top: P.cu.top, scale: P.cu.scale, threshold, opticalDepth: SHADOW_DEPTH, density: P.cu.density };
+      U.uCloudLayer.value.set(P.cu.base, P.cu.top, threshold, this.enabled ? SHADOW_DEPTH : 0);
       U.uCloudWind.value.z = P.cu.scale;
+      FIELD.threshold = threshold;
     } else {
       this.layer = null;
       U.uCloudLayer.value.w = 0;
     }
-    this.cirrus = P.ci ? { alt: P.ci.alt, threshold: thresholdFor(P.ci.coverage), opacity: P.ci.opacity } : null;
+    this._applyField();
+    this.cirrus = P.ci ? { alt: P.ci.alt, threshold: cirrusThreshold(P.ci.coverage), opacity: P.ci.opacity } : null;
     this.resetHistory();
+  }
+
+  /** The field's parameters for the preset, the hour and the day (cloudsWeather.js): FIELD, uCloudField. */
+  _applyField() {
+    const P = CLOUD_PRESETS[this.preset];
+    if (!P?.cu) return;
+    const f = fieldParams(P.cu, this._hour, this._doy, this.env.year || 2026);
+    Object.assign(FIELD, f);
+    this.env.uniforms.uCloudField.value.set(f.land, f.sea, f.streets, f.vert);
   }
 
   /** Something to draw (Post.js asks before splitting the frame). */
@@ -685,12 +735,32 @@ export class Clouds {
     this._lowW = 0;
   }
 
-  setTime() { this.resetHistory(); }
+  /** The time of day changes the field (more cumulus over the land in the afternoon). */
+  setTime(h, doy) {
+    if (Number.isFinite(h)) this._hour = h;
+    if (Number.isFinite(doy)) this._doy = doy;
+    this._applyField();
+    this.resetHistory();
+  }
 
   /** The next frame starts the temporal filter afresh (a cut: teleport, time jump, new weather). */
   resetHistory() { this._histValid = false; }
 
   reset() { this.env.lightScale = 1; this.resetHistory(); }
+
+  /**
+   * How deep the world point (x, y, z) is in a cloud's dome (m; < 0 outside), from the CPU twin of
+   * the cover map (no billows): the exposure inside a cloud, test scripts.
+   */
+  domeAt(x, y, z) {
+    const L = this.layer;
+    if (!L) return -1e6;
+    const c = cloudAt(x + this.wind[0], z + this.wind[1], FIELD, _cell);
+    const zz = y - L.base, H = Math.max(c.h, 20), R = Math.max(c.r, 20);
+    const zt = Math.min(1, Math.max(0, zz / H));
+    const shrink = Math.pow(Math.max(1 - Math.pow(zt, 2.5), 0), 0.4);
+    return Math.min(c.sdf - R * (1 - shrink), H - zz, zz);
+  }
 
   update(f) {
     // settings.clouds changed (the menu, the console): it replaces a ?clouds= override
@@ -699,6 +769,7 @@ export class Clouds {
     const want = this._urlPreset || s || DEFAULT_CLOUDS;
     if (want !== this.preset) this.setPreset(want);
     const dt = Math.min(f.dt || 0, 0.25);
+    this._time += dt;
     this.wind[0] -= WIND[0] * dt;
     this.wind[1] -= WIND[2] * dt;
     const U = this.env.uniforms;
@@ -717,8 +788,7 @@ export class Clouds {
     const cam = f.camera.getWorldPosition(_v);
     let scale = 0.55 + 0.45 * shadowAt(cam.x, cam.y, cam.z, dir, L, this.wind);
     if (cam.y > L.base && cam.y < L.top) {
-      const v = fieldAt((cam.x + this.wind[0]) / L.scale, (cam.z + this.wind[1]) / L.scale);
-      const inside = Math.min(1, Math.max(0, (v - L.threshold) / 0.08));
+      const inside = Math.min(1, Math.max(0, this.domeAt(cam.x, cam.y, cam.z) / 80));
       scale *= 1 - 0.55 * inside;
     }
     env.lightScale = scale;
@@ -785,36 +855,52 @@ export class Clouds {
     out.set(camera.near, camera.far, Math.log2(camera.far + 1), mode);
   }
 
+  /**
+   * A cover map's window around field point (fx, fz): snapped to `snap` texels, so the same map
+   * serves until the camera (or the drift) has moved that far; redrawn then, or when the field's
+   * parameters changed. Returns the window's min corner in out.
+   */
+  _cover(target, n, half, snap, levels, fx, fz, keyName, out) {
+    const texel = 2 * half / n, cell = texel * snap;
+    const x0 = Math.round(fx / cell) * cell - half, z0 = Math.round(fz / cell) * cell - half;
+    const F = this.env.uniforms.uCloudField.value, Ly = this.env.uniforms.uCloudLayer.value;
+    const key = `${x0}|${z0}|${FIELD.scale}|${F.x.toFixed(4)}|${F.y.toFixed(4)}|${F.z.toFixed(3)}|${F.w.toFixed(3)}|${Ly.x}|${Ly.y}`;
+    if (key !== this[keyName]) {
+      this[keyName] = key;
+      this._coverMat.uniforms.uWin.value.set(x0, z0, 2 * half, levels);
+      this._pass(this._coverMat, target);
+    }
+    out.set(x0, z0, 1 / (2 * half), 0);
+  }
+
   /** Ray march the clouds and filter them in time, at low resolution (Post.js, after the scene). */
   render(r, { depth, camera, width, height }) {
     if (!this._noiseReady) this._makeNoise();
     this._frame++;
     this._ensureTargets(width, height);
     const env = this.env, U = env.uniforms, T = this.tier;
-    // cover map around the camera, in the wind's frame, snapped to its texels: the same map serves
-    // until the camera or the drift moves it by a texel (~117 m)
+    const M = this._marchMat.uniforms;
+    // cover maps around the camera, in the wind's frame: near (+-20 km, redrawn every ~600 m of
+    // travel) and far (+-150 km without the small puffs, every ~2.3 km)
     const cp = camera.getWorldPosition(_v);
-    const texel = 2 * COVER_HALF / COVER_N;
     const fx = cp.x + this.wind[0], fz = cp.z + this.wind[1];
-    const x0 = Math.floor((fx - COVER_HALF) / texel) * texel, z0 = Math.floor((fz - COVER_HALF) / texel) * texel;
-    const key = `${x0}|${z0}|${U.uCloudWind.value.z}`;
-    if (key !== this._coverKey) {
-      this._coverKey = key;
-      this._coverMat.uniforms.uWin.value.set(x0, z0, 2 * COVER_HALF, 0);
-      this._pass(this._coverMat, this._coverRT);
+    if (this.layer) {
+      this._cover(this._nearRT, NEAR_N, NEAR_HALF, 16, 3, fx, fz, '_nearKey', M.uNearWin.value);
+      this._cover(this._farRT, FAR_N, FAR_HALF, 8, 2, fx, fz, '_farKey', M.uFarWin.value);
     }
 
-    const M = this._marchMat.uniforms;
     M.tDepth.value = depth;
-    M.uCoverWin.value.set(x0, z0, 1 / (2 * COVER_HALF), 0);
     M.uFullSize.value.set(width, height);
     M.uDiv.value = T.div;
     camera.updateMatrixWorld();
     M.uProjInv.value.copy(camera.projectionMatrixInverse);
     M.uViewInv.value.copy(camera.matrixWorld);
     this._depthParams(camera, M.uDepthParams.value);
-    M.uMarch.value.set(T.steps, T.lightSteps, T.minSteps, this.temporal ? this._frame % 16 : 0);
-    M.uStep.value.set(T.dtMin, T.dtGrow, Math.max(1, T.detailDist), 0);
+    M.uMarch.value.set(T.steps, T.lightSteps, T.farSteps, this.temporal ? this._frame % 16 : 0);
+    // the angle a low-resolution pixel covers (the projection's vertical scale): the step and the
+    // detail follow the pixel's footprint, so a telephoto view keeps its detail far away
+    const pixRad = 2 / (camera.projectionMatrix.elements[5] * Math.max(1, Math.ceil(height / T.div)));
+    M.uStep.value.set(T.dtMin, T.stepPix, pixRad, T.detail);
     // the light: the sun, or the (boosted) moon once the sun is down
     if (env.lightIsMoon && env.moon) {
       const e = env._moonLightBoosted ? env._moonLightBoosted() : 0;
@@ -829,8 +915,8 @@ export class Clouds {
     // the cities' light under the bases comes from the shared uLP* uniforms (Environment)
     M.uAmbSky.value.copy(env.skyAmbient || U.uAmbient.value).multiplyScalar(1 / Math.PI);
     M.uAmbGround.value.copy(U.uGroundRadiance.value);
-    M.uShape.value.set(2200, 800, this.layer ? this.layer.density : 0.05, T.detail);
-    M.uWindXZ.value.set(this.wind[0] * 0.3, this.wind[1] * 0.3);
+    M.uShape.value.set(0, 0, this.layer ? this.layer.density : 0.05, 0);
+    M.uEvolve.value.set(this._time * RISE, this._time * RISE * 1.7);
     if (this.cirrus) M.uCirrus.value.set(this.cirrus.alt, this.cirrus.threshold, this.cirrus.opacity, 9000);
     else M.uCirrus.value.set(0, 0, 0, 1);
     this._pass(this._marchMat, this._marchRT);
@@ -884,13 +970,14 @@ export class Clouds {
 
   /** Render targets owned here (GPU memory estimate). */
   targets() {
-    return [this._noiseRT, this._coverRT, this._marchRT, ...this._hist].filter(Boolean);
+    return [this._noiseRT, this._nearRT, this._farRT, this._marchRT, ...this._hist].filter(Boolean);
   }
 
   info() {
     return {
       preset: this.preset, quality: this.quality, fallback: this.fallback, tier: { ...this.tier },
       low: [this._lowW || 0, this._lowH || 0], temporal: this.temporal, layer: this.layer ? { ...this.layer } : null,
+      field: { land: FIELD.land, sea: FIELD.sea, streets: FIELD.streets, vert: FIELD.vert },
     };
   }
 

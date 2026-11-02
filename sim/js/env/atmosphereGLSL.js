@@ -6,6 +6,7 @@
 // illuminance of 1 and gets multiplied by uSunIlluminance.
 
 import { LP_GLSL, NATURAL_SKY } from './lightPollution.js';
+import { cloudFieldGLSL, EDGE } from './cloudField.js';
 
 export const SKY_LUT_W = 256;
 export const SKY_LUT_H = 128;
@@ -68,44 +69,28 @@ vec3 atmoTransmittance(float r, float mu) {
   return t * vis;
 }
 
-// ---- the cumulus field (js/env/Clouds.js; its exact CPU twin is js/env/cloudField.js) ----
+// ---- the cumulus field (js/env/Clouds.js; the GLSL and its exact CPU twin: js/env/cloudField.js) ----
 uniform vec4 uCloudLayer;        // cumulus base, top (m MSL), field threshold, optical depth (0: no clouds)
-uniform vec4 uCloudWind;         // field offset x, z (m: the wind's drift), feature scale (m), -
-
-float atmoHash2(ivec2 p) {
-  uvec2 q = uvec2(p);
-  uint h = (q.x * 1597334677u) ^ (q.y * 3812015801u);
-  h = h * 747796405u + 2891336453u;
-  h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
-  h = (h >> 22u) ^ h;
-  return float(h) * (1.0 / 4294967295.0);
-}
-float atmoValueNoise(vec2 x) {
-  vec2 i = floor(x), f = x - i;
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  ivec2 c = ivec2(i);
-  float a = atmoHash2(c), b = atmoHash2(c + ivec2(1, 0)), d = atmoHash2(c + ivec2(0, 1)), e = atmoHash2(c + ivec2(1, 1));
-  return mix(mix(a, b, u.x), mix(d, e, u.x), u.y);
-}
-// Raw field 0..1 at a point in feature units ((world xz + wind) / scale).
-float atmoCloudField(vec2 p) {
-  float v = 0.5 * atmoValueNoise(p) + 0.25 * atmoValueNoise(p * 2.03 + 17.1)
-    + 0.125 * atmoValueNoise(p * 4.07 + 31.7) + 0.0625 * atmoValueNoise(p * 8.13 + 7.3);
-  return v / 0.9375;
-}
+uniform vec4 uCloudWind;         // field offset x, z (m: the wind's drift), the big cells' size (m), -
+uniform vec4 uCloudField;        // coverage over the land, over the sea, streets, vertical development
+${cloudFieldGLSL('atmo', 'uCloudLayer', 'uCloudWind', 'uCloudField')}
 // 0..1: inside a cumulus' footprint at world xz.
 float atmoCloudCover(vec2 xz) {
   float v = atmoCloudField((xz + uCloudWind.xy) / uCloudWind.z);
-  return smoothstep(uCloudLayer.z, uCloudLayer.z + 0.06, v);
+  return smoothstep(uCloudLayer.z, uCloudLayer.z + ${EDGE.toFixed(4)}, v);
 }
 // Sun transmittance through the cumulus above a world point: the field where the sun's ray
-// crosses the layer's middle. No texture (the terrain is at its sampler limit), ~150 ALU.
+// crosses the layer's middle. No texture (the terrain is at its sampler limit), ~400 ALU (12 cells).
+// (one return: ANGLE's HLSL warns X4000 on an early one)
 float atmoCloudShadow(vec3 worldPos) {
-  if (uCloudLayer.w <= 0.0 || worldPos.y > uCloudLayer.y) return 1.0;
-  float mid = 0.5 * (uCloudLayer.x + uCloudLayer.y);
-  float sy = max(uSunDir.y, 0.06);
-  vec2 xz = worldPos.xz + uSunDir.xz * ((mid - worldPos.y) / sy);
-  return exp(-uCloudLayer.w * atmoCloudCover(xz));
+  float s = 1.0;
+  if (uCloudLayer.w > 0.0 && worldPos.y <= uCloudLayer.y) {
+    float mid = 0.5 * (uCloudLayer.x + uCloudLayer.y);
+    float sy = max(uSunDir.y, 0.06);
+    vec2 xz = worldPos.xz + uSunDir.xz * ((mid - worldPos.y) / sy);
+    s = exp(-uCloudLayer.w * atmoCloudCover(xz));
+  }
+  return s;
 }
 
 // Sun irradiance (scene units) arriving at altitude h (m MSL) at horizontal offset rel.xz
