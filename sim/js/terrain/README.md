@@ -327,11 +327,13 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   positions 2 cm apart across a 256 m and a 1280 m wrap line of the periodic texture
   coordinates, against a control pair away from any line; fails if a wrap pair differs more
   than the control pair (the wave layers would jump as the camera crosses the line).
-* `node sim/dev/terrain.bench.mjs [--port 8146] [--root DIR] [--frames 7] [--out FILE]`:
+* `node sim/dev/terrain.bench.mjs [--port 8146] [--root DIR] [--frames 7] [--out FILE] [--gpu]`:
   terrain-only frame times (`dev/terrain.html`, the terrain and the sky) at three views per
-  quality and with each terrain feature switched off in turn, the median of several frames
-  once the tiles and horizon maps have settled; `--root` runs another copy of `sim/` (older
-  code) for a before / after comparison. On SwiftShader compare the numbers with each other.
+  quality, with each terrain feature switched off in turn and with 1024^2 instead of 2048^2
+  horizon maps, the median of several frames once the tiles, horizon maps and programs have
+  settled; `--root` runs another copy of `sim/` (older code) for a before / after comparison.
+  On SwiftShader (the default) compare the numbers with each other; `--gpu` uses the real GPU
+  (a browser window opens), e.g. `--gpu --size 1920x1080` on the PC.
 * `node sim/tests/terrain_screens.mjs [--out DIR] [--only a,b]` (Playwright, SwiftShader,
   960 x 540; serves `sim/` itself or takes `--base`): the GPU height / surface checks, then
   screenshots: Tel Nof runway from 30 m, the Tel Aviv coast from 3 km and at sunset, the

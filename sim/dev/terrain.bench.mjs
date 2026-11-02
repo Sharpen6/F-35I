@@ -1,10 +1,12 @@
-// node sim/dev/terrain.bench.mjs [--port 8146] [--root sim] [--size 960x540] [--frames 7] [--out FILE]
+// node sim/dev/terrain.bench.mjs [--port 8146] [--root sim] [--size 960x540] [--frames 7] [--out FILE] [--gpu]
 // Terrain-only frame times: dev/terrain.html (the terrain and the sky, nothing else) at three
 // views (fields at 120 m at noon, Rehovot's orchards at 80 m at 08:00, Tel Aviv at night from
 // 400 m), per quality and with each terrain feature switched off in turn. Each number is the
 // median of --frames frames timed with a 1-pixel readback (the GPU finished), after the maps
-// and tiles have settled. On SwiftShader (CPU) the numbers are CPU time per frame: compare
-// them with each other, not with a GPU. --root runs another copy of sim/ (e.g. older code).
+// and tiles have settled. By default on SwiftShader (CPU): the numbers are CPU time per frame,
+// compare them with each other, not with a GPU. --gpu uses the machine's GPU (a browser window
+// opens; e.g. --gpu --size 1920x1080 on the PC). --root runs another copy of sim/ (e.g. older
+// code).
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -24,6 +26,7 @@ const PORT = +arg('port', 8146);
 const [W, H] = arg('size', '960x540').split('x').map(Number);
 const FRAMES = +arg('frames', 7);
 const OUT = arg('out', '');
+const GPU = argv.includes('--gpu');
 const BASE = `http://127.0.0.1:${PORT}/`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
@@ -59,14 +62,23 @@ async function startServer() {
 
 async function main() {
   const server = await startServer();
-  const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-  const out = { when: new Date().toISOString(), root: ROOT, size: [W, H], frames: FRAMES, views: {} };
+  const browser = await chromium.launch(GPU
+    ? { headless: false, args: ['--ignore-gpu-blocklist'] }
+    : { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+  const out = { when: new Date().toISOString(), root: ROOT, size: [W, H], frames: FRAMES, gpu: '', views: {} };
   try {
     for (const v of VIEWS) {
       const page = await browser.newPage({ viewport: { width: W, height: H } });
       page.setDefaultTimeout(900000);
       await page.goto(`${BASE}dev/terrain.html?${v.q}&hud=0&dpr=1`);
       await page.waitForFunction(() => window.__dev && window.__dev.terrain && window.__dev.terrain.loaded, null, { timeout: 900000 });
+      if (!out.gpu) {
+        out.gpu = await page.evaluate(() => {
+          const gl = window.__dev.renderer.getContext(), x = gl.getExtension('WEBGL_debug_renderer_info');
+          return String(x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+        });
+        log(`GPU: ${out.gpu}`);
+      }
       const res = {};
       for (const [label, q, d, s, c, hq] of CONFIGS) {
         // settle: the tiles, the horizon maps of this quality (computed and uploaded; only while
