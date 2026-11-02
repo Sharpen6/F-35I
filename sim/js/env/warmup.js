@@ -732,6 +732,7 @@ export async function warmUpApp(app, { progress = null } = {}) {
   } finally {
     w.busy = false;
     w.done = true;
+    w._early.length = 0;        // (a module's compile late in the pass was made as it came)
     w._next = w.nextId();
     w.restoreLights(cam);
   }
