@@ -326,8 +326,9 @@ runways.bin: uint8 RGBA, layers x 32 rows x 1024 samples: rgb the imagery's pave
   runway, `PAVE` in Runways.js; concrete ~0.25) times the imagery's own light and dark sections
   relative to the runway's median (compressed), tinted a little by it. The imagery as it is
   makes a runway as light as the sand beside it (its 10 m pixels mix in paint and soil, and the
-  terrain's albedo gain is tuned for soil); far away (4.4-8.8 km on high) the tone turns into the
-  imagery's own, which the terrain shows once the surface has faded out.
+  terrain's albedo gain is tuned for soil), so the pavement's own tone is kept out to the
+  fade-out: turning into the imagery's (2-3 x lighter) made a runway on a long final as light as
+  the fields, then dark closer in. Beyond the fade-out the terrain's imagery shows, as before.
 * Rubber and oil: streaks along the runway (long streaks of the keel, short tyre marks in the
   touchdown zones) whose mean cover is the strip's `m`, so the heaviest deposits are where the
   imagery has them (the main landing ends) and fade toward mid-runway; far away, where the

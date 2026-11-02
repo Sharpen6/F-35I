@@ -130,7 +130,6 @@ export class Runways {
       uNoise: { value: this._stripTex },
       uGlyphs: { value: this._glyphTex },
       uFade: { value: new THREE.Vector4(8800, 11000, 1, 1) },
-      uAlbedoGain: { value: terrain.albedoGain ?? 0.7 },
     };
     this.material = this._makeMaterial();
     // the terrain's own shadows (hills at a low sun) when it has horizon maps (as Roads.js)

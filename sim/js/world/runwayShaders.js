@@ -9,8 +9,8 @@
 //   tone      the pavement's albedo (Runways.js PAVE: aged asphalt 0.10-0.20 by how light the
 //             imagery shows the runway, concrete ends ~0.25) times the light and dark sections of
 //             the imagery's own pavement (data strip: paint taken out) relative to the runway's
-//             median, tinted a little by it; far away it turns into the imagery's own tone, which
-//             the terrain shows once the surface has faded out, so there is no step. The strip's
+//             median, tinted a little by it, out to the fade-out (not the imagery's own tone: 2-3 x
+//             lighter, the soil's albedo scale, a light runway on a long final). The strip's
 //             alpha is the share m of the surface the imagery shows darkened by rubber and oil;
 //             the clean pavement is then tone / (1 - (1 - RUBBER_DARK) m) and the deposits are
 //             drawn as streaks along the runway whose mean cover is m (far away, where the streaks
@@ -100,7 +100,6 @@ uniform highp sampler2D uRwData; // per runway: ${DATA_W} RGBA32F texels (Runway
 uniform sampler2D uNoise;        // tiling noise: r grain, g blotches, b streaks / stains, a large patches
 uniform sampler2D uGlyphs;       // runway digits and letters "0123456789LRC", 4 x 4 cells
 uniform vec4 uFade;              // fade-out start, end (m), detail (0..1), layers in the atlas
-uniform float uAlbedoGain;       // the terrain's imagery -> albedo factor
 
 varying vec3 vRel;
 varying float vH;
@@ -245,18 +244,18 @@ void main() {
   // ---- the pavement's tone; rubber and oil as streaks of mean cover m ----
   // the albedo of the runway's asphalt (P6.y) and of concrete, times the imagery's clean pavement
   // relative to the runway's median (compressed: the 10 m pixels exaggerate it with paint and
-  // soil), tinted a little by the imagery (it carries the soil's tint too); far away into the
-  // imagery's own pavement, which the terrain shows once the surface has faded out
+  // soil), tinted a little by the imagery (it carries the soil's tint too). The same out to the
+  // fade-out: the imagery's own tone (the soil's albedo scale) is 2-3 x the pavement's, and
+  // turning into it on the way out made a runway at 4-9 km (2.6-5 km on low) as light as the
+  // fields or lighter, and then dark on the approach
   vec3 img = srgbToLinear(strip.rgb);
   float m = strip.a;
   float yI = max(dot(img, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
   float clean = 1.0 / (1.0 - (1.0 - RUBBER_DARK) * m);
   float rel = pow(clamp(yI * clean / P6.x, 0.5, 2.0), 0.7);
   vec3 tint = mix(vec3(1.0), img / yI, 0.45);
-  float farK = smoothstep(0.5 * uFade.x, uFade.x, dist);
-  vec3 Pimg = img * clean * uAlbedoGain;
-  vec3 P = mix(P6.y * rel * tint, Pimg, farK);
-  vec3 Pc = mix(max(1.3 * P6.y, 0.24) * rel * tint, Pimg, farK);
+  vec3 P = P6.y * rel * tint;
+  vec3 Pc = max(1.3 * P6.y, 0.24) * rel * tint;
   // touchdown zones: the deposits are tyre marks (long and short streaks) along the lanes the
   // wheels take; elsewhere the keel's darkening is finer and more even
   float tdzZone = band(ed, 120.0, 1100.0, 80.0 + pu) * smoothstep(hw * 0.75, hw * 0.25, at);
