@@ -504,9 +504,9 @@ export function buildChunk(prepared, ground, cx, cz, group) {
       if (nrmOv) { nrm[0] = nrmOv[0]; nrm[1] = nrmOv[1]; } else {
         ground.normal(x, z, nrm);
         // A built road is level across: it keeps the terrain's slope along it but not the
-        // natural ground's cross slope (it was cut and filled out of it), so it is shaded as a
-        // road and not as the 25 m terrain facets it lies on (in a cutting those read as a
-        // staircase). Across = the mitre direction, the same on both sides of a joint.
+        // natural ground's cross slope (it was cut and filled out of it), so its carriageway is
+        // not shaded as the slope it crosses. Across = the mitre direction, the same on both
+        // sides of a joint.
         const ml = at.levelX ? Math.hypot(mx, mz) : 0;
         if (ml > 1e-6) {
           const ax = mx / ml, az = mz / ml, d = nrm[0] * ax + nrm[1] * az;

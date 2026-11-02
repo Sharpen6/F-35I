@@ -176,9 +176,9 @@ kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
   NW-SE, exactly `HeightField.heightAt`), merged over planar areas in blocks of at most 100 m
   (the vertex shader's earth-curvature drop is quadratic), so roads lie exactly on the rendered
   terrain. Normals: the terrain's slope along the road, level across on paved roads and
-  railways (a built road is cut and filled out of the natural cross slope; shaded with the
-  terrain's normals it showed the 25 m facets in a cutting as light and dark steps), the
-  terrain's own on tracks, taxiways and aprons. 38 bytes per vertex.
+  railways (a built road is cut and filled out of the natural cross slope, so its carriageway
+  does not take the light and shade of the slope it crosses), the terrain's own on tracks,
+  taxiways and aprons. 38 bytes per vertex.
 * **Bridges**: on a deck polyline (DCK1) the surface is max(terrain, deck): each piece is split
   along the line where the deck plane meets the terrain plane (both parts share that line: no
   cracks), the lifted part takes the deck's plane and normal. Where the deck stands at least
@@ -272,10 +272,13 @@ them; the imagery's own roads show beyond the fade.
 * Bridge decks come from the bridge's ends on the ground (straight between them): a deck that
   really arches or bends in profile is drawn straight. Decks and piers cast no shadow. Overpasses
   whose dip under the deck line is under 2 m stay draped on the terrain. Tunnels are left out.
-* The terrain's 25 m grid shows through steep cuttings: Highway 1 in the Sha'ar HaGai gorge sits
-  on a staircase of terrain triangles. The road surface is the terrain's (that is what keeps it
-  watertight with the terrain at every distance); smoothing it needs a benched road in the
-  terrain's height data (gfx-terrain).
+* The road surface is the terrain's 25 m surface (that is what keeps it watertight with the
+  terrain at every distance), so a road rides whatever the height data has under it: in the
+  Sha'ar HaGai gorge the grade of the height field under Highway 1, taken over 5 m, varies by
+  10-12 % (standard deviation, up to 32-40 %) where the road climbs at about 6 %, and the
+  carriageways step over the bumps. Smoothing it needs a benched road in the terrain's height
+  data (gfx-terrain): the profile smoothed along the motorway and trunk polylines of
+  `data/world/roads`, level across, the shoulders blended into the slopes.
 * Junctions are blended, not modelled: no turn lanes, islands or roundabout geometry beyond the
   OSM lines.
 * Sidewalks and kerbs only beside streets in built-up land (WorldCover), not along every street.
