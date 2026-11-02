@@ -19,7 +19,8 @@
 //   4. jerusalem_sunset: screenshots chase + cockpit at the spawn's sunset time.
 //   5. buildings: the Azrieli towers from a free camera (the jet hidden) once the tiles have
 //      streamed: no speckle on the facades (Buildings.speckleCheck), ground shadows by day,
-//      obstruction lights at night, no cross-fade left running; screenshots day and night.
+//      obstruction lights at night, no cross-fade left running; the gain of artificial lights
+//      (env.lightGain: 1 by day, 1400 / exposure at night); screenshots day and night.
 // Fails on any console error, page error, failed request or failed check. Screenshots and
 // report.json go to /home/claude/simdata/shots/e2e/ (or --out).
 
@@ -400,8 +401,16 @@ async function main() {
     const sp = await S(() => window.__sim.app.modules.find((m) => m.name === 'Buildings').speckleCheck());
     check('no speckle on the facades', sp && sp.perMillion < 10000, sp ? `${sp.speckles} speckle pixels of ${sp.pixels} (${sp.perMillion} per million)` : 'no result');
     await shot('11_tlv_azrieli_buildings', 800);
+    // lights at night (js/env/README.md "Lights at night"): one gain for every artificial light,
+    // 1 by day, at night that of an eye adapted to lit streets (gain x exposure = 1400)
+    const lightLevels = () => S(() => { const e = window.__sim.app.env; return { gain: e.lightGain, night: e.lightNight, exposure: e.exposure }; });
+    const lgDay = await lightLevels();
     await S(() => window.__sim.time(21.5));
     await S(() => window.__sim.settle(1500));
+    const lgNight = await lightLevels();
+    check('lights at night: physical by day, the street-adapted eye at night (gain x exposure = 1400)',
+      lgDay.gain === 1 && lgNight.night === 1 && Math.abs(lgNight.gain * lgNight.exposure - 1400) < 1,
+      `day gain ${f2(lgDay.gain, 3)}; night gain ${f2(lgNight.gain, 3)} x exposure ${f2(lgNight.exposure, 1)}`);
     const bn = await bstats();
     check('obstruction lights on the towers at night, no ground shadows', bn && bn.lights > 0 && bn.shadows === 0,
       `${bn?.lights} lights, ${bn?.shadows} shadow decals`);
