@@ -191,11 +191,13 @@ async function main() {
       await S((n) => window.__sim.step(n), sc.steps || 60);
       let sum = await S((ms) => window.__sim.settle(ms), sc.settle || 2500);
       // the terrain's shadows and tiles come from workers: wait for the maps of this sun and
-      // place, and for the tiles in range
+      // place (computed and uploaded), for the tiles in range and for the programs of the
+      // quality (compiled in the background)
       const hz = await S(async () => {
         const t = window.__sim.app.terrain, h = t.horizon;
         const t1 = performance.now();
-        const busy = () => (h && h.enabled && (h.busy || h.pending || !h.ready)) || t.stats.tilesLoading > 0 || t._pending.length > 0;
+        const busy = () => (h && h.enabled && (h.busy || h.pending || h._upload || !h.ready)) ||
+          t.stats.tilesLoading > 0 || t._pending.length > 0 || t.qualityPending;
         while (busy() && performance.now() - t1 < 120000) {
           t.update(window.__sim.app.camera);
           await new Promise((r) => setTimeout(r, 250));

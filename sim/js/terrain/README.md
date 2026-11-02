@@ -18,7 +18,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, reversedDepthBuffer:
 const camera = new THREE.PerspectiveCamera(60, aspect, 0.5, 2e6);   // far >= ~600 km: horizon from 15 km
 const scene = new THREE.Scene();
 const env = new Environment({ renderer, scene });          // optional: visibilityKm (60), shadowMapSize (2048)
-const terrain = new Terrain({ renderer, scene, env });     // optional: baseUrl ('data/terrain/')
+const terrain = new Terrain({ renderer, scene, env });     // optional: baseUrl ('data/terrain/'), quality ('high')
 await terrain.load((fraction, label) => {});               // ~50 MB, a few seconds from localhost
 env.setTime(10.5);                                         // local solar time; day 172 by default
 env.setShadowTarget(aircraft.object3d);                    // the sun's shadow map follows it
@@ -287,7 +287,7 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
 
 | | |
 |---|---|
-| quality (menu) | `low`: `GROUND_DETAIL 0` (no near ground materials, the land cover macro detail only), 512^2 horizon maps; `medium`: `GROUND_DETAIL 1` (the materials without their second, larger soil / straw / grass layers, orchards as hedgerow bands without single crowns, no bales, field edges from the 10 m vote without the imagery's guidance, plain bilinear imagery; the materials resolve the pixel footprint's short axis up to 2:1 anisotropy instead of 4:1), 1024^2; `high`: `GROUND_DETAIL 2` (all of it), 2048^2 (`TERRAIN_QUALITY` in `Terrain.js`; the define is compiled in, so the cheaper tiers really cost less) |
+| quality (menu) | `low`: `GROUND_DETAIL 0` (no near ground materials, the land cover macro detail only), 512^2 horizon maps; `medium`: `GROUND_DETAIL 1` (the materials without their second, larger soil / straw / grass layers, orchards as hedgerow bands without single crowns, no bales, field edges from the 10 m vote without the imagery's guidance, plain bilinear imagery; the materials resolve the pixel footprint's short axis up to 2:1 anisotropy instead of 4:1), 1024^2; `high`: `GROUND_DETAIL 2` (all of it), 2048^2 (`TERRAIN_QUALITY` in `Terrain.js`; the define is compiled in, so the cheaper tiers really cost less). A change compiles the new tier's programs in the background (both shadow variants) while the old ones go on drawing (`terrain.qualityPending`), then switches; each tier's programs stay compiled (switching back, a teleport that replaces every L0 tile or night compile nothing). `new Terrain({ quality })` loads with the right tier |
 | `?terrainDetail=0` | near ground materials off (`terrain.groundDetail`) |
 | `?terrainShadows=0` | terrain shadows off (`terrain.shadows`) |
 | `?cityLights=0` | city lights off (`terrain.cityLights`) |

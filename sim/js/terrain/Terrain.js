@@ -265,8 +265,10 @@ export class Terrain {
   /**
    * fieldsUrl: the field data of the data build (sim/tools/terrain/fields.py), by default
    * data/terrain_extra/fields/ beside data/terrain/; '' = none (each tile is analysed on its own).
+   * quality: the one to load with (setQuality later works too, but the load then compiles the
+   * programs of 'high' first).
    */
-  constructor({ renderer, scene, env, baseUrl = 'data/terrain/', fieldsUrl }) {
+  constructor({ renderer, scene, env, baseUrl = 'data/terrain/', fieldsUrl, quality = 'high' }) {
     this.renderer = renderer;
     this.scene = scene;
     this.env = env;
@@ -302,7 +304,16 @@ export class Terrain {
     this.groundDetail = urlSwitch('terrainDetail') ?? true;
     this.shadows = urlSwitch('terrainShadows') ?? true;
     this.cityLights = urlSwitch('cityLights') === false ? 0 : 1;
-    this.quality = 'high';
+    this.quality = TERRAIN_QUALITY[quality] ? quality : 'high';
+    // The ground materials' tier the materials are compiled with (GROUND_DETAIL), and per tier
+    // compiled so far two materials that are never drawn nor disposed: they keep its programs
+    // (with and without the sun's shadow map) linked, so a quality change back, or new L0 tiles
+    // after every tile was evicted (a teleport), never compile the app's largest shader again.
+    this._gd = TERRAIN_QUALITY[this.quality].groundDetail;
+    this._tiers = new Map();
+    this._tierJob = 0;
+    /** true while the programs of a new quality compile in the background (the old ones draw) */
+    this.qualityPending = false;
     /**
      * lod: LOD level colours; wireframe; runways: false hides the procedural runway paint;
      * heightProbe: the terrain writes (height, x, z) of its surface instead of colour, for
@@ -324,6 +335,7 @@ export class Terrain {
     this._box = new THREE.Box3();
     this._maxAniso = renderer.capabilities.getMaxAnisotropy();
     this.horizon = new HorizonMap();
+    this.horizon.setQuality(TERRAIN_QUALITY[this.quality].horizon);
     this.horizon.setRenderer(renderer);
     this._loader = null;
     /**
@@ -416,7 +428,7 @@ export class Terrain {
     }
     this._buildGpu(ovBmp, farBmp, lcOv, lcFar);
     progress(0.95, 'terrain: shaders');
-    await this._precompile();
+    await this._tier(this._gd).ready;
     this._loader = new TileLoader(TILE_WORKERS);
     // the horizon worker reads the heights again (from the HTTP cache) in the background
     this.horizon.start(new URL(B, globalThis.location?.href ?? 'http://localhost/').href);
@@ -499,7 +511,7 @@ export class Terrain {
       uniforms,
       vertexShader: TERRAIN_VERT,
       fragmentShader: TERRAIN_FRAG,
-      defines: { ...this._defines, ...(l0 ? { USE_L0: 1 } : {}), GROUND_DETAIL: TERRAIN_QUALITY[this.quality].groundDetail },
+      defines: { ...this._defines, ...(l0 ? { USE_L0: 1 } : {}), GROUND_DETAIL: this._gd },
       lights: true,
       fog: false,
     });
@@ -508,53 +520,91 @@ export class Terrain {
   }
 
   /**
-   * Compiles both terrain programs now instead of on first sight: the terrain shader is the
-   * largest in the app and its first compile is the slowest one on ANGLE / Direct3D. Lights
-   * come from the real scene (targetScene), so the program variants match; the sun casts its
-   * shadow only while it is up (Environment.update, the first frame), so both variants are
-   * built: with the shadow map (day) and without (night, and until the first frame).
-   * Waits for the driver's parallel compile where it has one (KHR_parallel_shader_compile).
+   * The programs of a ground detail tier (GROUND_DETAIL): compiled once, in the background, by
+   * two materials (base and L0) that stay (see the constructor). Every material of the tier
+   * made later finds the programs in three.js's cache. Returns { mats, ready }.
    */
-  async _precompile() {
+  _tier(gd) {
+    let t = this._tiers.get(gd);
+    if (!t) {
+      const cur = this._gd;
+      this._gd = gd;
+      const mats = [this._makeMaterial(false), this._makeMaterial(true)];
+      this._gd = cur;
+      t = { mats, ready: this._compile(mats) };
+      this._tiers.set(gd, t);
+    }
+    return t;
+  }
+
+  /**
+   * Compiles terrain programs now instead of on first sight: the terrain shader is the largest
+   * in the app and its first compile is the slowest one on ANGLE / Direct3D. Lights come from
+   * the real scene (targetScene), so the program variants match; the sun casts its shadow only
+   * while it is up (Environment.update), so both variants are built: with the shadow map (day)
+   * and without (night). Resolves once the driver's parallel compile has linked them
+   * (KHR_parallel_shader_compile), or after 4 s at most: a program not linked by then is
+   * finished on first use.
+   */
+  async _compile(mats) {
     const tmp = new THREE.Scene();
     const cam = new THREE.PerspectiveCamera(60, 1, 1, 1000);
-    const l0 = this._makeMaterial(true);
-    for (const mat of [this.baseMaterial, l0]) {
+    for (const mat of mats) {
       const m = new THREE.Mesh(this._baseGroup.meshes[0].geometry, mat);
       m.receiveShadow = true;
       m.frustumCulled = false;
       tmp.add(m);
     }
-    this._tileMaterialProto = l0;
     const sun = this.env?.sunLight;
     const cast = sun ? sun.castShadow : false;
+    let ready = null;
     try {
+      // the other variant first; the switch is undone before any frame can see it
       if (sun) { sun.castShadow = !cast; this.renderer.compile(tmp, cam, this.scene); sun.castShadow = cast; }
-      const ready = this.renderer.compileAsync ? this.renderer.compileAsync(tmp, cam, this.scene) : this.renderer.compile(tmp, cam, this.scene);
-      // at most a few seconds: the loading screen goes on, a program not linked by then is
-      // finished on first use
-      await Promise.race([ready, new Promise((r) => setTimeout(r, 4000))]);
+      if (this.renderer.compileAsync) ready = this.renderer.compileAsync(tmp, cam, this.scene);
+      else this.renderer.compile(tmp, cam, this.scene);
     } catch (e) {
-      console.warn('terrain precompile', e);
+      console.warn('terrain: precompile', e);
     } finally {
       if (sun) sun.castShadow = cast;
     }
+    if (ready) await Promise.race([ready.catch(() => {}), new Promise((r) => setTimeout(r, 4000))]);
   }
 
   // -------------------------------------------------------------------------------------
   // settings
 
-  /** 'low' | 'medium' | 'high' (TERRAIN_QUALITY). */
+  /**
+   * 'low' | 'medium' | 'high' (TERRAIN_QUALITY). The ground materials' tier is compiled in
+   * (GROUND_DETAIL), so the cheaper tiers really cost less: a new tier's programs compile in the
+   * background while the current ones go on drawing (qualityPending), then the materials switch,
+   * so no frame waits for the compile. The horizon maps change size at once.
+   */
   setQuality(q) {
     this.quality = TERRAIN_QUALITY[q] ? q : 'high';
     this.horizon.setQuality(TERRAIN_QUALITY[this.quality].horizon);
-    // the ground materials' tier is compiled in (GROUND_DETAIL): new programs for the
-    // materials made so far (three.js keeps both, so switching back costs nothing)
     const gd = TERRAIN_QUALITY[this.quality].groundDetail;
-    const mats = new Set([this.baseMaterial, this._tileMaterialProto]);
-    for (const t of this.tiles.values()) mats.add(t.material);
+    const job = ++this._tierJob;
+    if (!this.baseMaterial) {             // before the load, which compiles this tier
+      this._gd = gd;
+      this.qualityPending = false;
+      return;
+    }
+    this.qualityPending = true;
+    this._tier(gd).ready.then(() => {
+      if (job !== this._tierJob) return;  // changed again meanwhile
+      this._applyTier(gd);
+      this.qualityPending = false;
+    });
+  }
+
+  /** Switches the materials in use to the tier (whose programs are compiled). */
+  _applyTier(gd) {
+    this._gd = gd;
+    const mats = new Set([this.baseMaterial]);
+    for (const t of this.tiles.values()) if (t.material) mats.add(t.material);
     for (const m of mats) {
-      if (!m || m.defines.GROUND_DETAIL === gd) continue;
+      if (m.defines.GROUND_DETAIL === gd) continue;
       m.defines.GROUND_DETAIL = gd;
       m.needsUpdate = true;
     }
@@ -808,10 +858,8 @@ export class Terrain {
     t.bitmap.close();
     t.bitmap = null;
     t.data = null;
-    const material = this._tileMaterialProto && !this._tileMaterialProto.userData.used
-      ? this._tileMaterialProto : this._makeMaterial(true);
-    material.userData.used = true;
-    material.wireframe = this.debug.wireframe;
+    // its programs are the tier's (compiled, kept by _tier): nothing to compile here
+    const material = this._makeMaterial(true);
     const U = material.uniforms;
     U.uL0Color.value = color;
     U.uL0Data.value = data;
@@ -851,10 +899,7 @@ export class Terrain {
       this._tileGroupPool.push(t.group);
       t.group = null;
     }
-    if (t.material) {
-      if (t.material === this._tileMaterialProto) this._tileMaterialProto = null;
-      t.material.dispose();
-    }
+    if (t.material) t.material.dispose();
     if (t.textures) for (const x of t.textures) x.dispose();
     t.state = 'evicted';
   }
@@ -870,6 +915,8 @@ export class Terrain {
     this._normalFarRT.dispose();
     this._detailRT.dispose();
     this.baseMaterial.dispose();
+    for (const t of this._tiers.values()) for (const m of t.mats) m.dispose();
+    this._tiers.clear();
   }
 }
 

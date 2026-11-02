@@ -83,7 +83,7 @@ async function main() {
             D.step(1 / 60);
             await new Promise((r) => setTimeout(r, 50));
             n++;
-          } while ((n < 3 || t.stats.tilesLoading > 0 || (ss && (h.busy || h.pending || h._upload))) &&
+          } while ((n < 3 || t.stats.tilesLoading > 0 || t.qualityPending || (ss && (h.busy || h.pending || h._upload))) &&
             performance.now() - t1 < 240000);
         }, [q, d, s, c, hq]);
         const ms = await page.evaluate((N) => {
