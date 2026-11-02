@@ -5,12 +5,14 @@ Standard library only: works with `py -3`, `python3` or Blender's bundled Python
     py -3 sim\\tests\\pc_check.py [--browser <chrome.exe or msedge.exe>] [--port 8036]
                                   [--size 1920x1080] [--seconds 12] [--quality high]
                                   [--spawns telnof_36,tlv_3000,jerusalem_sunset] [--out <folder>]
-                                  [--headful]
+                                  [--headful] [--uncapped]
 
 It starts serve.py on its own port, opens index.html?test=1 in Chrome or Edge (headless, GPU on)
 through the DevTools protocol, and for each start point flies live for `--seconds` (full throttle
 on the runway starts), then saves a screenshot and the numbers: frames per second, draw calls,
 triangles, textures, the GPU name, console errors.  Report: <out>/pc_check.json (+ .jpg shots).
+Headless Chrome paces its frames at about 56-60 per second whatever the load; `--uncapped` turns
+vsync and the frame-rate limit off, so the frame times show what a frame really costs.
 """
 import argparse
 import base64
@@ -199,6 +201,9 @@ def main():
     ap.add_argument("--headful", action="store_true")
     ap.add_argument("--extra", default="", help="extra URL parameters, e.g. depth=reversed")
     ap.add_argument("--swiftshader", action="store_true", help="software WebGL (machines without a GPU)")
+    ap.add_argument("--uncapped", action="store_true",
+                    help="no vsync / frame-rate limit, so the frame times show the real cost (headless Chrome "
+                         "otherwise paces frames at about 56-60 per second whatever the load)")
     a = ap.parse_args()
 
     os.makedirs(a.out, exist_ok=True)
@@ -235,6 +240,8 @@ def main():
             args.insert(2, "--enable-gpu")
             if os.name == "nt":
                 args.insert(3, "--use-angle=d3d11")
+    if a.uncapped:
+        args[1:1] = ["--disable-gpu-vsync", "--disable-frame-rate-limit"]
     if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() == 0:
         args.insert(1, "--no-sandbox")          # Chrome refuses to run as root otherwise
     br = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
