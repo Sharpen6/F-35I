@@ -243,7 +243,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `roads=0` / `airportlights=0` / `traffic=0` | no roads, railways and airfield surfaces / no airfield lights / no night traffic (see Roads) |
 | `bshadows=0` / `blights=0` | no ground shadows of the buildings / no obstruction lights |
 | `terrainDetail=0` / `terrainShadows=0` / `cityLights=0` | terrain: near ground materials, hill shadows, city lights off (`js/terrain/README.md`) |
-| `deadSea=0` / `rift=0` / `shore=0` | landscape: no Dead Sea water pass / no 50 m rift strip (Moab, the south basin) / no breakwaters, quays and port cranes (see Landscape) |
+| `deadSea=0` / `rift=0` / `shore=0` | landscape: no Dead Sea water pass / no 50 m rift strip (Moab, the south basin) / no breakwaters, quays, port cranes and south-basin hotels (see Landscape) |
 
 ## Vegetation
 
@@ -322,7 +322,8 @@ Without the data it draws nothing. Formats, layouts and rebuild: `tools/world/RO
   night. And the Dead Sea's south basin, outside the core whose buildings `Buildings.js` draws:
   the hotels of Ein Bokek and Hamei Zohar, Neve Zohar and the Dead Sea Works at Sdom as blocks
   (balcony rows and windows, lit at night). Within 20 / 32 / 45 km (low / medium / high), one
-  draw call per 8 km area.
+  draw call per 8 km area, and one each for its white water and its night lights where it has
+  them.
 
 Without `data/landscape/` the app runs as before (a console warning; `tests/e2e.mjs` lists the
 404s as notes).

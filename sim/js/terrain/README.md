@@ -259,7 +259,11 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   far normal map below the far grid's rows (no sampler more); its colour (50 m, the Sentinel-2
   composite graded like `far.jpg`, its large-scale colour equal to `far.jpg`'s so the strip has
   no edge) is the base program's 13th sampler. Over its outer 2 km the heights blend into the
-  far grid, which they equal at the edge (no step).
+  far grid, which they equal at the edge (no step). The far colour and normals, the strip's and
+  the far grid's, are read only where they show (`riftGLSL.js`: outside the core, the strip's
+  inside its box; `textureGrad` with the position's derivatives, so the lookups can sit in a
+  branch): most of the base program's pixels lie in the core, where the far grid's two lookups
+  used to be made and thrown away.
 * **Rock beds** (`terrainShaders.js`, steep land only, a few operations): the steep slopes of
   the walls show their limestone and dolomite formations, a hard cliff band and a softer slope
   band in turn, ~35-90 m apart (a 53 m period whose phase wanders with height: thinner,
@@ -389,18 +393,63 @@ GLSL helpers: `atmoSunIrradianceAt(relToCamera, h)`, `atmoSkyRadiance(dir)`,
   along the view and sun rays and the imagery-guided field edges are the difference), its
   medium drew what its high drew and its low only switched the ground materials off (the
   rows are shares of this round's high); now medium is 5 - 7 % and low 11 - 17 % below high.
+* The landscape round (the Dead Sea pass, the rift strip, rock beds, sinkholes, the waterline,
+  infields), measured the same way (the median of three to five frames) on a machine shared
+  with other jobs, where one run against another differs by up to 10 % for nothing; so the
+  fields view ran three times side by side with the base (57df974), the two browsers at once,
+  in either order: high 16.9 - 17.1 s against 15.9 - 16.1 s, low 14.0 - 14.4 s against
+  13.0 - 13.6 s, 6 - 7 % more on both. Nothing new shows there; it is the new arithmetic outside
+  the features' own branches, on every pixel (the rock beds' and the kurkar's steepness and
+  coast tests, the lake's and the waterline's, the basin's haze) and in an air base's tiles
+  (each pixel's distance to each runway, for the infields: Tel Nof lies ahead in this view). No
+  texture lookups: the far colour and normals that the rift strip added are read only outside
+  the core (`riftGLSL.js`), where this view has few pixels.
+  The bench's fourth view, the Dead Sea from 150 m at 16:00 looking east (the lake fills the
+  lower half of the picture, the Moab wall stands across it 7 - 10 km away; this round and the
+  base one after the other, before the far lookups went into branches):
+
+  | | Dead Sea, 150 m, 16:00 |
+  |---|---|
+  | high (the mirror) | 18.3 s |
+  | high, the horizon profile instead of the mirror | −4 % |
+  | high, no Dead Sea pass | −12 % |
+  | medium (the profile) | −6 % |
+  | before this round (57df974): high | −19 % |
+  | before: medium | −21 % |
+
+  The lake pass is 6 - 7 % of this terrain-and-sky frame and the mirror 3 - 5 % more (two
+  runs); the rest (~10 %, the size of the noise) is the rift strip, whose wall, 1,300 m
+  high instead of the far grid's ramp, covers more of the picture with terrain instead of sky,
+  with its colour and rock beds, and the new arithmetic above.
+
+  In the app (`tests/landscape_shots.mjs`, renderInfo and gpuMemory against
+  `?deadSea=0&rift=0&shore=0`, 960 x 540): the Dead Sea from 1,200 m, +1 - 2 draw calls and
+  +0.28 M triangles (the lake pass draws the basin's 40 patches again, one instanced call; the
+  mirror's ~26 patches are drawn before the frame and not counted); Ashdod port from 1,000 m,
+  +1 / +3 / +12 draw calls on low / medium / high (the shore's areas in range) and +0.01 M
+  triangles; Ein Bokek from 1,200 m (high, its hotels), +9 draw calls and +0.04 M triangles.
 * On a GPU: not measured here. On an RTX 3070 at 1920 x 1080 the terrain should take about
   1 - 1.5 ms on high (~1.2 M terrain pixels with ~50 texture fetches each, ~110 bilinear taps
   with the anisotropic filtering, at ~300 GTexel/s, plus the shader's arithmetic and 0.55 M
   triangles), about 1.8 - 2.7 ms at 2560 x 1440; medium and low should save at least the
   shares above (SwiftShader also pays heavily per triangle, which a GPU hardly does, so the
   per-pixel features weigh more on a GPU). `node sim/dev/terrain.bench.mjs --gpu --size
-  1920x1080` on the PC measures it.
+  1920x1080` on the PC measures it. Near the Dead Sea on high the landscape should add about
+  0.3 - 0.8 ms: the lake pass 0.1 - 0.3 ms where the lake fills half the picture (~1 M pixels
+  of ripples, one mirror or sky lookup, the sun's glint, the atmosphere), the mirror 0.2 - 0.5
+  ms (half resolution, ~30 patches with cheap shading, its mips); on medium and low (no mirror)
+  0.1 - 0.3 ms; the shore's few dozen thousand triangles well under 0.1 ms; elsewhere the new
+  arithmetic (the 6 - 7 % SwiftShader measured in the fields view) should stay under 0.1 ms: the
+  terrain shader of a GPU waits on its ~50 texture lookups, and outside the features' own
+  branches (steep land, the salt shore, the infields) the round added none.
 * VRAM: ~0.7 GB (heights 42 MB, normal maps ~110 MB, overview and far colour ~110 MB, 64 L0
   tiles ~360 MB plus their field data ~50 MB, land cover ~50 MB, detail array 18 MB, horizon
   maps double-buffered: 2 x 8 MB on high, 2 x 2 MB on medium, 2 x 0.5 MB on low). CPU memory
   ~90 MB (heights and land cover for physics), plus a copy of the heights in the horizon
-  worker (~45 MB).
+  worker (~45 MB). The landscape adds 23 - 26 MB (measured: the rift strip's colour with its
+  mips ~22 MB, its heights in the height texture's free corner, the lake's shore distances and
+  the shore's meshes), plus the mirror target on high while it is used (half resolution,
+  half-float with mips and depth: ~8 MB at 1920 x 1080).
 * Ground materials cost only where a pixel's footprint (its short axis) is under 8 m on the
   L0 patches; the horizon map is one fetch per pixel; city lights only at night in built-up
   land.

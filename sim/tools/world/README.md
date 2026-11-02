@@ -12,7 +12,7 @@ Builders for what stands on the terrain of the flight sim. Each one writes into
 | `volumes.py` | building volumes for `buildings.py`: parts and their outline, raised volumes onto what holds them up, duplicates |
 | `airbases.py`, `airbases.json` | the buildings of Tel Nof, Hatzor and Palmachim, traced in the imagery (below) |
 | `shots.mjs` | screenshots of the scenes the buildings are judged by (Playwright, `window.__sim`) |
-| `shore.py` | breakwaters, quays, piers and the container cranes of Ashdod: `sim/data/landscape/shore.json` (below) |
+| `shore.py` | breakwaters, quays, piers, the container cranes of Ashdod and the Dead Sea south basin's buildings: `sim/data/landscape/shore.json` (below) |
 
 Python 3 with numpy, pyarrow and Pillow (as `sim/tools/terrain`).
 
