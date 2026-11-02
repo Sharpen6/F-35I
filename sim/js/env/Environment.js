@@ -37,6 +37,13 @@ export { ATMOSPHERE_PARS, ATMOSPHERE_CORE, ATMOSPHERE_SKYVIEW };
 
 /** Top-of-atmosphere sun irradiance in scene units (a white Lambert surface at noon ~ 1.0). */
 export const SUN_ILLUMINANCE = 4.0;
+/**
+ * Lux per scene unit of illuminance (the sun's 4 units are ~128 klux above the atmosphere). A
+ * light given in candela lights a surface d metres away with cd / d^2 lux: in scene units that is
+ * cd / LUX_PER_UNIT / d^2, so a three.js PointLight or SpotLight (decay 2) takes cd / LUX_PER_UNIT
+ * as its intensity. Emissive surfaces: cd/m^2 / LUX_PER_UNIT is their radiance.
+ */
+export const LUX_PER_UNIT = 32000;
 
 const LUMA = [0.2126, 0.7152, 0.0722];
 const luma = (c) => c[0] * LUMA[0] + c[1] * LUMA[1] + c[2] * LUMA[2];
@@ -44,22 +51,47 @@ const luma = (c) => c[0] * LUMA[0] + c[1] * LUMA[1] + c[2] * LUMA[2];
 /**
  * Exposure metering. The eye (or a camera on auto) adapts to the light falling on what it looks
  * at: the sun on the surfaces that face it (weighted: the sunlit side dominates a scene even with
- * the sun low), the sky, and a floor where the dark-adapted eye stops adapting. Adaptation is
+ * the sun low), the sky, the night sky's glow and a part of the moon's light. Adaptation is
  * partial: exposure = key * K^-p. Fitted to exposures set by hand at Tel Nof that looked right
  * (0.93 at noon, 2.2 with the sun 3.3 deg up, 6.0 at 0.45 deg). Below that (twilight, K < k1) the
- * eye adapts harder (p2), reaching the night's exposure (max, where the lights of the other
- * modules were tuned) with the sun ~4.5 deg down. Metering only the horizontal illuminance (as
- * before) made dawn and dusk four times too bright (washed out). The eye darkens fast and adapts
- * to the dark slowly (tauUp / tauDown, s).
+ * eye adapts harder (p2), up to the night's exposure (max) with the sun ~6 deg down, the end of
+ * civil twilight: the sky goes on darkening on screen from there, as the eye stops keeping up,
+ * and the night glow takes over by ~9 deg (NIGHT). (A ceiling of 40, reached at -4.5 deg under a
+ * night glow as bright as the sky at -4 deg, turned dusk into a flat grey night by -5 deg.) The
+ * eye darkens fast and adapts to the dark slowly (tauUp / tauDown, s). moon: the share of the
+ * moon's (boosted) light in K: the dark-adapted eye adapts only a little to it, so a full moon
+ * night is clearly brighter than a quarter moon one.
  */
-const METER = { sun: 1.6, key: 1.817, p: 0.385, k1: 0.045, p2: 0.6, night: 3.3e-4, min: 0.3, max: 40, tauUp: 1.2, tauDown: 3.5 };
-const meterExposure = (K) => {
+const METER = { sun: 1.6, key: 1.817, p: 0.385, k1: 0.045, p2: 0.78, moon: 0.2, min: 0.3, max: 285, tauUp: 1.2, tauDown: 3.5 };
+/** The exposure for an adapted light level K (scene units; see METER). */
+export function meterExposure(K) {
   const e = K >= METER.k1 ? METER.key * Math.pow(K, -METER.p)
-    : METER.key * Math.pow(METER.k1, -METER.p) * Math.pow(METER.k1 / K, METER.p2);
+    : METER.key * Math.pow(METER.k1, -METER.p) * Math.pow(METER.k1 / Math.max(K, 1e-12), METER.p2);
   return Math.min(METER.max, Math.max(METER.min, e));
-};
-/** The adapted light level (K) at which colour vision fades (night vision 0 above, 1 below). */
-const MESOPIC = [0.012, 0.0008];
+}
+/**
+ * The inverse: the adapted light level K that gives exposure e (for things that are lit by the
+ * scene's light but drawn unlit, like smoke sprites). At the ceiling it returns the K where the
+ * ceiling starts, the most light a night scene can have.
+ */
+export function meteredLight(e) {
+  e = Math.min(METER.max, Math.max(METER.min, e));
+  const e1 = METER.key * Math.pow(METER.k1, -METER.p);
+  return e <= e1 ? Math.pow(e / METER.key, -1 / METER.p) : METER.k1 * Math.pow(e / e1, -1 / METER.p2);
+}
+/**
+ * The night exposure that the artificial lights of the other modules (the terrain's city lights)
+ * were tuned for. Above it, uNight falls as NIGHT_LIGHTS_EXPOSURE / exposure, so those lights keep
+ * the brightness on screen they were tuned to while the eye adapts further to the dark.
+ */
+export const NIGHT_LIGHTS_EXPOSURE = 40;
+/**
+ * The light level the eye is adapted to (physical: the night glow and the moon without their
+ * boosts, scene units) at which colour vision starts to fade and is gone: ~50 lux (the end of
+ * civil twilight) to ~0.6 lux (a full moon is ~0.25 lux). Post.js shifts the colours towards
+ * rod vision in between.
+ */
+const MESOPIC = [0.0015, 0.00002];
 
 /**
  * Broadband albedo of the ESA WorldCover classes (the land-cover codes the terrain carries), for
@@ -69,20 +101,27 @@ const MESOPIC = [0.012, 0.0008];
 const COVER_ALBEDO = { 0: 0.06, 10: 0.11, 20: 0.18, 30: 0.2, 40: 0.18, 50: 0.17, 60: 0.3, 70: 0.6, 80: 0.06, 90: 0.12, 95: 0.1, 100: 0.15 };
 
 /**
- * The night (scene units; faded in as the sun goes from -1 to -9 deg). The sky's own glow
- * (airglow, starlight, the cities' light scattered in the haze, brighter at the horizon) is part
- * of the sky-view LUT, so the haze, the sea's reflection and the ambient light all see it; the
- * light it sheds on the ground is the night floor of uAmbient. Moonlight is real (full moon 2.5e-6
- * of the sun above the atmosphere, its phase from js/env/moon.js) on the moon's disc, but the
- * light it casts on the scene is boosted ("day for night"): physically a moonlit field is 1e-6
- * of a sunlit one, far below what a screen shows next to the HUD.
+ * The night (scene units). The sky's own glow (airglow, starlight, and in central Israel mostly
+ * the cities' light scattered in the haze: warmer and brighter at the horizon) is part of the
+ * sky-view LUT, so the haze, the sea's reflection and the ambient light all see it; the light it
+ * sheds on the ground is the night floor of uAmbient. It fades in as the sun goes from -2 to -10
+ * deg (fadeFrom / fadeTo), under the last of the twilight. It is ~50x the real night sky (the
+ * exposure ceiling is far below a dark-adapted eye's), and as bright as the sky at the end of
+ * civil twilight, so dusk still darkens on screen down to ~-8 deg and the western glow shows
+ * until ~-10 deg. (It was 20x this, as bright as the sky with the sun 4 deg down: dusk ended there.)
+ * Moonlight is real (full moon 2.5e-6 of the sun above the atmosphere, its phase from js/env/moon.js)
+ * on the moon's disc, but the light it casts on the scene is boosted ("day for night"): with it,
+ * the quarter moon of the default date (day 172) shows the land dimly, a full moon clearly.
  */
 const NIGHT = {
-  zenith: [0.00055, 0.00075, 0.0014], horizon: [0.0016, 0.0015, 0.0016],
+  zenith: [2.6e-5, 3.5e-5, 6.5e-5], horizon: [8.0e-5, 6.8e-5, 5.6e-5],
+  fadeFrom: -2, fadeTo: -10,     // sun elevation (deg): no night glow .. all of it
   moonFull: 4.0 * 2.5e-6,        // irradiance of the full moon above the atmosphere
   moonTint: [1.04, 1.0, 0.93],   // a little redder than the sun (the lunar soil)
-  boost: 500,                    // moonlight on the scene
+  boost: 1600,                   // moonlight on the scene (full from -12 deg; real at -6 deg and above)
+  boostFrom: -6, boostTo: -12,   // in twilight the sky outshines the real moon: no boost there
   earthshine: 0.004,             // the dark side of a crescent, relative to the lit side
+  physical: 1e-7,                // the real night sky's light on the ground (~3 mlux: night vision)
 };
 
 function halfFloatTexture(f32, w, h) {
@@ -116,6 +155,11 @@ export class Environment {
     this.exposure = 1.0;
     /** 0 photopic .. 1 dark-adapted (Post.js shifts colours towards rod vision). */
     this.nightVision = 0;
+    /**
+     * Gain for artificial night lights tuned for a night exposure of NIGHT_LIGHTS_EXPOSURE (40):
+     * min(1, 40 / exposure). Lights given in physical units (LUX_PER_UNIT) do not need it.
+     */
+    this.nightLightGain = 1;
     /** Albedo of the ground around the camera (from the terrain's land cover, see setTerrain). */
     this.groundAlbedo = 0.2;
     /** Height of the atmosphere's ground sphere (m MSL, <= 0): the lowest terrain near the camera. */
@@ -300,12 +344,19 @@ export class Environment {
     this.sunDirection.set(s.x, s.y, s.z).normalize();
     this.sunElevationDeg = s.elevationDeg;
     this.sunAzimuthDeg = s.azimuthDeg;
-    // night: sun from -1 to -9 degrees below the horizon
+    // night: the artificial lights come on as the sun goes from -1 to -9 deg (uNight, see update()),
+    // the night sky's glow fades in from -2 to -10 deg (NIGHT), the stars come out from -3 deg
+    // (the brightest) to -11 deg (all of them: the sky shader fades each one in by its brightness)
     const e = s.elevationDeg;
     const U = this.uniforms;
     const night = Math.min(1, Math.max(0, (-1 - e) / 8));
-    U.uNight.value = night;
-    U.uStarVis.value = night;
+    this.nightFade = night;
+    U.uNight.value = night * this.nightLightGain;
+    U.uStarVis.value = Math.min(1, Math.max(0, (-3 - e) / 8));
+    const glow = Math.min(1, Math.max(0, (NIGHT.fadeFrom - e) / (NIGHT.fadeFrom - NIGHT.fadeTo)));
+    // the moon's boost comes in as the twilight goes (else a quarter moon outshone the dusk sky)
+    const mb = Math.min(1, Math.max(0, (NIGHT.boostFrom - e) / (NIGHT.boostFrom - NIGHT.boostTo)));
+    this._moonBoost = 1 + (NIGHT.boost - 1) * mb * mb * (3 - 2 * mb);
     // moon (position and phase for env.year) and the turning star field
     const m = moonDirection(hoursLocal, dayOfYear, this.year);
     this.moon = m;
@@ -318,25 +369,28 @@ export class Environment {
     U.uMoonLight.value.set(L * NIGHT.moonTint[0], L * NIGHT.moonTint[1], L * NIGHT.moonTint[2], NIGHT.earthshine * (1 - m.illumination));
     const cf = celestialFrame(hoursLocal, dayOfYear, this.year);
     U.uCelestial.value.set(...cf.A, ...cf.B, ...cf.P);
-    // the night sky's glow, plus the blue of a moonlit sky (boosted like the moonlight)
+    // the night sky's glow, plus the blue of a moonlit sky (boosted like the moonlight; it fades
+    // in with the night glow: in twilight the sky-view LUT's own sky outshines it)
     const moonH = this._moonLightBoosted(Math.max(0, m.y));
     const z = [0, 0, 0], h = [0, 0, 0];
     for (let c = 0; c < 3; c++) {
       const ms = moonH * [0.03, 0.045, 0.09][c];
-      z[c] = (NIGHT.zenith[c] + ms) * night;
-      h[c] = (NIGHT.horizon[c] + ms) * night;
+      z[c] = (NIGHT.zenith[c] + ms) * glow;
+      h[c] = (NIGHT.horizon[c] + ms) * glow;
     }
     U.uNightZenith.value.setRGB(z[0], z[1], z[2]);
     U.uNightHorizon.value.setRGB(h[0], h[1], h[2]);
     this._nightSky = { z, h };
+    // the light the night glow sheds on the ground (as in _updateGroundLight): part of the metered light
+    this._floorLuma = Math.PI * luma([0, 1, 2].map((c) => 0.65 * z[c] + 0.35 * h[c]));
     this._groundLight = null;           // the night floor and the moon change the ambient light
   }
 
-  /** Moonlight on the scene (scene units, normal incidence), boosted, before the atmosphere. */
+  /** Moonlight on the scene (scene units, normal incidence), boosted at night, before the atmosphere. */
   _moonLightBoosted(scale = 1) {
     const m = this.moon;
     if (!m || m.elevationDeg < -1) return 0;
-    return NIGHT.moonFull * m.brightness * NIGHT.boost * scale;
+    return NIGHT.moonFull * m.brightness * (this._moonBoost ?? NIGHT.boost) * scale;
   }
 
   _invalidate() {
@@ -681,26 +735,34 @@ export class Environment {
     L.updateMatrixWorld();
     L.target.updateMatrixWorld();
 
-    // exposure: metered on the light falling on the scene at the camera (METER)
+    // exposure: metered on the light falling on the scene at the camera (METER): the sun, the
+    // sky, the night glow and a share of the moon (boosted, as it lights the scene)
     const sc = U.uSunColor.value;
     const Edn = sc.r * LUMA[0] + sc.g * LUMA[1] + sc.b * LUMA[2];
-    const K = METER.sun * Edn + this._skyLuma + METER.night;
+    const K = METER.sun * Edn + this._skyLuma + (this._floorLuma || 0) + METER.moon * moonLuma;
     this.meteredLight = K;
+    // the same without the night's boosts, for the eye's colour vision (MESOPIC)
+    const Kp = METER.sun * Edn + this._skyLuma + NIGHT.physical + METER.sun * moonLuma / (this._moonBoost ?? NIGHT.boost);
     // the eye's adaptation state: the light level it is adapted to (eased in log space; adapting
     // to the dark is slower than to the light)
-    const lk = Math.log(K * (this.lightScale ?? 1));
-    if (snap || !Number.isFinite(this._logK)) this._logK = lk;
+    const ls = this.lightScale ?? 1;
+    const lk = Math.log(K * ls), lp = Math.log(Kp * ls);
+    if (snap || !Number.isFinite(this._logK) || !Number.isFinite(this._logKp)) { this._logK = lk; this._logKp = lp; }
     else {
-      const tau = lk < this._logK ? METER.tauDown : METER.tauUp;
-      this._logK += (lk - this._logK) * (1 - Math.exp(-Math.min(dt, 1) / tau));
+      const a = (x, y) => 1 - Math.exp(-Math.min(dt, 1) / (x < y ? METER.tauDown : METER.tauUp));
+      this._logK += (lk - this._logK) * a(lk, this._logK);
+      this._logKp += (lp - this._logKp) * a(lp, this._logKp);
     }
     const Ka = Math.exp(this._logK);
     this.adaptedLight = Ka;
     if (this.autoExposure) this.exposure = meterExposure(Ka);
-    // night vision follows the same state
-    const nv = Math.min(1, Math.max(0, Math.log(MESOPIC[0] / Ka) / Math.log(MESOPIC[0] / MESOPIC[1])));
+    // night vision: rods take over as the (real) light falls through the mesopic range
+    const nv = Math.min(1, Math.max(0, Math.log(MESOPIC[0] / Math.exp(this._logKp)) / Math.log(MESOPIC[0] / MESOPIC[1])));
     this.nightVision = nv * nv * (3 - 2 * nv);
     this.renderer.toneMappingExposure = this.exposure * this.exposureBias;
+    // the artificial lights tuned for the old night exposure keep their brightness on screen
+    this.nightLightGain = Math.min(1, NIGHT_LIGHTS_EXPOSURE / Math.max(this.exposure, 1e-3));
+    U.uNight.value = (this.nightFade ?? 0) * this.nightLightGain;
   }
 
   dispose() {

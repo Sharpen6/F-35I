@@ -333,19 +333,29 @@ float hash13(vec3 p) {
 
 // Stars on a grid of cells over the celestial sphere: one star in ~1 of 200 cells, magnitudes
 // skewed so most are faint; colour from blue-white to orange. Point sources: one pixel wide
-// whatever the resolution, brightness scaled down when a cell is smaller than a pixel.
-vec3 stars(vec3 q0) {
+// whatever the resolution, brightness scaled down when a cell is smaller than a pixel. They come
+// out one by one at dusk: a star shows once the darkness (uStarVis: 0 with the sun 3 deg down, 1
+// at 11 deg) passes its threshold, the brightest first (Sirius and the planets are out at the end
+// of civil twilight, the faint ones by the end of nautical twilight), and only where it outshines
+// the sky behind it (skyLum: the moon's glow, the cities' glow at the horizon hide the faint ones).
+const float STAR_SCALE = 0.0031;   // radiance of a 1-pixel star of brightness 1 (scene units)
+vec3 stars(vec3 q0, float dark, float skyLum) {
   vec3 q = q0 * 260.0;
   vec3 c = floor(q);
   float h = hash13(c);
   if (h < 0.995) return vec3(0.0);
+  float m = (h - 0.995) / 0.005;                       // 0 faint .. 1 bright
+  float t0 = 0.08 + 0.8 * sqrt(1.0 - m);              // the brightest ~5 % by -6 deg, half by -8 deg
+  float fade = smoothstep(t0, t0 + 0.12, dark);
+  if (fade <= 0.0) return vec3(0.0);
   vec3 jitter = vec3(hash13(c + 7.1), hash13(c + 3.7), hash13(c + 1.3)) - 0.5;
   vec3 local = fract(q) - 0.5 - jitter * 0.6;
   float d = length(local);
   float px = max(fwidth(q.x) + fwidth(q.y) + fwidth(q.z), 1e-3) * 0.6;
-  float m = (h - 0.995) / 0.005;                       // 0 faint .. 1 bright
   float bright = 0.06 + 2.4 * pow(m, 7.0) + 0.4 * m * m;
-  float s = smoothstep(px * 1.3, px * 0.2, d) * bright * min(1.0, 0.5 / px);
+  float peak = bright * min(1.0, 0.5 / px) * STAR_SCALE;
+  fade *= smoothstep(1.5, 4.0, peak / max(skyLum, 1e-9));
+  float s = smoothstep(px * 1.3, px * 0.2, d) * peak * fade;
   float t = hash13(c + 9.9);
   vec3 tint = t < 0.3 ? vec3(0.78, 0.86, 1.0) : t < 0.8 ? vec3(1.0, 0.97, 0.92) : vec3(1.0, 0.8, 0.6);
   return tint * s;
@@ -462,12 +472,13 @@ void main() {
       vec3 tm = atmoTransmittance(r, uMoonDir.y);
       L += discM * alb * (lit + shine) * uMoonLight.rgb * tm;
     }
-    // stars and the Milky Way once the sky is dark enough to show them
+    // stars and the Milky Way once the sky is dark enough to show them (the Milky Way only in a
+    // full night, faint: the cities' glow hides most of it in central Israel)
     float skyLum = dot(L, vec3(0.2126, 0.7152, 0.0722));
-    float vis = uStarVis * clamp(1.5 - skyLum * 250.0, 0.0, 1.0);
-    if (vis > 0.0) {
+    if (uStarVis > 0.0) {
       vec3 q = uCelestial * dir;
-      L += (stars(q) * 0.022 + vec3(0.85, 0.9, 1.0) * milkyWay(q) * 0.0005) * vis * tr;
+      float mw = smoothstep(0.85, 1.0, uStarVis) * clamp(2.0 - skyLum / 6e-5, 0.0, 1.0);
+      L += (stars(q, uStarVis, skyLum) + vec3(0.85, 0.9, 1.0) * milkyWay(q) * 3e-5 * mw) * tr;
     }
   }
   gl_FragColor = vec4(L, 1.0);

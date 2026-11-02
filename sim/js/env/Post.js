@@ -157,7 +157,7 @@ const OUTPUT_FRAG = /* glsl */`
   uniform vec2 uRadPerUv;       // radians per uv unit (x, y), for the glare's angular falloff
   uniform float uGhosts;        // lens ghosts strength (0: off)
   uniform vec4 uGlare;          // scattered fractions and widths (rad) of the core and the veil
-  uniform vec4 uLook;           // contrast (power about the pivot), saturation, pivot, -
+  uniform vec4 uLook;           // contrast (power about the pivot), saturation, pivot, toe lift
   uniform float uNightVision;   // 0 photopic .. 1 fully scotopic (dark-adapted eye)
   uniform vec2 uVignetteGrain;  // strengths (0: off)
   uniform float uTime;
@@ -193,6 +193,10 @@ const OUTPUT_FRAG = /* glsl */`
     vec3 p = vec3(uLook.z);
     c = mix(p * pow(max(c, 0.0) / p, vec3(uLook.x)),
             1.0 - (1.0 - p) * pow(max(1.0 - c, 0.0) / (1.0 - p), vec3(uLook.x)), step(p, c));
+    // toe: AgX's sigmoid crushes everything below ~1 % of white; lift the deep shadows a little
+    // (shade under a clear sky, a moonlit field), leaving black black and the mid-tones as they are
+    vec3 omc = 1.0 - clamp(c, 0.0, 1.0);
+    c += uLook.w * c * omc * omc * omc * omc;
     float l2 = dot(c, vec3(0.2126, 0.7152, 0.0722));
     c = l2 + uLook.y * (c - l2);
     c = AgXOutset * c;
@@ -249,10 +253,14 @@ const OUTPUT_FRAG = /* glsl */`
       }
     }
 
-    // night vision: with a dark-adapted eye the rods take over (no colour, a blue cast)
+    // night vision: with a dark-adapted eye the rods take over. Their sensitivity peaks in the
+    // blue-green (507 nm): blues hold their brightness, reds go dark (the Purkinje shift), colours
+    // fade and a cool cast remains. Never all the way to grey (a cap of 60 %: the cones still see
+    // the brighter things, and on a screen next to the HUD a fully grey night reads as a fault);
+    // lights bright enough for the cones keep their colour
     if (uNightVision > 0.0) {
-      float scot = dot(c, vec3(0.04, 0.45, 0.52));     // rod sensitivity, roughly
-      float k = uNightVision * smoothstep(0.6, 0.02, dot(c, vec3(0.2126, 0.7152, 0.0722)));
+      float scot = dot(c, vec3(0.04, 0.45, 0.52));     // rod sensitivity in linear sRGB, roughly
+      float k = 0.6 * uNightVision * smoothstep(0.6, 0.02, dot(c, vec3(0.2126, 0.7152, 0.0722)));
       c = mix(c, scot * vec3(0.62, 0.78, 1.0), k);
     }
 
@@ -301,9 +309,13 @@ export class Post {
     this.env = env;
     /** Switches (the settings and the console can change them at any time). */
     this.options = { bloom: true, glare: true, ghosts: true, vignette: false, grain: false, nightVision: true };
-    /** Look: AgX contrast (power) and saturation; bloom strength and threshold (scene units x exposure). */
+    /**
+     * Look: AgX contrast (power about the pivot), saturation and toe lift; bloom strength and
+     * threshold (scene units x exposure). (1.12 / 1.12 crushed the shade under a clear sky into
+     * navy: shade 10:1 below the sunlit side came out at ~35/255.)
+     */
     this.look = {
-      contrast: 1.12, saturation: 1.12, pivot: 0.42,            // AgX look
+      contrast: 1.04, saturation: 1.04, pivot: 0.42, toe: 0.25,  // AgX look
       bloom: 0.08, threshold: 2.0, knee: 1.0, clamp: 64, scatter: 0.72,
       glare: 1.0, glareCore: [0.015, 0.0087], glareVeil: [0.004, 0.09],  // [fraction, width rad]
     };
@@ -509,7 +521,7 @@ export class Post {
     // 5. output
     out.tScene.value = this.hdr.texture;
     out.uExposure.value = exposure;
-    out.uLook.value.set(L.contrast, L.saturation, L.pivot, 0);
+    out.uLook.value.set(L.contrast, L.saturation, L.pivot, L.toe ?? 0);
     out.uGlare.value.set(L.glareCore[0], L.glareCore[1], L.glareVeil[0], L.glareVeil[1]);
     out.uNightVision.value = o.nightVision ? (env.nightVision ?? 0) : 0;
     out.uVignetteGrain.value.set(o.vignette ? 0.35 : 0, o.grain ? 0.06 : 0);
