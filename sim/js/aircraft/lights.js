@@ -23,9 +23,13 @@
 //   core   the lens while it is smaller than a few pixels: the light reaching the camera, I / d^2,
 //          spread over a ~2.5 px dot (energy-conserving), so a distant light stays a point of the
 //          right brightness; it fades out as the lens itself (emissive material) becomes visible.
-//          A core brighter than the display can show grows instead (its energy kept, as glare makes
-//          a bright point look bigger), and the shader's hue-preserving shoulder keeps a red or
-//          green light red or green at any distance (no white core with a coloured rim)
+//          The dot's profile has a soft skirt, (1 + 2 r^2 / a^2)^-2 (a lens's spread, not a
+//          Gaussian): a core brighter than the display can show looks bigger, as glare does, and
+//          fades out at its edge instead of ending as a flat disc. The shader's hue-preserving
+//          shoulder keeps a red or green light red or green at any distance (no white core with a
+//          coloured rim); on the canvas it is the glow's whole tone curve (three's ACES on top bleached
+//          a bright green towards white). The sprite sits a little nearer the camera than the lamp
+//          (uDepthBias), so the lamp's own housing and the wing's edge beside it do not bite into it.
 //   halo   eye / lens glare, in proportion to the light reaching the camera, only once it is dark
 //          (fxEnv.darkness: from the sun's elevation, the same whatever the exposure meter): by day
 //          a lit lens is a small bright dot, never an LED glow. When the frame goes through the HDR
@@ -88,18 +92,29 @@ const GLOW_VERT = /* glsl */`
   #include <common>
   #include <fog_pars_vertex>
   #include <logdepthbuf_pars_vertex>
-  attribute vec4 aCore;      // rgb: radiance at the centre (scene units), a: 1/e^2 radius (px)
+  attribute vec4 aCore;      // rgb: radiance at the centre (scene units), a: radius a of the profile (px)
   attribute vec4 aHalo;      // rgb: radiance at the centre, a: radius (px)
   uniform float uPixelRatio;
+  uniform float uExposure;
+  uniform vec4 uShoulder;
+  uniform float uDepthBias;  // m nearer the camera than the lamp
   varying vec4 vCore;
   varying vec4 vHalo;
   varying float vRadius;
   void main() {
     vCore = aCore;
     vHalo = aHalo;
-    float r = max(aCore.a * 2.0, aHalo.a);
+    // the sprite reaches as far as the core's skirt shows: (1 + 2 r^2 / a^2)^-2 of the centre's
+    // brightness (over the shoulder's knee) is down to 1/50 of the knee there
+    float over = max(aCore.r, max(aCore.g, aCore.b)) * uExposure / uShoulder.x;
+    float rc = aCore.a * sqrt(max(0.0, sqrt(50.0 * over) - 1.0) * 0.5);
+    float r = min(max(max(aCore.a * 2.0, rc), aHalo.a), 96.0);
     vRadius = r;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    // nearer the camera along the line of sight (same place on screen): the airframe right beside
+    // the lamp does not cut the glow, while a lamp behind the fuselage stays hidden
+    float dist = length(mvPosition.xyz);
+    mvPosition.xyz *= max(0.5, 1.0 - (uDepthBias + 0.002 * dist) / max(dist, 1e-3));
     gl_Position = projectionMatrix * mvPosition;
     gl_PointSize = 2.0 * r * uPixelRatio;
     if (dot(aCore.rgb, vec3(1.0)) + dot(aHalo.rgb, vec3(1.0)) <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -119,9 +134,12 @@ const GLOW_FRAG = /* glsl */`
   void main() {
     #include <logdepthbuf_fragment>
     float r = length(gl_PointCoord - 0.5) * 2.0 * vRadius;          // px from the centre
-    vec3 col = vCore.rgb * exp(-2.0 * r * r / max(vCore.a * vCore.a, 1e-4));
+    // the core: energy pi a^2 / 2 (as a Gaussian of 1/e^2 radius a), a skirt falling as r^-4
+    float q = 1.0 + 2.0 * r * r / max(vCore.a * vCore.a, 1e-4);
+    vec3 col = vCore.rgb / (q * q);
     float x = r / max(vHalo.a, 1e-4);
     col += vHalo.rgb * pow(max(1.0 - x, 0.0), 2.0) / (1.0 + 10.0 * x);
+    col *= 1.0 - smoothstep(0.8, 1.0, r / vRadius);                  // nothing at the sprite's edge
     float m = max(col.r, max(col.g, col.b));
     if (m <= 0.0) discard;
     // hue-preserving shoulder on the display brightness: the brightest channel rolls off from the
@@ -131,8 +149,14 @@ const GLOW_FRAG = /* glsl */`
     float knee = mix(uShoulder.z, uShoulder.x, sat), cap = mix(uShoulder.w, uShoulder.y, sat);
     float d = m * uExposure;
     if (d > knee) col *= (knee + (cap - knee) * (1.0 - exp(-(d - knee) / (cap - knee)))) / d;
-    gl_FragColor = vec4(col, 1.0);
-    #include <tonemapping_fragment>
+    #ifdef TONE_MAPPING
+      // the canvas: the shoulder is the glow's tone curve (display = radiance x exposure, at most the
+      // cap); three's ACES on top of it would bleach a saturated green or red towards white
+      gl_FragColor = vec4(col * uExposure, 1.0);
+    #else
+      // a float target: the HDR chain's tone curve and bloom follow
+      gl_FragColor = vec4(col, 1.0);
+    #endif
     #include <colorspace_fragment>
     gl_FragColor.rgb = fxFog(gl_FragColor.rgb, 0.0);
   }`;
@@ -149,8 +173,13 @@ const smooth = THREE.MathUtils.smoothstep;
 
 // display brightness (x exposure) of the glows' hue-preserving shoulder: knee and cap for a saturated
 // light, then for a white one; with the HDR chain's bloom both scale up (the bloom takes the excess)
-const SHOULDER = [0.6, 0.9, 2.0, 4.0];
+// On the canvas the shoulder is the whole tone curve (display 0..1): a saturated green tops out at
+// ~(85, 243, 152), a red at ~(243, 66, 46). On a float target the HDR chain's tone curve follows
+// (scene-linear values, the old ACES-matched shoulder), and with its bloom both scale up.
+const SHOULDER = [0.6, 0.9, 0.75, 1.0];
+const SHOULDER_HDR = [0.6, 0.9, 2.0, 4.0];
 const SHOULDER_BLOOM = 2.5;
+const DEPTH_BIAS = 0.6;                // m: the glow sprite drawn this much nearer than the lamp
 const HALO_BLOOM = 0.35;
 
 export class AircraftLights {
@@ -169,6 +198,8 @@ export class AircraftLights {
     this.haloGain = 1;
     this.taxi = 0;                           // 0 landing beam .. 1 taxi beam (weight on wheels)
     this._bloom = false;
+    this._linear = false;                    // drawn into a float target (the HDR chain)
+    this._sh = [0, 0, 0, 0];
     this._ac = [0, 0];
     this._level = { nav: 0, tail: 0, anticoll: 0, formation: 0, landing: 0 };
     // lenses
@@ -199,8 +230,8 @@ export class AircraftLights {
       const sat = 1 - Math.min(colour.r, colour.g, colour.b) / Math.max(peak, 1e-6);
       this.sources.push({
         name: l.name, role, node, pos, lensDir, outboard, colour, peak,
-        // the display brightness the shader's shoulder caps this light at (see SHOULDER)
-        cap: SHOULDER[3] + (SHOULDER[1] - SHOULDER[3]) * sat,
+        // how saturated the light is: the shader's shoulder caps it lower the more it is (SHOULDER)
+        sat,
         lensSize: role === 'tail' ? 0 : (l.size || 0.05),
         top: role === 'anticoll' ? nodePos[1] > 0.2 : false,
         fwd: fwdModel,
@@ -227,7 +258,7 @@ export class AircraftLights {
     geo.setAttribute('aCore', new THREE.BufferAttribute(this._core, 4).setUsage(THREE.DynamicDrawUsage));
     geo.setAttribute('aHalo', new THREE.BufferAttribute(this._halo, 4).setUsage(THREE.DynamicDrawUsage));
     this.glowUniforms = { ...fogUniforms(), uPixelRatio: { value: 1 }, uExposure: { value: 1 },
-      uShoulder: { value: new THREE.Vector4().fromArray(SHOULDER) } };
+      uShoulder: { value: new THREE.Vector4().fromArray(SHOULDER) }, uDepthBias: { value: DEPTH_BIAS } };
     this.glowMaterial = new THREE.ShaderMaterial({
       name: 'F35_LightGlow', uniforms: this.glowUniforms, vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG,
       transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, toneMapped: true, fog: true,
@@ -240,11 +271,12 @@ export class AircraftLights {
     this.points.onBeforeRender = (renderer) => {
       this.exposure = fxExposure.get(renderer);
       this._bloom = fxEnv.bloomOn(renderer);
+      this._linear = fxEnv.linearTarget(renderer);
       const u = this.glowUniforms;
       u.uPixelRatio.value = renderer.getPixelRatio();
       u.uExposure.value = Math.max(0.05, this.exposure);
-      const k = this._bloom ? SHOULDER_BLOOM : 1;
-      u.uShoulder.value.set(SHOULDER[0] * k, SHOULDER[1] * k, SHOULDER[2] * k, SHOULDER[3] * k);
+      const sh = this._shoulder();
+      u.uShoulder.value.set(sh[0], sh[1], sh[2], sh[3]);
     };
     root.add(this.points);
     // the lamp's beams for the ground pool (world frame; AircraftFX reads them): `direction`,
@@ -303,6 +335,14 @@ export class AircraftLights {
     return 1 + 203 * d * d;
   }
 
+  /** The glows' shoulder for the target last drawn into: [knee, cap] saturated, [knee, cap] white. */
+  _shoulder() {
+    const src = this._linear ? SHOULDER_HDR : SHOULDER;
+    const k = this._linear && this._bloom ? SHOULDER_BLOOM : 1;
+    for (let i = 0; i < 4; i++) this._sh[i] = src[i] * k;
+    return this._sh;
+  }
+
   /** viewportHeight: canvas height in CSS px (pixel sizes of the glows). */
   update(dt, camera, viewportHeight = 1080) {
     dt = Math.max(0, dt || 0);
@@ -353,7 +393,9 @@ export class AircraftLights {
     const dark = fxEnv.darkness;
     const G = AircraftLights.nightGain(dark);
     const haloGain = this.haloGain * (this._bloom ? HALO_BLOOM : 1);
-    const capScale = this._bloom ? SHOULDER_BLOOM : 1;
+    // the display brightness the shader's shoulder caps a saturated / a white light at
+    const sh = this._shoulder();
+    const capSat = sh[1], capWhite = sh[3];
     const H = Math.max(1, viewportHeight);
     const pxAngle = camera.isPerspectiveCamera
       ? 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / (camera.zoom || 1) / H : 1e-3;
@@ -378,11 +420,13 @@ export class AircraftLights {
           const E = cd * CD / (d * d);                        // illuminance at the camera (scene units)
           const lensPx = s.lensSize / (d * pxAngle);
           const coreFade = s.lensSize > 0 ? 1 - smooth(lensPx, 1.5, 4.0) : 1;
+          // energy-conserving: the profile (1 + 2 r^2 / a^2)^-2 holds pi a^2 / 2 px (GLOW_FRAG); one
+          // brighter than the shoulder lets it show looks bigger through its skirt, never a flat disc
           core = E * G / (omegaPx * Math.PI * coreR * coreR / 2) * coreFade;
-          // brighter than the shoulder lets it show: a larger dot of the same energy (up to ~3x wide)
-          const over = core * exposure * s.peak / (s.cap * capScale);
-          if (over > 1) {
-            const grow = Math.min(2.6, Math.sqrt(over));
+          // a little wider once it is far over the cap (the skirt alone would leave a 1 px pin)
+          const over = core * exposure * s.peak / (capWhite + (capSat - capWhite) * s.sat);
+          if (over > 4) {
+            const grow = Math.min(1.6, Math.sqrt(over / 4));
             coreR *= grow;
             core /= grow * grow;
           }
@@ -419,7 +463,9 @@ export class AircraftLights {
       const x = Math.acos(Math.min(1, Math.max(-1, b.direction.dot(v)))) / b.spread;
       I += b.weight * (b.intensity / LANDING.cd) * Math.exp(-x * x);
     }
-    return I + LANDING_SPILL;
+    // the spill is the lens and the reflector's rim lit from inside: it reaches the side, never
+    // behind the lamp (the housing and the gear leg hide it), so no glare from a chase seat
+    return I + LANDING_SPILL * smooth(L.direction.dot(v), -0.25, 0.15);
   }
 
   /** Relative intensity of a light towards unit vector v (world, light -> camera); m: node normal matrix. */

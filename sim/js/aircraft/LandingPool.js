@@ -1,21 +1,28 @@
 // The landing / taxi light's pool on the ground. The terrain's shaders ignore three.js lights, so the
-// pool is drawn on its own: a grid that follows the terrain (Terrain.heightAt) ahead of the lamp,
-// which MULTIPLIES the ground already drawn (blend dst * (1 + src)), so the runway's paint stays
-// brighter than its asphalt inside the pool, as under a real lamp. Per fragment:
+// pool is drawn on its own: a grid that follows the terrain (Terrain.heightAt) ahead of the lamp.
+// Per fragment:
 //     E_lamp = sum over the beams of I(theta) cos(incidence) / r^2          (lights.js beams)
 //     E_amb  = the sky's and the sun's light on level ground                 (fxshared fxLight)
-//     ground = albedo (E_amb + E_lamp) / pi = what is drawn there x (1 + E_lamp / E_amb)
-// per colour channel, so the lamp's warm white replaces the bluish twilight in the pool. By day and
-// at sunset that ratio is all there is (a 400,000 cd lamp is ~430 lx 10 m ahead, a sunset sky ~400 lx:
-// a faint brightening near the nose wheel). In the dark the sim's exposure stops far short of a
-// dark-adapted eye, so the ratio gets a visibility gain (poolGain, from the light level fxEnv, not the
-// exposure: it rises from ~3 deg below the horizon) and a logarithmic roll-off (POOL_KNEE), so the
-// pool reads as a lit runway that fades out along the beam instead of a flat white wedge.
+//     ground = albedo (E_amb + E_lamp) / pi
+// By day and at sunset E_lamp / E_amb is all there is (a 250,000 cd taxi beam gives ~130 lx 10 m
+// ahead of the nose, a sunset sky ~400 lx: a faint brightening near the nose wheel). In the dark the
+// sim's exposure stops far short of a dark-adapted eye, so the lamp gets a visibility gain (poolGain,
+// from the light level fxEnv, not the exposure: it rises from ~3 deg below the horizon) under a
+// logarithmic roll-off (POOL_KNEE), so the pool reads as a lit runway that fades out along the beam.
 //
-// The factor goes to the target in POOL_PASSES draws of the same grid, each multiplying by the
-// factor's N-th root: an 8-bit canvas clamps a blend source at 1 (at most x2 per draw); a float
-// target (the HDR chain) takes it whole. On the canvas the factor applies to sRGB-encoded values
-// (x F^(1/2.2)), on a linear target to linear ones. Fog dims the factor with distance.
+// On the 8-bit canvas the frame is already tone-mapped, and the tone curve is not a multiplication:
+// its toe crushes the red of the dark bluish night ground, its shoulder squeezes white paint. So what
+// the pool draws is worked out on two reference grounds (POOL_ALBEDO: the runway's asphalt and its
+// white paint), each without and with the lamp through the renderer's own tone curve and encoding
+// (D_off, D_on), and the canvas gets the one map per channel that is exact on both:
+//     drawn = what is there x M + A,   M = (D_on,paint - D_on,asphalt) / (D_off,paint - D_off,asphalt),
+//                                      A = D_on,asphalt - M D_off,asphalt
+// The asphalt comes out the lamp's warm grey (not the night's blue made brighter), the paint stays
+// brighter than the asphalt and turns white rather than bluish, ground in between falls in between.
+// M goes to the canvas in POOL_PASSES draws of the grid (an 8-bit canvas clamps a blend source at
+// 1: at most x2 per draw), A in one more additive draw. On the HDR chain's float target (its tone
+// curve follows) the draws multiply by F itself, which is right for any albedo. Fog and the grid's
+// edges fade the lamp's light out.
 //
 // The beams (world position, directions, intensities, spreads) are also published on
 // visual.lights.landing for a terrain or roads shader that wants to light itself.
@@ -33,14 +40,20 @@ export function poolGain(logLux) {
 }
 /**
  * Log roll-off of the brightening: F = 1 + K ln(1 + gain * E_lamp / E_amb / K), on the luminance of
- * the ratio (the shader scales the colour channels' brightening in proportion).
+ * the ratio (the shader scales the colour channels' brightening in proportion). At night, through
+ * ACES at the exposure's ceiling, asphalt (4, 5, 11) without the lamp comes out ~(108, 104, 98) 10 m
+ * ahead of the nose, ~(65, 62, 59) at 25 m, and the landing beam's 1-4 lx on the touchdown zone on
+ * the approach ~(20-40) grey.
  */
-export const POOL_KNEE = 40;
+export const POOL_KNEE = 4;
 export function poolFactor(ratio, logLux) {
   return 1 + POOL_KNEE * Math.log(1 + poolGain(logLux) * Math.max(0, ratio) / POOL_KNEE);
 }
-/** Draws of the grid (each multiplies by the factor's N-th root, see the header). */
+/** Multiplying draws of the grid (each by M's N-th root, see the header), then one additive draw. */
 export const POOL_PASSES = 3;
+/** Albedos of the reference grounds the pool is worked out for: the runway's asphalt and its paint
+ *  (terrainShaders.js runwayPaint). */
+export const POOL_ALBEDO = [0.115, 0.62];
 
 const CD = 1 / 30000;
 const NX = 17, NZ = 33;
@@ -77,12 +90,23 @@ const POOL_FRAG = /* glsl */`
   uniform vec3 uAmbient;
   uniform float uGain;         // visibility gain (poolGain)
   uniform float uKnee;         // POOL_KNEE
-  uniform float uPow;          // exponent of the factor per draw: (1 / 2.2 on the canvas) / passes
+  uniform vec2 uAlbedo;        // POOL_ALBEDO (asphalt, paint)
+  uniform float uMaxMul;       // the most the multiplying draws can do together on the canvas (2^passes)
+  uniform float uPasses;       // POOL_PASSES
+  uniform float uLinear;       // 1 on a linear float target (the HDR chain), 0 on the 8-bit canvas
   varying vec3 vWorld;
   varying vec2 vGrid;
   float beam(vec3 L, float r, vec3 axis, float I0, float spread) {
     float th = acos(clamp(dot(L / r, axis), -1.0, 1.0)) / spread;
     return I0 * exp(-th * th);
+  }
+  // radiance as the canvas holds it: through the renderer's tone curve (its exposure included) and
+  // the output encoding, as the terrain under the pool was drawn
+  vec3 poolDisplay(vec3 rad) {
+    #ifdef TONE_MAPPING
+      rad = toneMapping(rad);
+    #endif
+    return linearToOutputTexel(vec4(rad, 1.0)).rgb;
   }
   void main() {
     #include <logdepthbuf_fragment>
@@ -108,9 +132,36 @@ const POOL_FRAG = /* glsl */`
         edge *= 1.0 - smoothstep(fogNear, fogFar, vFogDepth);
       #endif
     #endif
-    vec3 f = pow(1.0 + (F - 1.0) * edge, vec3(uPow)) - 1.0;
-    if (max(f.r, max(f.g, f.b)) < 1e-3) discard;
-    gl_FragColor = vec4(f, 0.0);
+    F = 1.0 + (F - 1.0) * edge;
+    if (uLinear > 0.5) {
+      // a linear float target (the HDR chain; its tone curve follows): the ground's radiance times F
+      // per channel is right for any albedo, and nothing clamps the blend
+      #ifdef POOL_ADD
+        discard;
+      #else
+        vec3 fl = pow(F, vec3(1.0 / uPasses)) - 1.0;
+        if (max(fl.r, max(fl.g, fl.b)) < 1e-3) discard;
+        gl_FragColor = vec4(fl, 0.0);
+      #endif
+    } else {
+      // the canvas: the two reference grounds without and with the lamp, as the canvas holds them
+      vec3 ra = uAlbedo.x / PI * Eamb, rp = uAlbedo.y / PI * Eamb;
+      vec3 aOff = poolDisplay(ra), aOn = poolDisplay(ra * F);
+      vec3 pOff = poolDisplay(rp), pOn = poolDisplay(rp * F);
+      // the map through both, its multiplying part as far as the draws can go...
+      vec3 M = clamp((pOn - aOn) / max(pOff - aOff, vec3(1e-4)), 1.0, uMaxMul);
+      #ifdef POOL_ADD
+        // ... and its adding part (the asphalt exact): the lamp's warm white where the toe had
+        // crushed the red of the night's bluish ground
+        vec3 A = max(aOn - M * aOff, 0.0);
+        if (max(A.r, max(A.g, A.b)) < 0.002) discard;
+        gl_FragColor = vec4(A, 0.0);
+      #else
+        vec3 f = pow(M, vec3(1.0 / uPasses)) - 1.0;
+        if (max(f.r, max(f.g, f.b)) < 1e-3) discard;
+        gl_FragColor = vec4(f, 0.0);
+      #endif
+    }
   }`;
 
 const _d = new THREE.Vector3();
@@ -147,31 +198,44 @@ export class LandingPool {
       uLamp: { value: new THREE.Vector3() }, uBeamA: { value: new THREE.Vector3(0, 0, -1) },
       uBeamB: { value: new THREE.Vector3(0, 0, -1) }, uBeams: { value: new THREE.Vector4(400000 * CD, 0, 0.15, 0.2) },
       uLampColour: { value: new THREE.Color(1.0, 0.95, 0.86) },
-      uGain: { value: 1 }, uKnee: { value: POOL_KNEE }, uPow: { value: 1 / 2.2 / POOL_PASSES },
+      uGain: { value: 1 }, uKnee: { value: POOL_KNEE }, uAlbedo: { value: new THREE.Vector2(...POOL_ALBEDO) },
+      uMaxMul: { value: 2 ** POOL_PASSES }, uPasses: { value: POOL_PASSES }, uLinear: { value: 0 },
+    };
+    // toneMapped: three then gives the shader the renderer's tone curve (toneMapping()) on the canvas;
+    // the pool's own output is never tone-mapped (no tonemapping_fragment)
+    const common = {
+      uniforms: this.uniforms, vertexShader: POOL_VERT, fragmentShader: POOL_FRAG,
+      transparent: true, depthWrite: false, toneMapped: true, fog: true,
+      blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+      blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
     };
     // dst * (1 + src): the ground already drawn, brightened (alpha untouched)
     this.material = new THREE.ShaderMaterial({
-      name: 'F35_LandingPool', uniforms: this.uniforms, vertexShader: POOL_VERT, fragmentShader: POOL_FRAG,
-      transparent: true, depthWrite: false, toneMapped: false, fog: true,
-      blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
-      blendSrc: THREE.DstColorFactor, blendDst: THREE.OneFactor,
-      blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
+      ...common, name: 'F35_LandingPool', blendSrc: THREE.DstColorFactor, blendDst: THREE.OneFactor,
+    });
+    // dst + src: the lamp's light the multiplication cannot bring (drawn after it)
+    this.addMaterial = new THREE.ShaderMaterial({
+      ...common, name: 'F35_LandingPoolAdd', defines: { POOL_ADD: '' },
+      blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
     });
     this.passes = [];
-    for (let i = 0; i < POOL_PASSES; i++) {
-      const m = new THREE.Mesh(geo, this.material);
-      m.name = `LandingLightPool${i}`;
+    for (let i = 0; i <= POOL_PASSES; i++) {
+      const add = i === POOL_PASSES;
+      const m = new THREE.Mesh(geo, add ? this.addMaterial : this.material);
+      m.name = add ? 'LandingLightPoolAdd' : `LandingLightPool${i}`;
       m.frustumCulled = false;
-      m.renderOrder = 1;
+      m.renderOrder = add ? 1.5 : 1;                  // the addition after the multiplications
       m.visible = false;
       m.matrixAutoUpdate = false;
       world.add(m);
       this.passes.push(m);
     }
     this.mesh = this.passes[0];
-    // the target decides the encoding of the factor: sRGB on the 8-bit canvas, linear on a float target
+    this.addMesh = this.passes[POOL_PASSES];
+    // the target decides the scheme: the canvas clamps a blend source at 1 (x2 a draw at most), a float
+    // target does not (the first draw sets the shared uniforms for all of them)
     this.mesh.onBeforeRender = (renderer) => {
-      this.uniforms.uPow.value = (fxEnv.linearTarget(renderer) ? 1 : 1 / 2.2) / POOL_PASSES;
+      this.uniforms.uLinear.value = fxEnv.linearTarget(renderer) ? 1 : 0;
       this.uniforms.uGain.value = poolGain(fxEnv.logLux);
     };
     this._lastLamp = new THREE.Vector3(1e9, 0, 0);
@@ -237,11 +301,12 @@ export class LandingPool {
   }
 
   /** The meshes with shader programs of their own (AircraftFX compiles them before first use). */
-  effectMeshes() { return [this.mesh]; }
+  effectMeshes() { return [this.mesh, this.addMesh]; }
 
   dispose() {
     for (const m of this.passes) this.world.remove(m);
     this.mesh.geometry.dispose();
     this.material.dispose();
+    this.addMaterial.dispose();
   }
 }
