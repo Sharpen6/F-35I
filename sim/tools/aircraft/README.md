@@ -75,11 +75,15 @@ adds an estimated 2-4 min (skin pass ~1-3 min, vertex rays ~1 min; not timed yet
    cockpit `F35_SwitchLED`) with emission strength 1 (the app switches them). Look-alike materials
    are merged (mostly the pilot's fabrics): 93 materials.
 7. **Vertex occlusion** (`vertex_ao.py`, unless `--no-ao`): every vertex of a part outside the
-   atlases (gear, wells, bays, doors' insides, cockpit, pilot, small details) casts 24
-   cosine-weighted rays against the whole model at the rest pose (gear down, doors open: as these
-   parts are seen; glass and decals left out); a hit at d counts 1 - (d / 0.6 m)^2. One smoothing
-   pass. Stored as a colour attribute `AO` (R = G = B, 1 = open), the active one, on every copy of
-   a node that has such parts (white elsewhere); other colour attributes are removed.
+   atlases (gear, wells, bays, gear doors' insides, small details) casts 24 cosine-weighted rays
+   against the whole model at the rest pose (every control at its default: gear down with its doors
+   open; glass and decals left out); a hit at d counts 1 - (d / 0.6 m)^2. One smoothing pass.
+   Every part is baked as it is seen: the doors shut at the rest pose and seen open only (weapon
+   bays, gun port, refuelling receptacle) are left out, so the bays and recesses are baked open
+   (shut, they would be black boxes once open), and the cockpit interior and the pilot only occlude
+   (the app's cockpit computes its own occlusion of the tub; a second one would darken it twice).
+   Stored as a colour attribute `AO` (R = G = B, 1 = open), the active one, on every copy of a node
+   that has such parts (white elsewhere); other colour attributes are removed.
 8. **Join** the copies per node, export glTF (Y up, tangents, the nozzle's `AB_Open` shape key as
    a morph target, `COLOR_0` = the `AO` attribute, no animations / skins), mark the decal
    materials `alphaMode BLEND`, write the rig json (`ao`: what was baked).

@@ -420,6 +420,13 @@ and long with attached shock diamonds at night, never a white ball; and, as the 
 `AircraftFX`, vortex trails and vapour sheets in hard turns, the vapour cone near Mach 1 low over
 the sea, a contrail above ~9 km and tyre smoke at touchdown. `sim/tools/aircraft` can bake ambient
 occlusion into the export (ORM texture + per vertex); the app uses it when the data has it.
+Hooks for other modules (no change to `main.js`): every day / night switch of the jet's effects
+follows the sun's elevation (`fxEnv`, `js/aircraft/fxshared.js`), never the exposure meter; an HDR
+chain that keeps its exposure elsewhere replaces `fxExposure.get` (and sets `fxEnv.noonExposure`);
+the landing and taxi beams are published on `visual.lights.landing.beams` for a terrain or roads
+shader that wants to light itself (then `?landingpool=0`). `AircraftFX` builds every effect's
+shader program, the wingmen's too, in the first frame drawn: no hitch when the burner or the
+vapour first shows.
 
 ## Notes and small deviations from DESIGN.md
 

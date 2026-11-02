@@ -31,6 +31,7 @@ import { Afterburner } from './Afterburner.js';
 
 const RIG_CONTROLS = ['stick_pitch', 'stick_roll', 'pedals', 'throttle', 'flaps', 'speedbrake', 'gear', 'nws',
   'roll_distance', 'weapon_bays', 'canopy', 'refuel_door', 'gun_door', 'tailhook'];
+const STRUTS = ['nose', 'left', 'right'];
 
 /** A Vector3 that also reads as an array (p[0], p[1], p[2]) for code written against the json. */
 export class InfoPoint extends THREE.Vector3 {}
@@ -67,6 +68,17 @@ export function nozzleIdleOpen(throttle) {
   return 0.75 * (1 - THREE.MathUtils.smoothstep(t, 0.08, 0.6));
 }
 
+/**
+ * The nozzle area follows the engine, not the lever: the F135's control schedules it on the spool
+ * (N2), which takes ~4.5 s from idle to MIL in the flight model. The throttle the petals and the
+ * throat glow see is the lever lagged to match (first order, NOZZLE_TAU s).
+ */
+export const NOZZLE_TAU = 1.3;
+export function lagThrottle(current, lever, dt, tau = NOZZLE_TAU) {
+  if (!Number.isFinite(current)) return lever;
+  return current + (lever - current) * (1 - Math.exp(-Math.max(0, dt) / tau));
+}
+
 export class AircraftVisual {
   constructor({ scene = null, baseUrl = 'data/aircraft/' } = {}) {
     this.scene = scene;
@@ -84,7 +96,11 @@ export class AircraftVisual {
     this.viewportHeight = (typeof window !== 'undefined' && window.innerHeight) || 1080;   // px, for light glow sizes
     this._ab = null;
     this._throttle = 0;
+    this._engine = null;                       // the throttle lagged like the spool (lagThrottle)
     this._gear = 1;
+    this._onGround = false;
+    this._ctl = {};                            // setControls: rig values and strut compressions, reused
+    this._comp = {};
     if (scene) scene.add(this.object3d);
   }
 
@@ -133,21 +149,35 @@ export class AircraftVisual {
 
   setControls(c) {
     if (!c || !this.loaded) return;
-    const v = {};
+    // reused every frame (no garbage): RigPlayer.set copies the values, and a key not given this
+    // time holds its last value, as the rig would keep it anyway
+    const v = this._ctl;
     for (const k of RIG_CONTROLS) if (Number.isFinite(c[k])) v[k] = c[k];
     // struts: compression from fully extended -> rig strut_<x> (from the modelled parked pose)
-    const comp = {};
+    const comp = this._comp;
+    // weight on wheels (a strut compressed): the lights choose the taxi beam on the ground
+    let wow = false;
     if (Array.isArray(c.wheels)) {
       for (const w of c.wheels) {
         if (!w) continue;
-        if (Number.isFinite(w.compression)) comp[w.name] = w.compression;
+        if (Number.isFinite(w.compression)) {
+          comp[w.name] = w.compression;
+          if (w.compression > 0.002) wow = true;
+        }
         // nose-wheel angle (rad) when no nws command is given
         if (w.name === 'nose' && Number.isFinite(w.steer) && !Number.isFinite(c.nws)) {
           v.nws = Math.max(-1, Math.min(1, w.steer / this.rig.info.noseSteer.max));
         }
       }
     }
-    if (c.strut) for (const k of ['nose', 'left', 'right']) if (Number.isFinite(c.strut[k])) comp[k] = c.strut[k];
+    if (c.strut) {
+      for (const k of STRUTS) {
+        if (!Number.isFinite(c.strut[k])) continue;
+        comp[k] = c.strut[k];
+        if (c.strut[k] > 0.002) wow = true;
+      }
+    }
+    if (Array.isArray(c.wheels) || c.strut) this._onGround = wow;
     for (const g of this.rig.info.gearContacts) {
       if (g.name in comp && g.control) {
         const x = Math.min(g.travel, Math.max(0, comp[g.name])) - g.staticCompression;
@@ -172,11 +202,14 @@ export class AircraftVisual {
     // burner from ab, or from the throttle above MIL
     const ab = this._ab !== null ? this._ab : Math.max(0, (this._throttle - 0.75) / 0.25);
     // nozzle petals (AB_Open: 0 = the MIL position, 1 = full burner): the F135's convergent-divergent
-    // nozzle is wide open at idle, closes as the throttle comes up to MIL and opens again in burner
-    this.player.overrideMorph('AB_Open', Math.max(ab, nozzleIdleOpen(this._throttle)));
+    // nozzle is wide open at idle, closes as the engine spools up to MIL and opens again in burner
+    // (the burner's own fill already lags in the flight model)
+    this._engine = lagThrottle(this._engine, this._throttle, dt);
+    const open = Math.max(ab, nozzleIdleOpen(this._engine));
+    this.player.overrideMorph('AB_Open', open);
     this.player.apply();
-    this.afterburner.set(ab, this._throttle);
-    this.lights.set(null, this._gear);
+    this.afterburner.set(ab, this._engine, open);
+    this.lights.set(null, this._gear, this._onGround);
     this.object3d.updateMatrixWorld();
     this.afterburner.update(dt, camera);
     this.lights.update(dt, camera, this.viewportHeight);
@@ -207,6 +240,15 @@ export class AircraftVisual {
         }
       }
     });
+  }
+
+  /**
+   * The meshes with shader programs of their own that are drawn only at times (the burner's plume,
+   * the throat glow, the light glows): AircraftFX builds their programs before they first show.
+   */
+  effectMeshes() {
+    if (!this.loaded) return [];
+    return [...this.afterburner.effectMeshes(), ...this.lights.effectMeshes()];
   }
 
   /** Eye point in world coordinates (out). */
