@@ -4,34 +4,42 @@
 // write): what photos of F-35s in burner show.
 //   * by day: short and mostly transparent, an orange-yellow core that fills the exit and tapers
 //     away within ~1.5-2 m, a faint blue at the nozzle lip, the shock diamonds pale and close in;
-//   * at night: the same flame, much brighter against the dark, the diamonds (Mach disks) a bright
-//     yellow-white train inside the core, attached to it (each weighted by the core where it sits,
-//     so none floats past the visible flame).
-// No white ball, no pink or lavender tail: each channel saturates at uSat (a hot orange-yellow) and
-// the flame hides what is behind it by its opacity (1 - exp(-kappa * luminance)), blended as
-// premultiplied colour + background * (1 - alpha) (a soot-light flame: mostly transparent). By day
-// kappa is higher (uKappaDay 2 against uKappa 0.35 at night): the flame's display brightness is
-// compressed far below its real ratio to the sky (a core several times brighter than the sky), so
-// a transparent flame would come out as orange + blue sky = a pale, whitish puff, worst when seen
-// along its length. Hiding the sky in proportion keeps the core a saturated orange-yellow, and the
-// faint edges stay nearly transparent. The blue lip is fainter by day too. Day and night (uDay) come
-// from the sky's light level (fxshared fxEnv: the sun's elevation), not from the exposure, so the
-// look changes at the same sun elevation whatever exposure meter the Environment uses: the day look
-// down to the sun ~1.5 deg up, the night look from ~3 deg below the horizon.
+//   * at night: a long flame (~5 m in full burner): a yellow-white throat inside the nozzle, an
+//     orange core that fades to red-orange, a blue-violet sheath along its edge for the first
+//     metre or so, and a train of five or six yellow-white shock diamonds (Mach disks) inside the
+//     core, attached to it (each weighted by the core where it sits, so none floats past the
+//     visible flame).
+// No white ball, no pink or lavender tail: each channel saturates at uSat and the flame hides what
+// is behind it by its opacity (1 - exp(-kappa * luminance)), blended as premultiplied colour +
+// background * (1 - alpha) (a soot-light flame: mostly transparent). By day kappa is higher (2
+// against 0.35 at night): the flame's display brightness is compressed far below its real ratio to
+// the sky (a core several times brighter than the sky), so a transparent flame would come out as
+// orange + blue sky = a pale, whitish puff, worst when seen along its length. Hiding the sky in
+// proportion keeps the core a saturated orange-yellow, and the faint edges stay nearly transparent.
+// Day and night (uDay) come from the sky's light level (fxshared fxEnv: the sun's elevation), not
+// from the exposure, so the look changes at the same sun elevation whatever exposure meter the
+// Environment uses: the day look down to the sun ~1.5 deg up, the night look from ~3 deg below the
+// horizon. The two looks are tables (FLAME_DAY, FLAME_NIGHT) blended by uDay; noon is FLAME_DAY.
 //
-// Brightness and the camera's exposure: the flame is a light source of fixed radiance, but the sim's
-// auto exposure (0.9 at noon, up to 40 at night) would turn it into a blown-out white blob at dusk
-// and night. As a camera exposing for the scene but not blind to a bright flame would, the flame's
-// display brightness (radiance x exposure) grows only with the 4th root of the exposure (uDisp =
-// (exposure / noon exposure)^0.25), and then goes through a hue-preserving shoulder (uKnee, uCap):
-// the brightest channel rolls off towards uCap and the others keep their ratio to it, so the core
-// seen end-on (the whole plume and the throat glow behind it, summed) lands near a saturated
-// (240, 205, 140) at dusk and night instead of clipping to white in every channel.
+// Brightness: a burner's core (~10^4-10^5 cd/m^2) is far brighter than anything the exposure can
+// hold, so the flame is drawn at a picture level, as the cockpit's displays are (js/env/README.md
+// "Lights at night"), never at its physical radiance x exposure, which would be a white blob at
+// dusk and night:
+//   * by day its display brightness (radiance x exposure) grows with the 4th root of the exposure
+//     (uDisp = (exposure / noon exposure)^0.25), as a camera exposing for the scene but not blind
+//     to a bright flame would, then goes through a hue-preserving shoulder (uKnee, uCap): the
+//     brightest channel rolls off towards uCap and the others keep their ratio to it;
+//   * at night it is fixed (uDisp 1 with FLAME_NIGHT's own colours and shoulder): the same flame at
+//     exposure 40 and 285. Its colours are set for the output transform: AgX turns any bright
+//     saturated colour pale (an orange at display 1.2 comes out peach), so the body sits at display
+//     ~0.3-1 with little green (what AgX shows as orange), the diamonds and the throat at ~2-3
+//     (yellow-white) and the sheath at ~0.2-0.4 in blue (blue-violet).
 //
-// The throat glow (inside the nozzle, seen from behind through the petals): engine heat (a dull red
-// at idle and an orange at MIL that only the dark shows) plus the burner (a hot yellow-orange). With
-// the burner lit it is part of the plume shader (rays that pass the exit and the throat see it
-// through the flame, before the shoulder); without it, a small additive disc at the throat.
+// The throat glow (inside the nozzle, seen from behind through the petals): engine heat (a dull
+// red-orange at idle and an orange at MIL that only the dark shows) plus the burner (a hot
+// yellow-orange by day, yellow-white at night). With the burner lit it is part of the plume shader
+// (rays that pass the exit and the throat see it through the flame, before the shoulder); without
+// it, a small additive disc at the throat.
 // The nozzle petals are a morph target driven by AircraftVisual (open at idle and in burner).
 //
 // Fog: three's scene fog (fxshared FOG_PARS_GLSL), as the jet's own materials get it.
@@ -71,12 +79,21 @@ const PLUME_FRAG = /* glsl */`
   uniform float uKnee;        // display brightness where the hue-preserving shoulder starts
   uniform float uCap;         // ... and the brightness it rolls off towards
   uniform float uDay;         // 1 against a daylight sky, 0 at night (fxEnv light level)
-  uniform vec3 uSat;          // brightness each channel saturates at (display, linear, at noon)
+  uniform vec3 uSat;          // brightness each channel saturates at (display, linear, x uDisp)
   uniform vec3 uThroat;       // throat plane z (m, < 0: inside the nozzle), throat radius, exit radius
-  uniform vec3 uGlow;         // throat glow (display, linear, at noon): engine heat + burner
-  uniform float uKappa;       // opacity per unit of integrated luminance (night)
-  uniform float uKappaDay;    // the same by day (see the header)
+  uniform vec3 uGlow;         // throat glow (display, linear, x uDisp): engine heat + burner
+  uniform float uKappa;       // opacity per unit of integrated luminance (see the header)
   uniform float uSpacing;     // shock-cell spacing (m)
+  // the look (FLAME_DAY / FLAME_NIGHT blended by uDay): colours x brightness per metre
+  uniform vec3 uC1;           // core at the exit
+  uniform vec3 uC2;           // ... at 40 % of its length
+  uniform vec3 uC3;           // ... at its tail
+  uniform float uFall;        // exponent of the core's fall-off along its length
+  uniform vec3 uLipCol;       // the blue lip (by day) / sheath (at night)
+  uniform vec4 uLip;          // its radius (x exit radius, or x core radius by w), width (x exit radius), decay (m), w
+  uniform vec3 uDiaCol;       // the shock diamonds
+  uniform vec4 uDia;          // their count, radius (x core radius), half length (x spacing), sharpness
+  uniform vec2 uDiaFall;      // exponents of the core's fall-off where one sits and of its rank
   uniform int uSteps;
   varying vec3 vLocal;
   ${FOG_PARS_GLSL}
@@ -91,7 +108,7 @@ const PLUME_FRAG = /* glsl */`
 
   // core radius and axial weight of the flame at z (m downstream of the exit)
   float coreRadius(float z) { float s = clamp(z / uCore, 0.0, 1.0); return uR0 * (0.93 - 0.62 * pow(s, 1.3)) + 0.02; }
-  float coreFall(float z) { float s = clamp(z / uCore, 0.0, 1.0); return pow(1.0 - s, 1.7); }
+  float coreFall(float z) { float s = clamp(z / uCore, 0.0, 1.0); return pow(1.0 - s, uFall); }
   // by day the faint back half of the flame is lost against the sky (drawn, it would only tint the
   // sky pink): it fades out over the core's back half; at night all of it shows
   float dayTail(float s) { return mix(1.0, 1.0 - smoothstep(0.3, 0.75, s), uDay); }
@@ -105,26 +122,26 @@ const PLUME_FRAG = /* glsl */`
     float r = coreRadius(z);
     float fall = coreFall(z);
     float turb = 0.75 + 0.5 * vnoise(vec3(p.xy * 5.0, z * 3.0 - uTime * 26.0));
-    // core: yellow-orange at the exit -> orange -> a deep orange tail (never pink)
+    // core: yellow-orange (by day) / orange (at night) at the exit -> a deeper orange tail (never pink)
     float env = exp(-pow(rho / r, 2.0) * 2.6) * fall * turb * dayTail(s);
-    vec3 c1 = vec3(1.0, 0.62, 0.24), c2 = vec3(1.0, 0.44, 0.13);
-    vec3 c3 = mix(vec3(0.92, 0.30, 0.08), vec3(1.0, 0.46, 0.12), uDay);
-    vec3 col = (s < 0.4 ? mix(c1, c2, s / 0.4) : mix(c2, c3, clamp((s - 0.4) / 0.6, 0.0, 1.0))) * env * 1.8;
-    // faint blue at the nozzle lip (the outer mixing layer right behind the exit)
-    float lip = exp(-pow((rho - 0.85 * uR0) / (0.16 * uR0), 2.0)) * exp(-z / 0.30);
-    col += vec3(0.30, 0.42, 1.0) * lip * mix(0.55, 0.35, uDay);
+    vec3 col = (s < 0.4 ? mix(uC1, uC2, s / 0.4) : mix(uC2, uC3, clamp((s - 0.4) / 0.6, 0.0, 1.0))) * env;
+    // blue at the nozzle lip (the outer mixing layer right behind the exit); at night a blue-violet
+    // sheath that follows the core's edge downstream
+    float lr = uLip.x * mix(uR0, r, uLip.w);
+    float lip = exp(-pow((rho - lr) / (uLip.y * uR0), 2.0)) * exp(-z / uLip.z);
+    col += uLipCol * lip;
     // shock diamonds: a train of Mach disks inside the core, spacing fixed by the nozzle pressure
     // ratio, each one as bright as the core around it (attached: none beyond the visible flame)
     float z0 = 0.62 * uSpacing;
     float k = floor((z - z0) / uSpacing + 0.5);
-    if (k >= 0.0 && k < 5.0) {
+    if (k >= 0.0 && k < uDia.x) {
       float zk = z0 + k * uSpacing;
-      float rk = 0.52 * coreRadius(zk);
-      float hk = 0.30 * uSpacing;
+      float rk = uDia.y * coreRadius(zk);
+      float hk = uDia.z * uSpacing;
       float d = rho / rk + abs(z - zk) / hk;
-      float ik = coreFall(zk) * dayTail(zk / uCore) * pow(1.0 - k / 5.0, 1.2)
+      float ik = pow(coreFall(zk), uDiaFall.x) * dayTail(zk / uCore) * pow(max(1.0 - k / uDia.x, 0.0), uDiaFall.y)
         * (0.85 + 0.3 * vnoise(vec3(k * 3.1, uTime * 9.0, 0.0)));
-      col += vec3(1.0, 0.82, 0.55) * pow(max(1.0 - d, 0.0), 1.2) * ik * 2.4;
+      col += uDiaCol * pow(max(1.0 - d, 0.0), uDia.w) * ik;
     }
     return col;
   }
@@ -181,7 +198,7 @@ const PLUME_FRAG = /* glsl */`
       acc += emission(p);
     }
     acc *= dt * uGain;
-    float alpha = 1.0 - exp(-mix(uKappa, uKappaDay, uDay) * dot(acc, vec3(0.2126, 0.7152, 0.0722)));
+    float alpha = 1.0 - exp(-uKappa * dot(acc, vec3(0.2126, 0.7152, 0.0722)));
     vec3 flame = uSat * (vec3(1.0) - exp(-acc / uSat));
     // the throat glow seen through the flame: summed before the shoulder, so the two never add up
     // to white
@@ -243,10 +260,56 @@ export function flameDayLook(logLux) {
   return THREE.MathUtils.smoothstep(logLux, 1.5, 3.3);
 }
 
-/** Saturation colour of the flame and hue of the burner's throat glow (display, linear, at noon). */
-const FLAME_SAT = [1.0, 0.44, 0.11];
-const BURNER_GLOW = [1.0, 0.42, 0.10];
-const HEAT_GLOW = [1.0, 0.28, 0.06];
+/**
+ * The flame's two looks (the header), display-referred linear RGB: FLAME_DAY against a daylit sky
+ * (x uDisp, the exposure's 4th root), FLAME_NIGHT against the dark (x 1: a fixed picture level).
+ *   c1, c2, c3     the core's colour x brightness per metre at the exit, at 40 % and at the tail
+ *   fall           exponent of its fall-off along its length; length: x the day's core length
+ *   lip, lipShape  the blue lip / sheath (colour x brightness; radius, width, decay m, follows the core)
+ *   dia, diaShape  the shock diamonds (colour x brightness; count, radius, half length, sharpness)
+ *   diaFall        exponents of the core's fall-off where a diamond sits and of its rank
+ *   sat            brightness each channel saturates at; knee, cap: the hue-preserving shoulder
+ *   kappa          opacity per unit of luminance (see the header)
+ *   burner         the throat glow of the burner at full burner (x ab^0.7)
+ *   heat           the throat glow of the engine: [colour at idle, colour at MIL], brightness [idle, MIL]
+ * FLAME_DAY is the look the aircraft track tuned (the shoulder: Afterburner.shoulder); its engine
+ * heat also grows with fxEnv.darkness (only the dark shows it).
+ */
+export const FLAME_DAY = {
+  c1: [1.8, 1.116, 0.432], c2: [1.8, 0.792, 0.234], c3: [1.8, 0.828, 0.216], fall: 1.7, length: 1,
+  lip: [0.105, 0.147, 0.35], lipShape: [0.85, 0.16, 0.30, 0],
+  dia: [2.4, 1.968, 1.32], diaShape: [5, 0.52, 0.30, 1.2], diaFall: [1, 1.2],
+  sat: [1.0, 0.44, 0.11], kappa: 2.0,
+  burner: [0.55, 0.231, 0.055],
+  heat: [[1.0, 0.28, 0.06], [1.0, 0.28, 0.06], [0.012, 0.112]],
+};
+export const FLAME_NIGHT = {
+  c1: [2.4, 1.008, 0.24], c2: [2.4, 0.48, 0.096], c3: [2.4, 0.24, 0.048], fall: 1.4, length: 1.5,
+  lip: [0.07, 0.028, 0.35], lipShape: [1.0, 0.18, 0.9, 1],
+  dia: [3.2, 2.4, 1.216], diaShape: [6, 0.62, 0.36, 0.8], diaFall: [0.6, 0.8],
+  sat: [3.0, 1.6, 1.2], knee: 1.5, cap: 3.5, kappa: 0.35,
+  burner: [1.6, 0.99, 0.45],
+  heat: [[1.0, 0.16, 0.03], [1.0, 0.22, 0.04], [0.06, 0.35]],
+};
+
+// a * (1 - t) + b * t: exactly b at t = 1 (noon draws FLAME_DAY bit for bit)
+const blend = (a, b, t) => a * (1 - t) + b * t;
+const blend3 = (v, a, b, t) => v.set(blend(a[0], b[0], t), blend(a[1], b[1], t), blend(a[2], b[2], t));
+const blend4 = (v, a, b, t) => v.set(blend(a[0], b[0], t), blend(a[1], b[1], t), blend(a[2], b[2], t), blend(a[3], b[3], t));
+
+/**
+ * The throat glow (display, linear, x uDisp) for a look: engine heat at the lagged lever thr (0.75
+ * MIL) plus the burner at ab; `darkness` (fxEnv) only for the day look. Writes into out [r, g, b].
+ */
+export function throatGlow(look, thr, ab, darkness, out = [0, 0, 0]) {
+  const m = Math.pow(Math.min(Math.max(thr, 0), 0.75) / 0.75, 2);
+  const [c0, c1, lv] = look.heat;
+  let h = lv[0] + (lv[1] - lv[0]) * m;
+  if (look === FLAME_DAY) h *= 0.15 + 0.85 * darkness;
+  const k = ab > 0.005 ? Math.pow(ab, 0.7) : 0;
+  for (let i = 0; i < 3; i++) out[i] = (c0[i] + (c1[i] - c0[i]) * m) * h + look.burner[i] * k;
+  return out;
+}
 
 export class Afterburner {
   /**
@@ -259,7 +322,7 @@ export class Afterburner {
     const axis = new THREE.Vector3().fromArray(nozzle.axis || [0, 0, 1]).normalize();
     this.group.position.copy(exit).addScaledVector(axis, 0.02);
     this.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis);
-    this.maxLen = 5.0;                 // bounding length at full burner (the faint tail at night)
+    this.maxLen = 7.0;                 // bounding length at full burner (the long night flame)
     this.r0 = nozzle.radiusAB || 0.56;
     this.rMil = nozzle.radius || 0.47;  // exit radius with the petals at the MIL position
     this.rMax = this.r0 * 1.15;
@@ -281,12 +344,16 @@ export class Afterburner {
       uCamLocal: { value: new THREE.Vector3() },
       uLen: { value: 4.0 }, uCore: { value: 3.0 }, uR0: { value: this.r0 }, uRmax: { value: this.rMax },
       uAb: { value: 0 }, uTime: { value: 0 }, uGain: { value: 1.0 }, uScale: { value: new THREE.Vector3(1, 1, 1) },
-      uSat: { value: new THREE.Vector3().fromArray(FLAME_SAT) }, uKappa: { value: 0.35 }, uKappaDay: { value: 2.0 },
+      uSat: { value: new THREE.Vector3().fromArray(FLAME_DAY.sat) }, uKappa: { value: FLAME_DAY.kappa },
       uSpacing: { value: 0.8 }, uSteps: { value: this.steps }, uDay: { value: 1 },
       uDisp: { value: 1 }, uInvExp: { value: 1 }, uKnee: { value: this.shoulder.knee }, uCap: { value: this.shoulder.cap },
       uThroat: { value: new THREE.Vector3(throatZ, throatR * 1.05, this.r0) },
       uGlow: { value: new THREE.Vector3() },
+      uC1: { value: new THREE.Vector3() }, uC2: { value: new THREE.Vector3() }, uC3: { value: new THREE.Vector3() },
+      uFall: { value: FLAME_DAY.fall }, uLipCol: { value: new THREE.Vector3() }, uLip: { value: new THREE.Vector4() },
+      uDiaCol: { value: new THREE.Vector3() }, uDia: { value: new THREE.Vector4() }, uDiaFall: { value: new THREE.Vector2() },
     };
+    this._setLook(1);
     // premultiplied "over": the tone-mapped flame colour + the background * (1 - opacity)
     this.plumeMat = new THREE.ShaderMaterial({
       name: 'F35_AB_Plume', uniforms: this.uniforms, vertexShader: PLUME_VERT, fragmentShader: PLUME_FRAG,
@@ -301,15 +368,15 @@ export class Afterburner {
     this.plume.castShadow = false;
     this.plume.receiveShadow = false;
     this.plume.visible = false;
-    // brightness from the exposure the frame is drawn with, the day look from the light level
+    // the look from the light level, the brightness from the exposure the frame is drawn with (by
+    // day; at night a fixed picture level)
     this.plume.onBeforeRender = (renderer) => {
       const u = this.uniforms;
       const e = Math.max(0.05, fxExposure.get(renderer));
-      u.uDisp.value = flameDisplayGain(e);
+      const day = flameDayLook(fxEnv.logLux);
+      this._setLook(day);
+      u.uDisp.value = blend(1, flameDisplayGain(e), day);
       u.uInvExp.value = 1 / e;
-      u.uKnee.value = this.shoulder.knee;
-      u.uCap.value = Math.max(this.shoulder.cap, this.shoulder.knee + 0.01);
-      u.uDay.value = flameDayLook(fxEnv.logLux);
     };
     this.group.add(this.plume);
     // throat glow without the burner (engine heat), a little inside the exit, facing aft
@@ -327,7 +394,7 @@ export class Afterburner {
     this.glow.receiveShadow = false;
     this.glow.onBeforeRender = (renderer) => {
       const e = Math.max(0.05, fxExposure.get(renderer));
-      this.glowUniforms.uDisp.value = flameDisplayGain(e);
+      this.glowUniforms.uDisp.value = blend(1, flameDisplayGain(e), flameDayLook(fxEnv.logLux));
       this.glowUniforms.uInvExp.value = 1 / e;
     };
     this.group.add(this.glow);
@@ -337,6 +404,30 @@ export class Afterburner {
     this.time = 0;
     this._inv = new THREE.Matrix4();
     this._cam = new THREE.Vector3();
+    this._gDay = [0, 0, 0];
+    this._gNight = [0, 0, 0];
+  }
+
+  /** The look's uniforms for day (1: FLAME_DAY, 0: FLAME_NIGHT, between: blended). */
+  _setLook(day) {
+    const u = this.uniforms, N = FLAME_NIGHT, D = FLAME_DAY;
+    if (day === this._day && this.shoulder.knee === this._knee && this.shoulder.cap === this._cap) return;
+    this._day = day; this._knee = this.shoulder.knee; this._cap = this.shoulder.cap;
+    blend3(u.uC1.value, N.c1, D.c1, day);
+    blend3(u.uC2.value, N.c2, D.c2, day);
+    blend3(u.uC3.value, N.c3, D.c3, day);
+    u.uFall.value = blend(N.fall, D.fall, day);
+    blend3(u.uLipCol.value, N.lip, D.lip, day);
+    blend4(u.uLip.value, N.lipShape, D.lipShape, day);
+    blend3(u.uDiaCol.value, N.dia, D.dia, day);
+    blend4(u.uDia.value, N.diaShape, D.diaShape, day);
+    u.uDiaFall.value.set(blend(N.diaFall[0], D.diaFall[0], day), blend(N.diaFall[1], D.diaFall[1], day));
+    blend3(u.uSat.value, N.sat, D.sat, day);
+    u.uKappa.value = blend(N.kappa, D.kappa, day);
+    const knee = blend(N.knee, this.shoulder.knee, day);
+    u.uKnee.value = knee;
+    u.uCap.value = Math.max(blend(N.cap, this.shoulder.cap, day), knee + 0.01);
+    u.uDay.value = day;
   }
 
   /** Ray-march steps (quality): 16 low, 24 medium, 32 high. */
@@ -361,21 +452,21 @@ export class Afterburner {
     const on = ab > 0.005;
     this.plume.visible = on;
     const u = this.uniforms;
-    // throat glow (display, at noon): engine heat that only the dark shows (faint by day), plus the
-    // burner's hot yellow-orange
+    // throat glow (display, x uDisp): engine heat that only the dark shows (faint by day), plus the
+    // burner's hot yellow-orange (yellow-white at night); the two looks blended as the flame's
+    const day = flameDayLook(fxEnv.logLux);
     const thr = Math.min(1, Math.max(0, this.throttle));
-    const heat = (0.012 + 0.10 * Math.pow(Math.min(thr, 0.75) / 0.75, 2)) * (0.15 + 0.85 * fxEnv.darkness);
-    const k = on ? 0.55 * Math.pow(ab, 0.7) : 0;
-    const gr = HEAT_GLOW[0] * heat + BURNER_GLOW[0] * k;
-    const gg = HEAT_GLOW[1] * heat + BURNER_GLOW[1] * k;
-    const gb = HEAT_GLOW[2] * heat + BURNER_GLOW[2] * k;
+    const gD = throatGlow(FLAME_DAY, thr, ab, fxEnv.darkness, this._gDay);
+    const gN = throatGlow(FLAME_NIGHT, thr, ab, fxEnv.darkness, this._gNight);
+    const gr = blend(gN[0], gD[0], day), gg = blend(gN[1], gD[1], day), gb = blend(gN[2], gD[2], day);
     // with the burner lit the plume shader draws the glow (behind the flame, under the shoulder)
     this.glow.visible = !on;
     if (!on) { this.glowUniforms.uColour.value.setRGB(gr, gg, gb); return; }
     u.uGlow.value.set(gr, gg, gb);
     u.uThroat.value.z = this.rMil + (this.r0 - this.rMil) * Math.max(this.open, ab);
-    // visible core 1.4 m at light-off to 3.2 m at full burner; the bounding volume a little longer
-    const core = 1.4 + 1.8 * Math.pow(ab, 0.8);
+    // visible core 1.4 m at light-off to 3.2 m at full burner by day, half as long again at night
+    // (the faint tail shows against the dark); the bounding volume a little longer
+    const core = (1.4 + 1.8 * Math.pow(ab, 0.8)) * blend(FLAME_NIGHT.length, FLAME_DAY.length, day);
     const len = Math.min(this.maxLen, core * 1.3);
     this.plume.scale.set(this.rMax, this.rMax, len);
     u.uScale.value.copy(this.plume.scale);

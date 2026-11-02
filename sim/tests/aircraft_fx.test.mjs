@@ -3,7 +3,7 @@
 //   node --import ./sim/tests/node-three.mjs sim/tests/aircraft_fx.test.mjs
 //
 // anti-collision flash pattern, nozzle opening at idle and its lag behind the lever, the burner's
-// exposure compensation and day look, the light level (day /
+// exposure compensation, day look and night look (a fixed picture level), the light level (day /
 // night from the sun, not the exposure), the rule for lights at night (Environment.js lightGain) and
 // the point lights' visibility floor, the condensation model (vapour at high g in humid low air, the
 // cone near Mach 1, contrails high up), the contrail's ring buffer (it fades out before it runs out
@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { anticollPattern, AircraftLights } from '../js/aircraft/lights.js';
 import { nozzleIdleOpen, lagThrottle, NOZZLE_TAU } from '../js/aircraft/AircraftVisual.js';
-import { flameExposureComp, flameDayLook } from '../js/aircraft/Afterburner.js';
+import { flameExposureComp, flameDayLook, Afterburner, FLAME_DAY, FLAME_NIGHT, throatGlow } from '../js/aircraft/Afterburner.js';
 import { air, condensation, skyLogLux, darknessOf, fxEnv, Ribbon } from '../js/aircraft/fxshared.js';
 import { FX_QUALITY } from '../js/aircraft/AircraftFX.js';
 import { poolFactor, POOL_KNEE } from '../js/aircraft/LandingPool.js';
@@ -100,6 +100,32 @@ test('burner: display brightness grows only with the 4th root of the exposure', 
   assert.ok(Math.abs(display(0.93) - 1) < 1e-9);
   assert.ok(display(40) / display(0.93) < 3, 'night flame not a white ball');
   assert.ok(display(40) > display(0.93), 'but brighter than by day');
+});
+
+test('burner: noon draws the day table exactly, the night its own look (long, diamonds yellower than the body)', () => {
+  const ab = new Afterburner({ exit: [0, 0.12, 6.205], radius: 0.47, radiusAB: 0.56, axis: [0, 0, 1],
+    throat: [0, 0.12, 5.785], throatRadius: 0.405 });
+  const u = ab.uniforms;
+  ab._setLook(1);
+  assert.deepEqual(u.uC1.value.toArray(), FLAME_DAY.c1);
+  assert.deepEqual(u.uDiaCol.value.toArray(), FLAME_DAY.dia);
+  assert.deepEqual(u.uSat.value.toArray(), FLAME_DAY.sat);
+  assert.equal(u.uKappa.value, FLAME_DAY.kappa);
+  assert.equal(u.uKnee.value, ab.shoulder.knee);
+  ab._setLook(0);
+  assert.deepEqual(u.uC2.value.toArray(), FLAME_NIGHT.c2);
+  assert.equal(u.uDia.value.x, FLAME_NIGHT.diaShape[0]);
+  assert.ok(FLAME_NIGHT.length > FLAME_DAY.length);
+  assert.ok(FLAME_NIGHT.dia[1] / FLAME_NIGHT.dia[0] > FLAME_NIGHT.c2[1] / FLAME_NIGHT.c2[0], 'diamonds yellower');
+  assert.ok(FLAME_NIGHT.lip[2] > FLAME_NIGHT.lip[0], 'a blue-violet sheath');
+  // the idle throat at night: a dull red-orange, the burner's throat a bright yellow-white
+  const idle = throatGlow(FLAME_NIGHT, 0, 0, 1);
+  assert.ok(idle[0] > 0.03 && idle[0] < 0.1 && idle[1] < 0.3 * idle[0] && idle[2] < idle[1], `idle ${idle}`);
+  const burner = throatGlow(FLAME_NIGHT, 1, 1, 1);
+  assert.ok(burner[0] > 1 && burner[1] > 0.5 * burner[0], `burner ${burner}`);
+  // noon's engine heat as before (only the dark shows it)
+  const noon = throatGlow(FLAME_DAY, 0, 0, 0);
+  assert.ok(Math.abs(noon[0] - 0.012 * 0.15) < 1e-12);
 });
 
 test('burner: day look by the light level (sun elevation), not by the exposure', () => {
