@@ -30,7 +30,8 @@
 
 import * as THREE from 'three';
 import { BOX_VERT, CHUNK_VERT, BUILDING_FRAG, DEPTH_FRAG, LIGHT_VERT, LIGHT_FRAG, SHADOW_VERT, SHADOW_FRAG } from './buildingShaders.js';
-import { LUX_PER_UNIT, artificialLightGain, pointLightThreshold } from '../env/Environment.js';
+import { LUX_PER_UNIT, artificialLightGain, pointLightThreshold, lightsOn as lightsOnAt } from '../env/Environment.js';
+import { emitterBlending } from '../env/emitters.js';
 
 const TILE = 6400;
 const CORE_HALF = 51200;
@@ -52,16 +53,20 @@ const MAX_CHUNK_BUILDS = 2;          // chunks being built at once
 const FADE_S = 0.6;                  // cross-fade between a chunk's boxes and its full detail (s)
 
 // Night light (js/env/README.md "Lights at night": physical values x env.lightGain / LUX_PER_UNIT):
-// a lit window's luminance (cd/m^2, the brightest channel of its tint: homes behind curtains at
-// 2700-3000 K ~15-35 cd/m^2 with the shader's spread, offices whiter, shop fronts x 1.8) and the
-// street lights' illuminance on the lowest floors of the walls (lux; streets get 10-20 lux on the
-// ground, the walls beside them less, falling off upwards in the shader).
-const WINDOW_CD = 30;
+// a lit window's luminance (cd/m^2, the brightest channel of its tint: rooms behind glass and
+// curtains ~10-40 cd/m^2 with the shader's spread from room to room, shop fronts x 1.8; at night
+// 0.5-0.8 on the display, where Post.js keeps a light's hue) and the street lights' illuminance on
+// the lowest floors of the walls (lux; streets get 10-20 lux on the ground, the walls beside them
+// less, falling off upwards in the shader).
+const WINDOW_CD = 20;
 const FACADE_LUX = 8;
 
-/** Share of the windows lit at local solar time h (an evening peak, a quiet small hours). */
-function litFraction(h) {
-  const P = [[0, 0.30], [2, 0.17], [5, 0.12], [6.5, 0.2], [8, 0.08], [17, 0.08], [19, 0.42], [21, 0.52], [23, 0.40], [24, 0.30]];
+// Share of the windows lit at local solar time h: homes (an evening peak, quiet small hours),
+// offices and public buildings (the working day; after 20:00 late workers, cleaners and the
+// lights left on, 15-30 %)
+const LIT_HOMES = [[0, 0.30], [2, 0.17], [5, 0.12], [6.5, 0.2], [8, 0.08], [17, 0.08], [19, 0.42], [21, 0.52], [23, 0.40], [24, 0.30]];
+const LIT_OFFICES = [[0, 0.1], [6, 0.1], [8, 0.55], [17, 0.6], [19, 0.4], [20, 0.28], [22, 0.18], [24, 0.1]];
+function litFraction(h, P = LIT_HOMES) {
   h = ((h % 24) + 24) % 24;
   for (let i = 1; i < P.length; i++) {
     if (h <= P[i][0]) {
@@ -151,6 +156,7 @@ export class Buildings {
     // uniforms shared by every building material (by reference)
     this._shared = {
       uLight: { value: new THREE.Vector4() },
+      uLitOffice: { value: 0 },
       uAlbedo: { value: new THREE.Vector3(0.78, terrain?.albedoGain ?? 0.7, 1) },
       uVis: { value: new THREE.Vector4(this.Q.visK, 0.25, 0.0012, this.Q.far) },
       uDebug: { value: params.get('buildingsDebug') === '1' ? 1 : 0 },
@@ -300,17 +306,17 @@ export class Buildings {
   }
 
   _lightMaterial() {
-    return new THREE.ShaderMaterial({
+    // added light with its mark as a light in the alpha (js/env/emitters.js)
+    return emitterBlending(new THREE.ShaderMaterial({
       name: 'BuildingLights',
       uniforms: { ...this.env.uniforms, ...this._lightU },
       vertexShader: LIGHT_VERT,
       fragmentShader: LIGHT_FRAG,
       transparent: true,
-      blending: THREE.AdditiveBlending,
       depthTest: true,
       depthWrite: false,
       fog: false,
-    });
+    }));
   }
 
   /**
@@ -742,13 +748,13 @@ export class Buildings {
     this._lastT = now;
     this._frame++;
     this._updateFades(dt);
-    // the sun: ground shadows by day, obstruction lights at dusk and night
+    // the sun: ground shadows by day; lit windows and obstruction lights by the one switch-on
+    // schedule of every light (js/env "Lights at night": env.lightsOn, from just before sunset)
     const sunY = this.env.sunDirection ? this.env.sunDirection.y : 1;
-    const dark = Math.min(1, Math.max(0, (0.1 - sunY) / 0.2));
-    const kDark = dark * dark * (3 - 2 * dark);
+    const kOn = this.env.lightsOn ?? lightsOnAt(this.env.sunElevationDeg ?? 90);
     const shadowK = this.shadowsOn ? Math.min(1, Math.max(0, (sunY - 0.02) / 0.1)) : 0;
     const shadowFar = this.Q.shadowFar;
-    const lightsOn = this.lightsOn && kDark > 0.01;
+    const lightsOn = this.lightsOn && kOn > 0.01;
     let boxes = 0, tiles = 0, chunks = 0, verts = 0, chunkBytes = 0, boxBytes = 0, shadows = 0, shadowBytes = 0, lights = 0;
     for (let ti = 0; ti < this._tileList.length; ti++) {
       const t = this._tileList[ti];
@@ -808,7 +814,7 @@ export class Buildings {
     const env = this.env, el = env.sunElevationDeg ?? 90;
     const lightGain = env.lightGain ?? artificialLightGain(env.exposure, el);
     const LUo = this._lightU;
-    LUo.uLightOn.value.set(kDark, now / 1000, 0);
+    LUo.uLightOn.value.set(kOn, now / 1000, 0);
     LUo.uThreshold.value = env.pointThreshold ?? pointLightThreshold(el);
     LUo.uExposure.value = this.renderer.toneMappingExposure || 1;
     LUo.uGain.value = lightGain / LUX_PER_UNIT;
@@ -818,12 +824,13 @@ export class Buildings {
     }
     // the terrain's albedo gain (it may change at run time): roofs match the ground under them
     this._shared.uAlbedo.value.y = this.terrain?.albedoGain ?? this._shared.uAlbedo.value.y;
-    // night: lit windows and street light, switched on through the dusk (kDark), physical
+    // night: lit windows and street light, switched on through the dusk (kOn), physical
     // values seen by the eye's adaptation (lightGain)
     const U = this._shared.uLight.value;
     const h = this.hours;
-    const art = kDark * lightGain / LUX_PER_UNIT;
+    const art = kOn * lightGain / LUX_PER_UNIT;
     U.set(litFraction(h), WINDOW_CD * art, FACADE_LUX * art, h > 22.5 || h < 6 ? 0.25 : 0.85);
+    this._shared.uLitOffice.value = litFraction(h, LIT_OFFICES);
     const S = this.stats;
     S.tiles = tiles; S.boxes = boxes; S.chunks = chunks; S.chunkVertices = verts;
     S.chunkMB = +(chunkBytes / 1048576).toFixed(1); S.boxMB = +(boxBytes / 1048576).toFixed(1);
