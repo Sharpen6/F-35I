@@ -91,6 +91,9 @@ const SCENES = {
   // shadow map (the lighting track's wide box) and must not keep a decal as well
   dbl_jlm: { spawn: { x: 10300, z: 2400, agl: 45, heading: 60, speed: 120 }, time: 9, camera: 'chase', fly: 0.2 },
   dbl_benshemen: { spawn: { x: -9150, z: -15560, agl: 30, heading: 80, speed: 120 }, time: 9, camera: 'chase', fly: 0.2 },
+  // the same over the Jerusalem forest from a camera beside the (hidden) jet, looking down on the
+  // trees inside the box: each tree's shadow once (the shadow map's, or a decal outside it)
+  dbl_jlm_free: { spawn: { x: 10300, z: 2400, agl: 45, heading: 60, speed: 120 }, time: 9, fly: 0.2, free: { rel: [-30, -5, 25], dir: { heading: 60, pitch: -40 }, fov: 60 } },
   // free cameras (the jet parked 900 m up, out of the way)
   free_forest_near: { spawn: { x: -9000, z: -15500, agl: 900, heading: 80, speed: 150 }, time: 10, free: { pos: [-9300, 12, -15600], dir: { heading: 80, pitch: -6 }, fov: 50 } },
   free_forest_low: { spawn: { x: -9000, z: -15500, agl: 900, heading: 80, speed: 150 }, time: 10, free: { pos: [-9300, 40, -15600], dir: { heading: 80, pitch: -12 }, fov: 55 } },
@@ -169,6 +172,16 @@ async function main() {
     const err = await page.evaluate(() => window.__sim.error);
     if (err) throw new Error(`app did not load: ${err}`);
     // the free camera: while window.__vegFree is set the camera rig is bypassed
+    // the wide shadow box: the environment sizes it to the jet whenever the jet's meshes change,
+    // so the radius is put back after that
+    if (SHADOW_R) {
+      await page.evaluate((R) => {
+        const env = window.__sim.app.env;
+        const prep = env._prepareShadowTarget.bind(env);
+        env._prepareShadowTarget = () => { prep(); env._shadowRadius = R; };
+        env._shadowRadius = R;
+      }, SHADOW_R);
+    }
     await page.evaluate(() => {
       const app = window.__sim.app;
       const orig = app.cams.update.bind(app.cams);
