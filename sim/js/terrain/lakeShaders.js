@@ -20,8 +20,9 @@
 // mip chain); elsewhere the sky (sky-view LUT) and the cumulus layer, or on medium / low the
 // walls' silhouette from a horizon profile around the camera (DeadSea.js _profile).
 //
-// Samplers: lake 9 (uHeights, uDetailArr, uMirrorTex, uLakeData, uProfile, uHorizon, 3 LUTs),
-// mirror 9 (uHeights, uOverview, uFarColor, uNormalCore, uNormalFar, uHorizon, 3 LUTs).
+// Samplers (as the program uses them; tests/landscape_shots.mjs lists them): lake 8 (uHeights,
+// uDetailArr, uMirrorTex, uLakeData, uProfile, uHorizon, the transmittance and sky-view LUTs),
+// mirror 10 (uHeights, uOverview, uFarColor, uRiftColor, uNormalCore, uNormalFar, uHorizon, 3 LUTs).
 
 import { ATMOSPHERE_PARS } from '../env/atmosphereGLSL.js';
 import { DETAIL_LAYERS } from './detailTextures.js';
@@ -130,7 +131,7 @@ vec3 profileReflection(vec3 rel, vec3 R, vec3 sky, vec3 sunE) {
   if (uProfileInfo.z > 0.5 && lr > 1e-4) {
     vec2 dir = R.xz / lr;
     float az = atan(dir.y, dir.x);
-    vec4 pr = texture(uProfile, vec2(az * (0.5 / PI) + 0.5, 0.5));
+    vec4 pr = textureLod(uProfile, vec2(az * (0.5 / PI) + 0.5, 0.5), 0.0);   // in a branch: no implicit derivatives
     vec2 o = rel.xz + uCameraPos.xz - uProfileInfo.xy;
     float D = max(pr.g - dot(o, dir), 250.0);
     float top = pr.r - D * D / (2.0 * uEarthRadius);
@@ -302,12 +303,9 @@ void main() {
   vec2 xz = vWorldXZ;
   float edge = max(abs(xz.x), abs(xz.y));
   float coreW = 1.0 - smoothstep(51200.0 - 4000.0, 51200.0, edge);
-  vec3 col = farColor(xz);
-  vec2 nxz = farNormalXZ(xz);
-  if (coreW > 0.0) {
-    col = mix(col, texture(uOverview, (xz + 51200.0) / 102400.0).rgb, coreW);
-    nxz = mix(nxz, DECODE_N(texture(uNormalCore, ((xz + 51200.0) / 25.0 + 0.5) / 4097.0).rg), coreW);
-  }
+  // the core's colour and normals read everywhere (a texture() in a branch has no derivatives)
+  vec3 col = mix(farColor(xz), texture(uOverview, (xz + 51200.0) / 102400.0).rgb, coreW);
+  vec2 nxz = mix(farNormalXZ(xz), DECODE_N(texture(uNormalCore, ((xz + 51200.0) / 25.0 + 0.5) / 4097.0).rg), coreW);
   vec3 upP = normalize(vec3(vRel.x / uEarthRadius, 1.0, vRel.z / uEarthRadius));
   vec3 N = normalize(vec3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.01)), nxz.y));
   N = normalize(N + upP - vec3(0.0, 1.0, 0.0));
