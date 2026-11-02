@@ -351,7 +351,9 @@ runways.bin: uint8 RGBA, layers x 32 rows x 1024 samples: rgb the imagery's pave
 * By day: the arresting cable (32 mm, on rubber supports every 2.4 m) under yellow discs 3 m across
   9 m apart; inset light fixtures (steel rings with a lens slot: centreline every 30 m,
   touchdown zone barrettes, threshold and end bars) on runways that have those lights; tyre marks
-  of the turns between the centreline and each taxiway (both ways, radius by the turn's angle).
+  of the turns between the centreline and each taxiway (both ways, radius by the turn's angle:
+  the swept band and the gear's tracks, varied smoothly along each arc in its own frame, darkest
+  where it leaves the centreline, thinning out towards the taxiway).
 * Every pattern is box-filtered by the pixel's footprint along and across the runway (bands,
   dashes, discs), the noise is a mipmapped texture sampled with true gradients, and detail too
   fine for a pixel fades into its mean: no crawling or moire at grazing angles.

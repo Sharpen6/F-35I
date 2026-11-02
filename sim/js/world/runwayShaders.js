@@ -467,7 +467,11 @@ void main() {
     fix = max(fix, bar);
     albedo = mix(albedo, vec3(0.16, 0.16, 0.165), fix * small);
   }
-  // tyre marks where the aircraft turn between the centreline and a taxiway (both ways)
+  // tyre marks where the aircraft turn between the centreline and a taxiway (both ways): the
+  // band the wheels sweep and, in it, the tracks of the nose and main gear, rubber varying
+  // smoothly along the arc (overlapping turns), darkest where it leaves the centreline and
+  // thinning out towards the taxiway. Varied in the arc's own frame (u along it, r across it;
+  // a pattern in the runway's frame crosses a curved track every metre: hard bars)
   int nTurn = int(P5.z + 0.5);
   float turnM = 0.0;
   if (detail > 0.3 && at < W) {
@@ -484,10 +488,23 @@ void main() {
         float sc0 = tr.x - hh * sqrt(max(R * R - (R - hw) * (R - hw), 0.0));
         vec2 d = vec2(s - sc0, t - tr.y * R);
         if (d.x * hh < 0.0 || t * tr.y < 0.0) continue;
-        float r = length(d) - R;
-        float wd = band(r, -2.4, 2.4, pmax) * (0.55 + 0.45 * smoothstep(-0.2, 0.3, nS.g + nT.b));
-        float gear = max(band(abs(r), 1.05, 1.45, pmax), band(abs(r), 2.0, 2.3, pmax)) * step(0.0, nT.g + 0.15);
-        turnM = max(turnM, 0.35 * wd + 0.45 * gear * small);
+        float dl = max(length(d), 1e-3);
+        float r = dl - R;
+        if (abs(r) > 2.4 + pmax) continue;
+        // u: the arc's length from the centreline (angle from the tangent point, times R), its
+        // gradient by the chain rule (textureGrad: no derivatives in this loop's divergent flow)
+        vec2 ang = vec2(-tr.y * d.y, hh * d.x);
+        float u = R * atan(ang.y, ang.x);
+        vec2 gu = R * vec2(hh * ang.x, tr.y * ang.y) / (dl * dl), gr = d / dl;
+        // the noise stretched along the arc: blotches (g) ~20 x 0.5 m, patches (a) 20-80 m
+        vec2 sq = vec2(1.0 / 160.0, 1.0 / 4.0);
+        vec2 q = vec2(u, r) * sq + vec2(0.29 * float(k) + 0.5 * hh, 0.37);
+        vec4 nA = textureGrad(uNoise, q, vec2(dot(gu, dX), dot(gr, dX)) * sq, vec2(dot(gu, dY), dot(gr, dY)) * sq) - 0.5;
+        float uEdge = R * acos(clamp((R - hw) / R, -1.0, 1.0));
+        float along = smoothstep(0.0, 8.0, u) * mix(1.0, 0.35, smoothstep(0.0, uEdge, u));
+        float wd = band(r, -2.4, 2.4, pmax) * (0.6 + 0.4 * smoothstep(-0.25, 0.25, nA.g));
+        float gear = max(band(abs(r), 1.05, 1.45, pmax), band(abs(r), 2.0, 2.3, pmax)) * smoothstep(-0.3, 0.25, nA.a + 0.1);
+        turnM = max(turnM, (0.2 * wd + 0.3 * gear * small) * along);
       }
     }
   }
