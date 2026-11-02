@@ -42,8 +42,9 @@
 //
 // warmUpApp(app) runs it all at start-up behind the loading screen: the environment's passes, one
 // environment update, the modules that build their materials over a few frames (the vegetation,
-// the cockpit's interior) given their frames, compileAll, finish, then a few real frames drawn
-// behind the loading screen (the menu's view, the cockpit, the chase view, by day and by night):
+// the cockpit's interior) given their frames, compileAll, finish (and again for what such a
+// module made meanwhile, if it was late), then a few real frames drawn behind the loading screen
+// (the menu's view, the cockpit, the chase view, by day and by night):
 // the first uploads of the textures, the driver's per-draw state, and whatever variant the passes
 // did not foresee (the bounding spheres worked out at an object's first draw are handed back
 // after them: firstDrawBounds); then a wait (a fence, polled once a frame) until the GPU has done
@@ -707,6 +708,13 @@ export async function warmUpApp(app, { progress = null } = {}) {
     say(0.8, 'textures');
     gaps.at('textures');
     await w.uploadTextures(w.scene);
+    // what a module made meanwhile (a pass that had not settled in time, as the cockpit's interior
+    // patching the jet's materials on a slow machine): built and finished like the rest, not by
+    // the frames below, which would build them one at a time on the main thread
+    gaps.at('added');
+    const m1 = w.nextId();
+    w.stats.added.push(...w.compileUnseen(cam));
+    if (w.nextId() > m1) await w.finish(m1);
     // 4. real frames behind the loading screen, and the GPU's work on them
     say(0.82, 'first frames');
     gaps.at('frames');
@@ -728,8 +736,9 @@ export async function warmUpApp(app, { progress = null } = {}) {
   try {
     gaps.at('added');
     const m2 = w.nextId();
-    w.stats.added = w.compileUnseen(cam);
-    if (w.stats.added.length) await w.finish(m2);
+    const added = w.compileUnseen(cam);
+    w.stats.added.push(...added);
+    if (added.length) await w.finish(m2);
   } catch (e) {
     console.warn('warm-up:', e);
   } finally {

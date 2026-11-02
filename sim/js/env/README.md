@@ -317,11 +317,14 @@ drawing while they compile. `?warmup=0` turns it off.
    driver compiles them all at once on its own threads and a program is touched only when it is
    ready; without it each first use waits for its compile.
 5. The textures of the scene's materials not on the GPU yet (`renderer.initTexture`), a few a
-   frame; then six real frames behind the loading screen (the menu's view, the cockpit, the chase
-   view, the same two by the other light, the menu's view again) for the driver's own per-draw
-   state, and a fence polled once a frame until the GPU has done them. The bounding spheres
-   worked out while those frames after the menu's own are drawn (by three, or by `Post.js`) are
-   handed back (`firstDrawBounds`): see *Nothing looks different* below.
+   frame; what a module of step 2 made meanwhile if it had not settled in time (the cockpit
+   interior's patched materials on a slow machine), compiled and finished as in 3 and 4 rather
+   than one at a time by the frames; then six real frames behind the loading screen (the menu's
+   view, the cockpit, the chase view, the same two by the other light, the menu's view again)
+   for the driver's own per-draw state, and a fence polled once a frame until the GPU has done
+   them. The bounding spheres worked out while those frames after the menu's own are drawn (by
+   three, or by `Post.js`) are handed back (`firstDrawBounds`): see *Nothing looks different*
+   below.
 
 After start-up, `check(label)` runs when a flight starts, the camera, the time of day or the
 quality changes and when the wingmen load: whatever in the scene was not compiled yet (a new
@@ -508,8 +511,9 @@ the same resolution (~70 %); low marches at a quarter resolution with no detail 
   SwiftShader (the tests) has no `KHR_parallel_shader_compile`: there each first use waits.
   Uploads that are not a first use stay where they are: the terrain's 1024 x 1024 tiles as they
   stream in (`js/terrain`) and the live PCD's canvas, redrawn a few times a second
-  (`js/aircraft/pcd`). A vegetation pass that has not settled in 12 s (a slow machine) is
-  compiled as it is; what it makes later is caught at the next check (`late`).
+  (`js/aircraft/pcd`). A module's pass that has not settled in 12 s (a slow machine: the
+  vegetation, the cockpit interior) is compiled as it is; what it makes before the frames behind
+  the loading screen is built then, what it makes later is caught at the next check (`late`).
 
 ## Sources
 
