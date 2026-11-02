@@ -202,6 +202,8 @@ export class DeadSea {
       uNormalFar: S.uNormalFar,
       uRiftBox: S.uRiftBox,
       uNormalFarRows: S.uNormalFarRows,
+      uRiftColor: S.uRiftColor,
+      uRiftColorBox: S.uRiftColorBox,
       uAlbedoGain: S.uAlbedoGain,
       uMirrorInfo: this.uniforms.uMirrorInfo,
     };

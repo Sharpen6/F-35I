@@ -26,7 +26,7 @@
 import { ATMOSPHERE_PARS } from '../env/atmosphereGLSL.js';
 import { DETAIL_LAYERS } from './detailTextures.js';
 import { HORIZON_GLSL } from './horizonMap.js';
-import { RIFT_NORMAL_GLSL } from './riftGLSL.js';
+import { RIFT_NORMAL_GLSL, RIFT_COLOR_GLSL } from './riftGLSL.js';
 
 /** Lake level (m MSL) of the height data: the whole north basin is flat at -427.0. */
 export const LAKE_LEVEL = -427.0;
@@ -278,6 +278,8 @@ uniform sampler2D uNormalCore;
 uniform sampler2D uNormalFar;
 uniform vec4 uRiftBox;
 uniform float uNormalFarRows;
+uniform sampler2D uRiftColor;
+uniform vec4 uRiftColorBox;
 uniform float uAlbedoGain;
 uniform vec4 uMirrorInfo;      // on, 2 x camera height above the lake (m), -, -
 
@@ -290,6 +292,7 @@ ${BASIN_HAZE_GLSL}
   #define DECODE_N(v) (v)
 #endif
 ${RIFT_NORMAL_GLSL}
+${RIFT_COLOR_GLSL}
 const float LAKE_LEVEL = ${f1(LAKE_LEVEL)};
 
 void main() {
@@ -299,7 +302,7 @@ void main() {
   vec2 xz = vWorldXZ;
   float edge = max(abs(xz.x), abs(xz.y));
   float coreW = 1.0 - smoothstep(51200.0 - 4000.0, 51200.0, edge);
-  vec3 col = texture(uFarColor, (xz + 204800.0) / 409600.0).rgb;
+  vec3 col = farColor(xz);
   vec2 nxz = farNormalXZ(xz);
   if (coreW > 0.0) {
     col = mix(col, texture(uOverview, (xz + 51200.0) / 102400.0).rgb, coreW);

@@ -455,7 +455,15 @@ export class Terrain {
     try {
       const meta = await fetchJSON(lb + 'rift.json');
       this.hf.setRift(await fetchU16(lb + 'rift.bin'), meta);
-      this.rift = { url: lb, meta };
+      this.rift = { url: lb, meta, colorBitmap: null };
+      // its 50 m colour (rift.py --stage color); without it far.jpg there
+      if (meta.color?.file) {
+        try {
+          this.rift.colorBitmap = await fetchBitmap(lb + meta.color.file);
+        } catch (e) {
+          console.warn(`terrain: no rift colour ${lb}${meta.color.file}: far.jpg there`);
+        }
+      }
       if (meta.attribution && !this.attribution.includes('Copernicus DEM')) {
         this.attribution = [this.attribution, meta.attribution].filter(Boolean).join(' | ');
       }
@@ -483,6 +491,11 @@ export class Terrain {
     releasePacked(tex.heights);
     tex.overview = makeColorTexture(ovBmp, aniso);
     tex.far = makeColorTexture(farBmp, aniso);
+    // the rift strip's colour (a black texel without it: uRiftColorBox is then empty)
+    const riftBmp = this.rift?.colorBitmap;
+    tex.riftColor = riftBmp ? makeColorTexture(riftBmp, aniso)
+      : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    tex.riftColor.needsUpdate = true;
     tex.lc = makePackedCodeTexture(lcOv.codes, lcFar.codes);
     writeUrbanShare(tex.lc.image.data, tex.lc.image.width, lcOv.codes, lcOv.width, lcFar.codes, lcFar.width);
     r.initTexture(tex.lc);
@@ -507,6 +520,8 @@ export class Terrain {
       },
       uRiftBox: { value: ri ? new THREE.Vector4(ri.x0, ri.z0, ri.x1, ri.z1) : new THREE.Vector4(1, 1, -1, -1) },
       uNormalFarRows: { value: FAR_N + (ri ? ri.nz : 0) },
+      uRiftColor: { value: tex.riftColor },
+      uRiftColorBox: { value: ri && riftBmp ? new THREE.Vector4(ri.x0, ri.z0, ri.x1, ri.z1) : new THREE.Vector4(1, 1, -1, -1) },
       uOverview: { value: tex.overview },
       uFarColor: { value: tex.far },
       uNormalCore: { value: this._normalCoreRT.texture },

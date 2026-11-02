@@ -27,14 +27,14 @@
 //
 // Samplers (three.js counts vertex + fragment together; Direct3D 11 allows 16): L0 program
 // 12 (uHeights, uOverview, uNormalCore, uLc, uDetailArr, uHorizon, uL0Color, uL0Data, the
-// shadow map, 3 atmosphere LUTs), base program 12 (no L0 textures, plus uFarColor and
-// uNormalFar). Four units are left for the lighting track.
+// shadow map, 3 atmosphere LUTs), base program 13 (no L0 textures, plus uFarColor, uNormalFar
+// and the rift strip's uRiftColor). Three units are left for the lighting track.
 
 import { ATMOSPHERE_PARS, ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
 import { DETAIL_LAYERS, SLOPE_SCALE, GLYPH_GRID } from './detailTextures.js';
 import { HORIZON_GLSL } from './horizonMap.js';
 import { LAKE_GATE, BASIN_HAZE_GLSL } from './lakeShaders.js';
-import { RIFT_NORMAL_GLSL } from './riftGLSL.js';
+import { RIFT_NORMAL_GLSL, RIFT_COLOR_GLSL } from './riftGLSL.js';
 
 export const MAX_RWY = 4;
 
@@ -158,6 +158,8 @@ uniform sampler2D uFarColor;          // far colour, 200 m / px
 uniform sampler2D uNormalFar;         // far normals (2049^2, 200 m), then the rift strip's (50 m) below them
 uniform vec4 uRiftBox;                // the rift strip: x0, z0, x1, z1 (m); x1 < x0: none
 uniform float uNormalFarRows;         // rows of uNormalFar: 2049 + the strip's
+uniform sampler2D uRiftColor;         // the rift strip's colour, 50 m / px (riftGLSL.js)
+uniform vec4 uRiftColorBox;           // uRiftBox when that colour is loaded, else empty
 #endif
 uniform highp usampler2D uLc;         // land cover codes: overview 4096^2, far 2048^2 below it
 uniform highp sampler2DArray uDetailArr;
@@ -195,6 +197,7 @@ ${BASIN_HAZE_GLSL}
 #endif
 #ifndef USE_L0
 ${RIFT_NORMAL_GLSL}
+${RIFT_COLOR_GLSL}
 #endif
 
 #define DL_MACRO ${f1(L.MACRO.index)}
@@ -1051,7 +1054,7 @@ void main() {
     // L0 patches lie in the core; at its edge the overview's 200 m mip stands in for the far image
     vec3 col = coreW < 1.0 ? textureLod(uOverview, uvCore, 3.0).rgb : colCore;
   #else
-    vec3 col = texture(uFarColor, uvFar).rgb;
+    vec3 col = farColor(xz);                // far.jpg, the rift strip's 50 m where it is
   #endif
   vec4 wA, wB;
   lcSample(uvFar, 2048.0, ivec2(0, 4096), vH, wA, wB);
