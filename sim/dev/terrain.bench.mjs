@@ -1,4 +1,5 @@
 // node sim/dev/terrain.bench.mjs [--port 8146] [--root sim] [--size 960x540] [--frames 7] [--out FILE] [--gpu]
+//   [--configs 0,5,6] [--views 0,2]
 // Terrain-only frame times: dev/terrain.html (the terrain and the sky, nothing else) at three
 // views (fields at 120 m at noon, Rehovot's orchards at 80 m at 08:00, Tel Aviv at night from
 // 400 m), per quality and with each terrain feature switched off in turn. Each number is the
@@ -49,6 +50,13 @@ const CONFIGS = [
   ['low', 'low', true, true, 1],
   ['all terrain features off', 'high', false, false, 0],
 ];
+// --configs 0,5,6 runs only those rows (by index), --views 0,2 only those views
+const pick = (list, name) => {
+  const v = arg(name, '');
+  return v ? v.split(',').map(Number).filter((i) => list[i]).map((i) => list[i]) : list;
+};
+const RUN_CONFIGS = pick(CONFIGS, 'configs');
+const RUN_VIEWS = pick(VIEWS, 'views');
 
 async function startServer() {
   const proc = spawn(process.env.PYTHON || 'python3', [join(ROOT, 'serve.py'), '--port', String(PORT)], { stdio: 'ignore' });
@@ -67,7 +75,7 @@ async function main() {
     : { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
   const out = { when: new Date().toISOString(), root: ROOT, size: [W, H], frames: FRAMES, gpu: '', views: {} };
   try {
-    for (const v of VIEWS) {
+    for (const v of RUN_VIEWS) {
       const page = await browser.newPage({ viewport: { width: W, height: H } });
       page.setDefaultTimeout(900000);
       await page.goto(`${BASE}dev/terrain.html?${v.q}&hud=0&dpr=1`);
@@ -80,7 +88,7 @@ async function main() {
         log(`GPU: ${out.gpu}`);
       }
       const res = {};
-      for (const [label, q, d, s, c, hq] of CONFIGS) {
+      for (const [label, q, d, s, c, hq] of RUN_CONFIGS) {
         // settle: the tiles, the horizon maps of this quality (computed and uploaded; only while
         // the shadows are on, since a switched-off map is never recomputed), the programs
         await page.evaluate(async ([qq, dd, ss, cc, hh]) => {
