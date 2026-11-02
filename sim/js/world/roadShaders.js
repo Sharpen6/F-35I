@@ -430,6 +430,14 @@ void main() {
   #endif
   float NdL = max(dot(N, uSunDir), 0.0);
   vec3 skyE = uAmbient * (0.55 + 0.45 * dot(N, upP));
+  if (cls == 14) {
+    // bridge structures face sideways and down: half the sky for a wall, none of it for the
+    // deck's underside, and the light the ground reflects up at them (the sunlit valley, its
+    // albedo the overview colour's), which is what lights a viaduct's shaded side and belly
+    float up = dot(N, upP);
+    vec3 groundE = ground * (sunE * max(dot(upP, uSunDir), 0.0) + uAmbient);
+    skyE = uAmbient * 0.5 * (1.0 + up) + groundE * 0.5 * (1.0 - up);
+  }
   #ifdef ROAD_TERRAIN_SHADOW
     // the terrain's shadow on surfaces at ground level (a lifted deck or a pier stands above
     // the valley the horizon map describes: left to the sun)

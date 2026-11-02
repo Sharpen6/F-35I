@@ -488,17 +488,34 @@ export function buildChunk(prepared, ground, cx, cz, group) {
       const dx = x - fr.px, dz = z - fr.pz;
       const u = fr.uK + dx * fr.tx + dz * fr.tz;
       const v = dx * fr.rx + dz * fr.rz;
-      if (nrmOv) { nrm[0] = nrmOv[0]; nrm[1] = nrmOv[1]; } else ground.normal(x, z, nrm);
       const q = c.n;
       // the direction this vertex moves per metre of v when the shader widens a thin ribbon:
       // the mitre at either end, blended along the segment (fraction tau between the two mitre
       // lines), so pieces on both sides of a joint move alike; none on aprons
+      let mx = 0, mz = 0;
       if (fr.mA) {
         const den = fr.len + (fr.aE - fr.aK) * v;
         const tau = den > 1e-6 ? Math.min(Math.max((u - fr.uK - fr.aK * v) / den, 0), 1) : 0;
-        A.dir[2 * q] = Math.round((fr.mA[0] + (fr.mB[0] - fr.mA[0]) * tau) * DIR_SCALE);
-        A.dir[2 * q + 1] = Math.round((fr.mA[1] + (fr.mB[1] - fr.mA[1]) * tau) * DIR_SCALE);
-      } else A.dir[2 * q] = A.dir[2 * q + 1] = 0;
+        mx = fr.mA[0] + (fr.mB[0] - fr.mA[0]) * tau;
+        mz = fr.mA[1] + (fr.mB[1] - fr.mA[1]) * tau;
+      }
+      A.dir[2 * q] = Math.round(mx * DIR_SCALE);
+      A.dir[2 * q + 1] = Math.round(mz * DIR_SCALE);
+      if (nrmOv) { nrm[0] = nrmOv[0]; nrm[1] = nrmOv[1]; } else {
+        ground.normal(x, z, nrm);
+        // A built road is level across: it keeps the terrain's slope along it but not the
+        // natural ground's cross slope (it was cut and filled out of it), so it is shaded as a
+        // road and not as the 25 m terrain facets it lies on (in a cutting those read as a
+        // staircase). Across = the mitre direction, the same on both sides of a joint.
+        const ml = at.levelX ? Math.hypot(mx, mz) : 0;
+        if (ml > 1e-6) {
+          const ax = mx / ml, az = mz / ml, d = nrm[0] * ax + nrm[1] * az;
+          const nx = nrm[0] - d * ax, nz = nrm[1] - d * az;
+          const ny = Math.sqrt(Math.max(1 - nrm[0] * nrm[0] - nrm[1] * nrm[1], 0.01));
+          const L = Math.hypot(nx, ny, nz);
+          nrm[0] = nx / L; nrm[1] = nz / L;
+        }
+      }
       A.pos[3 * q] = x - c.ox; A.pos[3 * q + 1] = y - c.baseY; A.pos[3 * q + 2] = z - c.oz;
       if (y < c.minY) c.minY = y; if (y > c.maxY) c.maxY = y;
       A.uv[2 * q] = u; A.uv[2 * q + 1] = v;
@@ -647,6 +664,9 @@ function buildPolyline(pl, ctx) {
     cwDm: Math.min(255, Math.round(pl.cw * 10)), leftDm: Math.min(255, Math.round(pl.left * 10)),
     rightDm: Math.min(255, Math.round(pl.right * 10)), tone: (h >>> 8) & 255,
     jPrev: -1e4, rPrev: 0, jNext: 1e4, rNext: 0,
+    // shaded level across (emitPiece): paved roads and railways; tracks follow the ground,
+    // taxiways lie on flattened airfields
+    levelX: pl.cls <= 8 || pl.cls === 10 || pl.cls === 11,
   };
   const deck = pl.deck && pl.deck.length === n ? pl.deck : null;
   // segment frames and arc lengths

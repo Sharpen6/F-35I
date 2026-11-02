@@ -175,7 +175,10 @@ kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
 * **Draping**: every ribbon polygon is clipped to the terrain's own triangles (25 m cells split
   NW-SE, exactly `HeightField.heightAt`), merged over planar areas in blocks of at most 100 m
   (the vertex shader's earth-curvature drop is quadratic), so roads lie exactly on the rendered
-  terrain. Normals are the terrain's. 38 bytes per vertex.
+  terrain. Normals: the terrain's slope along the road, level across on paved roads and
+  railways (a built road is cut and filled out of the natural cross slope; shaded with the
+  terrain's normals it showed the 25 m facets in a cutting as light and dark steps), the
+  terrain's own on tracks, taxiways and aprons. 38 bytes per vertex.
 * **Bridges**: on a deck polyline (DCK1) the surface is max(terrain, deck): each piece is split
   along the line where the deck plane meets the terrain plane (both parts share that line: no
   cracks), the lifted part takes the deck's plane and normal. Where the deck stands at least
@@ -183,7 +186,8 @@ kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
   structure depth, parapets 0.9 m high with their inner faces and caps, the underside, end walls
   where the deck meets the ground and piers every 40 / 80 / 120 m (by height; 1.4 m + 3.5 % of the
   height wide, two columns under decks over 14 m wide, none where another road passes under).
-  Not cast into the sun's shadow map.
+  Lit by the sun, half the sky on the walls and the light the ground reflects up (the shaded
+  side and the underside of a viaduct). Not cast into the sun's shadow map.
 * **Thin ribbons**: a ribbon narrower than 1.5 px on screen is widened to 1.5 px in the vertex
   shader (on the terrain's tangent plane along the mitred cross direction, aDir), with its
   coverage lowered to match: distant roads stay continuous lines of the right weight instead of
