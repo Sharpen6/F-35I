@@ -51,6 +51,13 @@ const log = (...a) => console.log(`[warmup ${((Date.now() - t0) / 1000).toFixed(
 const HOOK = () => {
   const P = window.__probe = { phase: 'load', phases: {}, frame: 0 };
   const cur = () => P.phases[P.phase] || (P.phases[P.phase] = { calls: {}, ms: {}, uploads: [], frames: [] });
+  // the page's long tasks (script that kept it from drawing for 50 ms or more), by phase
+  try {
+    new PerformanceObserver((l) => {
+      const c = cur();
+      for (const e of l.getEntries()) (c.long || (c.long = [])).push([Math.round(e.startTime), Math.round(e.duration)]);
+    }).observe({ type: 'longtask', buffered: true });
+  } catch (e) { /* no long task timing */ }
   const proto = window.WebGL2RenderingContext && WebGL2RenderingContext.prototype;
   if (!proto) return;
   const UP = new Set(['texImage2D', 'texSubImage2D', 'texImage3D', 'texSubImage3D', 'compressedTexImage2D', 'copyTexImage2D']);
@@ -178,6 +185,11 @@ async function main() {
     });
     report.load = { ...ext, gl: await S(() => window.__probe.phases.load) };
     log(`loaded in ${report.loadS} s: ${ext.programs} programs, KHR_parallel_shader_compile ${ext.parallel}`);
+    // the loading screen's long tasks: the page drew nothing during each one
+    const long = (report.load.gl?.long || []).map((x) => x[1]).sort((a, b) => b - a);
+    report.load.longTasks = { count: long.length, over200: long.filter((d) => d > 200).length, over500: long.filter((d) => d > 500).length,
+      over1000: long.filter((d) => d > 1000).length, longest: long.slice(0, 8) };
+    log(`loading: ${long.length} long tasks, ${report.load.longTasks.over500} over 0.5 s, longest ${long.slice(0, 8).join(', ')} ms`);
 
     const phase = (name) => S((n) => { window.__probe.phase = n; window.__probe.newPrograms(); }, name);
     const frames = async (n, dt = 0.25) => { for (let i = 0; i < n; i++) await S((d) => window.__sim.advance(d), dt); };
@@ -186,7 +198,7 @@ async function main() {
       const created = (p && p.created) || [];
       const worst = p && p.frames.length ? Math.max(...p.frames.map((f) => f.ms)) : 0;
       report.phases[name] = { programs: created.map((c) => c.name), count: created.length, worstFrameMs: worst,
-        calls: p ? p.calls : {}, uploads: p ? p.uploads : [], frames: p ? p.frames : [] };
+        calls: p ? p.calls : {}, uploads: p ? p.uploads : [], frames: p ? p.frames : [], longTasks: p ? p.long || [] : [] };
       log(`${name.padEnd(18)} ${String(created.length).padStart(3)} new programs${created.length ? `: ${created.map((c) => c.name).join(', ')}` : ''}` +
         `; ${(p?.calls?.texImage2D || 0) + (p?.calls?.texSubImage2D || 0) + (p?.calls?.texImage3D || 0)} uploads (${(p?.uploads || []).length} >= 256^2); worst frame ${worst} ms`);
       save();       // after every phase: a crash later leaves what was measured

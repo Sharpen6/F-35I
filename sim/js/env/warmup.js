@@ -21,11 +21,12 @@
 //    the ones made before the start-up pass are made again in it (the environment map and the
 //    sun's state are set by then: standard materials have other programs without them).
 //  - compileAll(): the scene graph, hidden objects included (renderer.compile goes through them
-//    all); the depth programs the shadow pass draws the casters with (compileDepth: the
-//    customDepthMaterial, or a MeshDepthMaterial, with the side, maps and alpha test that
-//    WebGLShadowMap.getDepthMaterial gives them, into a target, without the scene's fog); and the
-//    stand-ins of what is not in the scene yet or not drawn by it (module.warmup(w, camera): road
-//    chunks, street lamps, trees, Post's and the clouds' passes ...).
+//    all), a few objects at a time with the page drawing between the slices; the depth programs
+//    the shadow pass draws the casters with (compileDepth: the customDepthMaterial, or a
+//    MeshDepthMaterial, with the side, maps and alpha test that WebGLShadowMap.getDepthMaterial
+//    gives them, into a target, without the scene's fog); and the stand-ins of what is not in the
+//    scene yet or not drawn by it (module.warmup(w, camera): road chunks, street lamps, trees,
+//    Post's and the clouds' passes ...).
 //  - finish(): with KHR_parallel_shader_compile the driver compiles and links on its own threads;
 //    once a program is ready, three's first use of it (link status, uniform and attribute
 //    locations) is done here, one program after another with the page drawing in between, so no
@@ -109,6 +110,9 @@ function proxyOf(o, material) {
 
 const texChannel = (t) => (t ? t.channel | 0 : -1);
 
+/** Objects per compile call in compileAll: up to twice as many programs (both shadow states). */
+const SLICE_OBJECTS = 4;
+
 export class ShaderWarmup {
   /**
    * @param {THREE.WebGLRenderer} renderer
@@ -126,7 +130,8 @@ export class ShaderWarmup {
     this.busy = false;               // the start-up pass is running
     this.holding = false;            // check(..., {hold}) is finishing programs: the app may skip drawing
     this.late = [];                  // programs made after the start-up pass: { label, programs: [names], ms }
-    this.stats = { programs: 0, ms: 0, totalMs: 0, compileMs: 0, finishMs: 0, framesMs: 0, frames: 0, gpuMs: 0, gpuIdle: true, uploads: 0, uploadMB: 0, uploaded: [],
+    this.stats = { programs: 0, ms: 0, totalMs: 0, compileMs: 0, finishMs: 0, framesMs: 0, frames: 0, gpuMs: 0, gpuIdle: true,
+      worstGapMs: 0, gapsOver100: 0, worstGapBy: {}, uploads: 0, uploadMB: 0, uploaded: [],
       frameMade: [], added: [], parallel: false, settled: [] };
     this._raw = null;                // renderer.compile as three has it
     this._inner = 0;                 // > 0 inside our own passes (the hook passes them on as they are)
@@ -387,22 +392,56 @@ export class ShaderWarmup {
   }
 
   /**
-   * Everything (the start-up pass, and again after a quality change): the scene graph, the shadow
-   * pass's depth programs, the modules' stand-ins (module.warmup(w, camera)) and the compiles the
-   * modules made before.
+   * Everything (the start-up pass): the scene graph, hidden objects included; the shadow pass's
+   * depth programs; the modules' stand-ins (module.warmup(w, camera)) and the compiles the
+   * modules made before. In slices, the page drawing a frame after each one of about sliceMs:
+   * building a hundred programs' sources is a few hundred ms of script on the PC (more in
+   * SwiftShader), and the loading screen should keep moving. The scene's objects go in as
+   * stand-ins against the whole scene's lights (as in compileUnseen; a part of the graph
+   * compiled on its own would miss the lights in the rest), a few at a time, one per material
+   * and kind of object (another object of the same pair would only look its program up).
    */
-  compileAll(camera, modules = []) {
+  async compileAll(camera, modules = [], { sliceMs = 30, onProgress = null } = {}) {
     const S = this.scene;
     if (!S || !this._raw) return;
-    this.compile(S, camera);
+    let t = performance.now();
+    const pause = async () => {
+      if (performance.now() - t < sliceMs) return;
+      await nextFrame();
+      t = performance.now();
+    };
+    const reps = [], pairs = new Map();
+    S.traverse((o) => {
+      if (!drawable(o) || !o.material) return;
+      const k = kindOf(o);
+      let fresh = false;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (!m) continue;
+        let s = pairs.get(m);
+        if (!s) pairs.set(m, (s = new Set()));
+        if (!s.has(k)) { s.add(k); fresh = true; }
+      }
+      if (fresh) reps.push(o);
+    });
+    const g = this._slice || (this._slice = new THREE.Group());
+    for (let i = 0; i < reps.length; i += SLICE_OBJECTS) {
+      g.children = reps.slice(i, i + SLICE_OBJECTS).map((o) => proxyOf(o, o.material));
+      try { this.compile(g, camera, { scene: S }); } finally { g.children = []; }
+      onProgress?.(Math.min(1, (i + SLICE_OBJECTS) / reps.length));
+      await pause();
+    }
     this.compileDepth(S, camera);
     for (const m of modules) {
       if (!m || typeof m.warmup !== 'function') continue;
+      await pause();
       try { m.warmup(this, camera); } catch (e) { console.warn(`warm-up: ${m.name || m.constructor?.name}`, e); }
     }
+    // (a module's compile while this waits for a frame is made right away, the environment set)
     for (const c of this._early.splice(0)) {
+      await pause();
       try { this.compile(c.root, c.camera, { scene: c.scene }); } catch (e) { console.warn('warm-up: precompile', e); }
     }
+    this._early.length = 0;
     this.restoreLights(camera);
   }
 
@@ -604,7 +643,8 @@ export class ShaderWarmup {
     return {
       enabled: this.enabled, done: this.done, parallel: s.parallel, programs: s.programs, ms: Math.round(s.ms), totalMs: Math.round(s.totalMs),
       compileMs: Math.round(s.compileMs), finishMs: Math.round(s.finishMs), framesMs: Math.round(s.framesMs), frames: s.frames,
-      gpuMs: Math.round(s.gpuMs), gpuIdle: s.gpuIdle, uploads: s.uploads, uploadMB: +s.uploadMB.toFixed(1), uploaded: s.uploaded.slice(),
+      gpuMs: Math.round(s.gpuMs), gpuIdle: s.gpuIdle, worstGapMs: Math.round(s.worstGapMs), gapsOver100: s.gapsOver100, worstGapBy: { ...s.worstGapBy },
+      uploads: s.uploads, uploadMB: +s.uploadMB.toFixed(1), uploaded: s.uploaded.slice(),
       frameMade: s.frameMade.slice(), added: s.added.slice(), settled: s.settled.slice(), late: this.late.map((l) => ({ ...l, programs: l.programs.slice() })),
     };
   }
@@ -633,38 +673,46 @@ export async function warmUpApp(app, { progress = null } = {}) {
   const cam = app.camera;
   const t0 = performance.now();
   const say = (f, label) => { try { progress?.(f, label); } catch (e) { /* the page is going away */ } };
+  const gaps = frameGaps();
   w.busy = true;
   const mark = w.nextId();
   try {
     // 1. the environment's passes, then one update of it: scene.environment, the sun and the
     // shadow casters as the first frame will have them
     say(0.02, 'sky');
+    gaps.at('sky');
     w.compileEnvironment(app.env);
     await w.finish(mark);
     app.env.update(cam, 0);
     // 2. the modules that make their materials over a few frames: update-only frames for them
     say(0.06, 'vegetation, cockpit');
+    gaps.at('settle');
     w.stats.settled = await settle(app, SETTLE_MS);
     // 3. everything else, compiled (in parallel where the browser can)
-    say(0.1, 'compiling');
+    say(0.1, 'preparing');
+    gaps.at('compile');
     const t1 = performance.now();
-    w.compileAll(cam, [app.post, ...app.modules]);
+    await w.compileAll(cam, [app.post, ...app.modules], { onProgress: (f) => say(0.1 + 0.2 * f, 'preparing') });
     // the cockpit's own shadow pass (js/aircraft/pcd/shadow.js), drawn without the scene's lights
     app.cockpit?.shadow?.precompile?.(w);
     const total = app.renderer.info.programs.filter((p) => p.id >= mark).length;
-    say(0.12, `${total} programs`);
-    await w.finish(mark, (f, n, N) => say(0.12 + 0.68 * f, `${n} / ${N}`));
+    say(0.3, `${total} programs`);
+    gaps.at('finish');
+    await w.finish(mark, (f, n, N) => say(0.3 + 0.5 * f, `${n} / ${N}`));
     w.stats.ms = performance.now() - t1;
     // the textures of what the views below do not show
     say(0.8, 'textures');
+    gaps.at('textures');
     await w.uploadTextures(w.scene);
     // 4. real frames behind the loading screen, and the GPU's work on them
     say(0.82, 'first frames');
+    gaps.at('frames');
     const t2 = performance.now();
     w._next = w.nextId();
     await drawViews(app, w, (f) => say(0.82 + 0.14 * f, 'first frames'));
     w.stats.framesMs = performance.now() - t2;
     say(0.96, 'GPU');
+    gaps.at('gpu');
     const t3 = performance.now();
     w.stats.gpuIdle = await gpuDone(app.renderer, GPU_WAIT_MS);
     w.stats.gpuMs = performance.now() - t3;
@@ -675,6 +723,7 @@ export async function warmUpApp(app, { progress = null } = {}) {
   // what came into the scene during the pass (an object a module added late, the wingmen if they
   // loaded meanwhile): built and finished before the menu shows
   try {
+    gaps.at('added');
     const m2 = w.nextId();
     w.stats.added = w.compileUnseen(cam);
     if (w.stats.added.length) await w.finish(m2);
@@ -689,12 +738,47 @@ export async function warmUpApp(app, { progress = null } = {}) {
   say(1, 'ready');
   const s = w.stats;
   s.totalMs = performance.now() - t0;
+  Object.assign(s, gaps.stop());
   console.info(`warm-up: ${s.programs} programs in ${(s.totalMs / 1000).toFixed(1)} s ` +
     `(compile calls ${s.compileMs.toFixed(0)} ms, finishing ${s.finishMs.toFixed(0)} ms, ${s.uploads} textures uploaded ` +
     `(${s.uploadMB.toFixed(1)} MB), ${s.frames} frames ${s.framesMs.toFixed(0)} ms, ` +
-    `GPU ${s.gpuMs.toFixed(0)} ms${s.gpuIdle ? '' : ' (still busy)'}${s.parallel ? ', in parallel' : ''})` +
+    `GPU ${s.gpuMs.toFixed(0)} ms${s.gpuIdle ? '' : ' (still busy)'}${s.parallel ? ', in parallel' : ''}; ` +
+    `the loading screen's longest frame ${s.worstGapMs.toFixed(0)} ms, ${s.gapsOver100} over 100 ms: ` +
+    `${Object.entries(s.worstGapBy).map(([k, v]) => `${k} ${v}`).join(', ')})` +
     `${s.frameMade.length ? `; made by the frames: ${s.frameMade.join(', ')}` : ''}` +
     `${s.added.length ? `; added during the pass: ${s.added.join(', ')}` : ''}${s.settled.length ? `; not settled: ${s.settled.join(', ')}` : ''}`);
+}
+
+/**
+ * Watches the page's animation frames until stop(): the longest gap between two (the loading
+ * screen's worst frame: script that ran that long kept it from moving), how many were over
+ * 100 ms, and the longest in each step of the pass (at(step) names the step; a gap that spans
+ * two steps is counted as "a>b").
+ */
+function frameGaps() {
+  let last = performance.now(), worst = 0, over = 0, on = true, step = 'start', from = step;
+  const by = {};
+  const note = (d) => {
+    if (d > worst) worst = d;
+    if (d > 100) over++;
+    const k = from === step ? step : `${from}>${step}`;
+    if (!(by[k] >= d)) by[k] = Math.round(d);
+    from = step;
+  };
+  const f = (now) => {
+    note(now - last);
+    last = now;
+    if (on) requestAnimationFrame(f);
+  };
+  requestAnimationFrame(f);
+  return {
+    at(name) { step = name; },
+    stop() {
+      on = false;
+      note(performance.now() - last);           // the stretch since the last frame counts too
+      return { worstGapMs: worst, gapsOver100: over, worstGapBy: by };
+    },
+  };
 }
 
 /** Update-only frames until the modules that build their materials over frames are done (or maxMs). */
