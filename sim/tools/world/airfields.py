@@ -630,11 +630,330 @@ def clip_tiles_poly(poly):
                 yield ix, iz, q
 
 
+# ---------------------------------------------------------------------------------------------
+# runways: the paved runway surfaces of js/world/Runways.js (ROADS.md "runways.json")
+#
+# Built from the terrain's data alone (airports.json, the L0 imagery) and the taxiways of
+# airfields.json when it is there, so this stage runs without the Overture download.
+
+# Per airfield: military (arresting gear near both ends of the runways of 2000 m and more,
+# distance-remaining signs every 1000 ft), paved shoulder each side of the runways 30 m wide or
+# more (ICAO Annex 14 3.2.9: 60 m overall for a 45 m runway, 7.5 m each side), and how worn
+# the paint is (0 fresh .. 1 faded: a closed field).
+RUNWAY_SURFACE = {
+    'LLBG': dict(military=False, shoulder=7.5, wear=0.3),
+    'LLEK': dict(military=True, shoulder=7.5, wear=0.5),
+    'LLHS': dict(military=True, shoulder=7.5, wear=0.5),
+    'LL59': dict(military=False, shoulder=3.0, wear=0.55),
+    'LLHZ': dict(military=False, shoulder=0.0, wear=0.6),
+    'LLRS': dict(military=False, shoulder=0.0, wear=0.6),
+    'IL-0023': dict(military=False, shoulder=3.0, wear=1.0),
+}
+# paved overruns the terrain data measured too short (js/terrain/Surface.js OVERRUN_FIX, the same
+# table: the runtime draws the larger of the two)
+OVERRUN_FIX = {'LLEK 36': 390.0, 'LLEK 15R': 390.0, 'LL59 21': 300.0}
+STRIP_S, STRIP_T = 1024, 32          # imagery strip of a runway: samples along, rows across
+STRIP_END = 12.0                     # m of strip beyond each pavement end
+STRIP_SIDE = 4.0                     # and beyond each shoulder
+CABLE_FROM_THR = 460.0               # arresting gear (BAK-12): cable this far past each threshold (m)
+RUBBER_DARK = 0.3                    # rubber deposit / clean pavement albedo (Runways.js the same)
+CONCRETE_RATIO = 1.10                # an end this much lighter than the middle is concrete
+CONCRETE_MAX = 330.0                 # concrete end sections reach at most this far past the threshold (m)
+
+
+class L0Mosaic:
+    """Bilinear samples (sRGB 0..255) of the terrain's L0 imagery (color/L0, 6.25 m / px) at world x, z."""
+
+    def __init__(self, folder):
+        self.folder, self.cache = folder, {}
+
+    def tile(self, ix, iz):
+        from PIL import Image
+        k = (ix, iz)
+        if k not in self.cache:
+            p = os.path.join(self.folder, f'tile_{ix}_{iz}.jpg')
+            self.cache[k] = np.asarray(Image.open(p).convert('RGB'), np.float32) if os.path.exists(p) else None
+        return self.cache[k]
+
+    def sample(self, x, z):
+        n = grid.NTILES * 1024
+        px = grid.TILE_SIZE / 1024.0
+        gx, gz = (x + grid.CORE_HALF) / px - 0.5, (z + grid.CORE_HALF) / px - 0.5
+        i0, j0 = np.floor(gx).astype(np.int64), np.floor(gz).astype(np.int64)
+        fx, fz = gx - i0, gz - j0
+        out = np.zeros(x.shape + (3,), np.float32)
+        for dj in (0, 1):
+            for di in (0, 1):
+                ii, jj = np.clip(i0 + di, 0, n - 1), np.clip(j0 + dj, 0, n - 1)
+                w = (fx if di else 1 - fx) * (fz if dj else 1 - fz)
+                tx, tz = ii // 1024, jj // 1024
+                vals = np.zeros(x.shape + (3,), np.float32)
+                for a, b in set(zip(tx.ravel().tolist(), tz.ravel().tolist())):
+                    m = (tx == a) & (tz == b)
+                    im = self.tile(a, b)
+                    if im is not None:
+                        vals[m] = im[jj[m] - b * 1024, ii[m] - a * 1024]
+                out += vals * w[..., None]
+        return out
+
+
+def srgb_to_linear(c):
+    c = np.asarray(c, np.float64) / 255.0
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(v):
+    v = np.clip(np.asarray(v, np.float64), 0, 1)
+    return np.where(v <= 0.0031308, v * 12.92, 1.055 * v ** (1 / 2.4) - 0.055) * 255.0
+
+
+def paint_mask(S, Tt, L, hw, disp):
+    """Strip samples where the imagery shows paint (Sentinel-2's 10 m pixels spread it over ~12 m):
+    the threshold stripes and designation, the aiming points and touchdown zone stripes, the arrows
+    before a displaced threshold (js/world/runwayShaders.js lays them out the same way)."""
+    m = np.zeros(S.shape, bool)
+    at = np.abs(Tt)
+    for end in (0, 1):
+        e = S if end == 0 else L - S
+        ed = e - disp[end]
+        m |= (ed > -14) & (ed < 86) & (at < hw + 6)
+        m |= (ed > 388) & (ed < 462) & (at > 3) & (at < hw)
+        for e0 in (150, 300, 600, 750, 900):
+            m |= (ed > e0 - 12) & (ed < e0 + 34.5) & (at > 3) & (at < hw - 2)
+        if disp[end] > 0:
+            m |= (e > -2) & (ed < 0) & (at < 8)
+    return m
+
+
+def inpaint_rows(V, M):
+    """Masked samples of each row (along s) filled by linear interpolation between the kept ones."""
+    out = V.copy()
+    idx = np.arange(V.shape[1])
+    for r in range(V.shape[0]):
+        ok = ~M[r]
+        if ok.sum() >= 2 and (~ok).any():
+            out[r, ~ok] = np.interp(idx[~ok], idx[ok], V[r, ok])
+    return out
+
+
+def runway_turnoffs(af_doc, frames):
+    """Where the taxiways of airfields.json meet each runway's side: [runway index, s, side, ds, dt]
+    (s along the runway from end 0, side +1 right / -1 left of end 0 -> end 1, (ds, dt) the
+    taxiway's direction there, away from the runway). The aircraft's tyres leave curved marks
+    between the centreline and these (js/world/runwayShaders.js turn-off marks)."""
+    out = []
+    if not af_doc:
+        return out
+    ox, oz = af_doc.get('origin', [-grid.CORE_HALF, -grid.CORE_HALF])
+    T = af_doc.get('tile_m', grid.TILE_SIZE)
+    for key, tile in af_doc.get('tiles', {}).items():
+        ix, iz = (int(v) for v in key.split(','))
+        x0, z0 = ox + ix * T, oz + iz * T
+        for tw in tile.get('taxiways', []):
+            p = np.array(tw['pts'], np.float64).reshape(-1, 2) + (x0, z0)
+            if len(p) < 2:
+                continue
+            for P, Q in ((p[0], p[1]), (p[-1], p[-2])):
+                for k, fr in enumerate(frames):
+                    d = P - fr['a']
+                    s = d[0] * fr['u'][0] + d[1] * fr['u'][1]
+                    t = -d[0] * fr['u'][1] + d[1] * fr['u'][0]
+                    if abs(abs(t) - fr['hw']) > 3.0 or not (40 < s < fr['L'] - 40):
+                        continue
+                    v = Q - P
+                    lv = math.hypot(v[0], v[1])
+                    if lv < 1e-6:
+                        continue
+                    ds = (v[0] * fr['u'][0] + v[1] * fr['u'][1]) / lv
+                    dt = (-v[0] * fr['u'][1] + v[1] * fr['u'][0]) / lv
+                    if dt * t <= 0.2 * abs(t):     # must lead away from the runway
+                        continue
+                    out.append([k, round(float(s), 1), 1 if t > 0 else -1, round(float(ds), 3), round(float(dt), 3)])
+    # one per junction (taxiway pieces are cut at L0 tile lines and at each other)
+    out.sort()
+    uniq = []
+    for r in out:
+        if uniq and uniq[-1][0] == r[0] and uniq[-1][2] == r[2] and abs(uniq[-1][1] - r[1]) < 15:
+            continue
+        uniq.append(r)
+    return uniq
+
+
+def build_runways(out, terrain_dir):
+    """runways.json + runways.bin (ROADS.md): per paved runway its frame, shoulders, overruns,
+    concrete ends, arresting gear, distance-remaining signs, crossings, turn-offs and lights,
+    and a strip of the imagery with the paint taken out (RGB, sRGB) and the share of the pavement
+    the imagery shows darkened by rubber and oil (A)."""
+    from scipy import ndimage
+    t0 = time.time()
+    with open(os.path.join(terrain_dir, 'airports.json')) as f:
+        airports = json.load(f)
+    af_path = os.path.join(out, 'airfields', 'airfields.json')
+    af_doc = None
+    if os.path.exists(af_path):
+        with open(af_path) as f:
+            af_doc = json.load(f)
+    mosaic = L0Mosaic(os.path.join(terrain_dir, 'color', 'L0'))
+    lum_w = np.array([0.2126, 0.7152, 0.0722])
+    recs, strips, frames = [], [], []
+    for ap in airports:
+        icao = ap['icao']
+        cfg = RUNWAY_SURFACE.get(icao, dict(military=False, shoulder=0.0, wear=0.6))
+        closed = bool(ap.get('closed'))
+        lights = RUNWAY_LIGHTS.get(icao, {})
+        for r in ap['runways']:
+            surf = (r.get('surface') or 'asphalt').lower()
+            if any(k in surf for k in ('grass', 'turf', 'dirt', 'gravel', 'sand')):
+                continue
+            a, b = r['ends']
+            dx, dz = b['x'] - a['x'], b['z'] - a['z']
+            L = math.hypot(dx, dz)
+            if L < 10:
+                continue
+            ux, uz = dx / L, dz / L
+            hw = (r.get('width_m') or 45.0) / 2
+            ov = [min(max(float(a.get('overrun_m') or 0), OVERRUN_FIX.get(f"{icao} {a['id']}", 0.0)), 1000.0),
+                  min(max(float(b.get('overrun_m') or 0), OVERRUN_FIX.get(f"{icao} {b['id']}", 0.0)), 1000.0)]
+            disp = [float(a.get('displaced_threshold_m') or 0), float(b.get('displaced_threshold_m') or 0)]
+            sh = cfg['shoulder'] if hw >= 15 else 0.0
+            # the strip: samples at cell centres over s in [s0, s1] (from end 0), t in [-T, T]
+            s0, s1 = -ov[0] - STRIP_END, L + ov[1] + STRIP_END
+            T = hw + sh + STRIP_SIDE
+            s = s0 + (np.arange(STRIP_S) + 0.5) * (s1 - s0) / STRIP_S
+            t = -T + (np.arange(STRIP_T) + 0.5) * (2 * T) / STRIP_T
+            S, Tt = np.meshgrid(s, t)
+            ds = (s1 - s0) / STRIP_S
+            rgb = mosaic.sample(a['x'] + S * ux - Tt * uz, a['z'] + S * uz + Tt * ux)
+            lin = srgb_to_linear(rgb)
+            # paint out: masked samples filled along each row from the unpainted ones
+            M = paint_mask(S, Tt, L, hw, disp)
+            for c in range(3):
+                lin[..., c] = inpaint_rows(lin[..., c], M)
+            # the pavement's edges and ends: the 10 m pixels there mix in the soil beyond, so the
+            # outer rows and columns repeat the last ones fully on the pavement
+            inner = np.abs(t) <= max(hw - 6.0, 1.0)
+            rows = np.nonzero(inner)[0]
+            for j in range(STRIP_T):
+                if not inner[j]:
+                    lin[j] = lin[rows[0] if t[j] < 0 else rows[-1]]
+            c0 = int(np.searchsorted(s, -ov[0] + 6.0))
+            c1 = int(np.searchsorted(s, L + ov[1] - 6.0)) - 1
+            lin[:, :c0] = lin[:, c0:c0 + 1]
+            lin[:, c1 + 1:] = lin[:, c1:c1 + 1]
+            # smooth the 6.25 m pixels (~4 m along, ~2 m across)
+            for c in range(3):
+                lin[..., c] = ndimage.gaussian_filter(lin[..., c], (2.0 / (2 * T / STRIP_T), 4.0 / ds), mode='nearest')
+            Y = lin @ lum_w
+            # rubber and oil: how much darker than the clean pavement beside it (the 85th percentile
+            # across the runway, over ~60 m along), as the share m of the surface covered by deposits
+            # RUBBER_DARK as dark as the pavement: Y = P (1 - (1 - RUBBER_DARK) m)
+            P = np.percentile(Y[inner], 85, axis=0)
+            P = ndimage.maximum_filter1d(P, max(1, int(round(30 / ds))), mode='nearest')
+            P = ndimage.uniform_filter1d(P, max(1, int(round(60 / ds))), mode='nearest')
+            m = np.clip((1 - Y / np.maximum(P, 1e-4)) / (1 - RUBBER_DARK), 0, 0.9)
+            m = np.where(m < 0.04, 0.0, m)
+            m[~inner] = 0.0
+            m = ndimage.gaussian_filter(m, (0.7, 3.0 / ds), mode='nearest')
+            # concrete ends (military fields: rigid pavement where the jets hold, run up and take the
+            # cables): the clean pavement clearly lighter than the runway's middle, from the pavement
+            # end inwards, at most CONCRETE_MAX past the threshold
+            prof = P
+            mid = (s > 0.3 * L) & (s < 0.7 * L)
+            ref = float(np.median(prof[mid]))
+            ratio = ndimage.uniform_filter1d(prof, max(1, int(round(40 / ds))), mode='nearest') / max(ref, 1e-6)
+            conc = [0.0, 0.0]
+            for end in (0, 1):
+                idx = np.nonzero((s >= -ov[0]) & (s <= L + ov[1]))[0]
+                if end == 1:
+                    idx = idx[::-1]
+                bright = ratio[idx] > CONCRETE_RATIO
+                if not cfg['military'] or bright[: max(1, int(round(60 / ds)))].mean() < 0.7:
+                    continue
+                k = 0
+                while k < len(idx) and (bright[k] or bright[k:k + max(1, int(round(25 / ds)))].any()):
+                    k += 1
+                edge = float(s[idx[min(k, len(idx) - 1)]])
+                lim = min(0.35 * L, CONCRETE_MAX + disp[end])
+                conc[end] = round(min(edge + ov[0], lim + ov[0]) if end == 0 else min(L + ov[1] - edge, lim + ov[1]), 1)
+            # rubber of each touchdown zone (its share of the landings): deposits 150..900 m past the threshold
+            rub = []
+            for end in (0, 1):
+                ed = (s if end == 0 else L - s) - disp[end]
+                zone = (ed > 150) & (ed < 900)
+                rub.append(round(float(m[np.ix_(np.abs(t) < 0.3 * hw, zone)].mean()) if zone.any() else 0.0, 3))
+            cables = []
+            if cfg['military'] and L >= 2000 and not closed:
+                cables = [round(disp[0] + CABLE_FROM_THR, 1), round(L - disp[1] - CABLE_FROM_THR, 1)]
+            # distance-remaining signs every 1000 ft both sides (FAA AC 150/5340-18: the excess over
+            # whole thousands split between the ends); [s, thousands of feet left towards end 1, to end 0]
+            dtg = []
+            if cfg['military'] and L >= 1500 and not closed:
+                n = int(L / 304.8)
+                first = (L - (n - 1) * 304.8) / 2
+                for k in range(n):
+                    sk = first + k * 304.8
+                    dtg.append([round(sk, 1), int(round((L - sk) / 304.8)), int(round(sk / 304.8))])
+            li = [lights.get(a['id']) or {}, lights.get(b['id']) or {}]
+            lit = bool(r.get('lighted', True)) and not closed
+            strip = np.zeros((STRIP_T, STRIP_S, 4), np.uint8)
+            strip[..., :3] = np.clip(np.round(linear_to_srgb(lin)), 0, 255).astype(np.uint8)
+            strip[..., 3] = np.clip(np.round(m * 255), 0, 255).astype(np.uint8)
+            recs.append(dict(
+                icao=icao, ids=[a['id'], b['id']], len=round(L, 2), hw=round(hw, 2), sh=sh, ov=ov, disp=disp,
+                layer=len(strips), strip=[round(s0, 2), round(s1, 2), round(T, 2)], conc=conc, rubber=rub,
+                tone=round(ref, 4), cables=cables, dtg=dtg, military=cfg['military'], wear=cfg['wear'],
+                closed=closed, lit=lit, cl=[bool(lit and li[0].get('cl')), bool(lit and li[1].get('cl'))],
+                tdzl=[bool(lit and li[0].get('tdz')), bool(lit and li[1].get('tdz'))], cross=[], turns=[]))
+            frames.append(dict(a=np.array([a['x'], a['z']]), u=(ux, uz), L=L, hw=hw, ov=ov, sh=sh, icao=icao))
+            strips.append(strip)
+            log(f"runway {icao} {a['id']}/{b['id']}: pavement {ref:.3f}, concrete {conc[0]:.0f} / {conc[1]:.0f} m from the ends, "
+                f"rubber {rub}, {len(cables)} cables, {len(dtg)} signs a side, overruns {ov[0]:.0f} / {ov[1]:.0f} m")
+    # crossing runways: the longer (then wider) one keeps its surface and markings through the
+    # crossing; the other gives way: [s, t of the other's end 0 in this frame, its direction (cos,
+    # sin), its half width with shoulders, its pavement from / to (s along it)]
+    for i, A in enumerate(recs):
+        for j, B in enumerate(recs):
+            if i == j or A['icao'] != B['icao'] or (B['len'], B['hw'], -j) <= (A['len'], A['hw'], -i):
+                continue
+            fa, fb = frames[i], frames[j]
+            d = fb['a'] - fa['a']
+            sB, tB = d[0] * fa['u'][0] + d[1] * fa['u'][1], -d[0] * fa['u'][1] + d[1] * fa['u'][0]
+            cu = fb['u'][0] * fa['u'][0] + fb['u'][1] * fa['u'][1]
+            cv = -fb['u'][0] * fa['u'][1] + fb['u'][1] * fa['u'][0]
+            if abs(cv) < 0.05:
+                continue
+            k = -tB / cv
+            sx = sB + cu * k
+            if not (-A['ov'][0] - 80 < sx < A['len'] + A['ov'][1] + 80) or not (-B['ov'][0] - 80 < k < B['len'] + B['ov'][1] + 80):
+                continue
+            A['cross'].append([round(sB, 2), round(tB, 2), round(cu, 6), round(cv, 6), round(B['hw'] + B['sh'], 2),
+                               round(-B['ov'][0], 1), round(B['len'] + B['ov'][1], 1)])
+    for k, s_, side, ds_, dt_ in runway_turnoffs(af_doc, frames):
+        recs[k]['turns'].append([s_, side, ds_, dt_])
+    odir = os.path.join(out, 'airfields')
+    os.makedirs(odir, exist_ok=True)
+    data = np.stack(strips) if strips else np.zeros((0, STRIP_T, STRIP_S, 4), np.uint8)
+    path = os.path.join(odir, 'runways.bin')
+    with open(path + '.tmp', 'wb') as f:
+        f.write(data.tobytes())
+    os.replace(path + '.tmp', path)
+    doc = dict(version=1, format='ROADS.md', attribution='Runway surfaces: the terrain\'s imagery (Sentinel-2, see the terrain credits) '
+               'and airports.json; markings ICAO Annex 14', strip=dict(file='runways.bin', samples=STRIP_S, rows=STRIP_T,
+               layers=len(strips), rubberDark=RUBBER_DARK), runways=recs, built=time.strftime('%Y-%m-%d %H:%M:%S'))
+    jpath = os.path.join(odir, 'runways.json')
+    with open(jpath + '.tmp', 'w') as f:
+        json.dump(doc, f, separators=(',', ':'), ensure_ascii=False)
+    os.replace(jpath + '.tmp', jpath)
+    log(f'{len(recs)} runways ({sum(len(r["turns"]) for r in recs)} turn-offs, {sum(len(r["cross"]) for r in recs)} crossings) '
+        f'-> {jpath}, strips {path} ({os.path.getsize(path) / 1e6:.2f} MB, {time.time() - t0:.1f} s)')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--cache', default=os.path.join(HERE, '_cache', 'airfields'), help='download cache (git-ignored)')
     ap.add_argument('--out', default=os.path.join(HERE, '..', '..', 'data', 'world'), help='data folder (airfields/ goes in it)')
-    ap.add_argument('--stages', default='fetch,build', help='comma list: fetch,build')
+    ap.add_argument('--stages', default='fetch,build,runways', help='comma list: fetch,build,runways')
+    ap.add_argument('--terrain', default=None, help='terrain data folder (airports.json, color/L0); default: beside --out')
     args = ap.parse_args()
     cache = os.path.abspath(args.cache)
     os.makedirs(cache, exist_ok=True)
@@ -645,6 +964,8 @@ def main():
     out = os.path.abspath(args.out)
     terrain_dir = os.path.join(out, '..', 'terrain') if os.path.isdir(os.path.join(out, '..', 'terrain')) \
         else os.path.join(HERE, '..', '..', 'data', 'terrain')
+    if args.terrain:
+        terrain_dir = os.path.abspath(args.terrain)
     with open(os.path.join(terrain_dir, 'airports.json')) as f:
         airports = json.load(f)
     stages = [s.strip() for s in args.stages.split(',') if s.strip()]
@@ -652,6 +973,8 @@ def main():
         fetch(cache, airports)
     if 'build' in stages:
         build(cache, out)
+    if 'runways' in stages:
+        build_runways(out, terrain_dir)
 
 
 if __name__ == '__main__':
