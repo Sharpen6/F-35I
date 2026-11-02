@@ -23,7 +23,7 @@ import { HGRID, TILE_M, CORE_HALF, CHUNK_M, CHUNKS, NOISE_SIZE } from './roadMes
 import { ROAD_VERT, roadFrag, MAX_MASTS } from './roadShaders.js';
 import { AirportLights, LAMP_RANGE } from './AirportLights.js';
 import { Traffic } from './Traffic.js';
-import { LUX_PER_UNIT, artificialLightGain } from '../env/Environment.js';
+import { LUX_PER_UNIT, artificialLightGain, lightsOn } from '../env/Environment.js';
 
 const FAR_HALF = 204800;
 const LUX_TO_SCENE = 1 / LUX_PER_UNIT;   // scene irradiance unit (Environment SUN_ILLUMINANCE 4 = ~128 klux)
@@ -255,11 +255,12 @@ export class Roads {
     this.stats.triangles = tris;
   }
 
-  /** Street lights and floodlights: on from a little before sunset; brightness for night eyes. */
+  /** Street lights and floodlights: on by the one schedule (env.lightsOn); brightness for night eyes. */
   _updateLightUniforms(cam) {
     const S = this._shared;
     const el = this.env.sunElevationDeg ?? 30;
-    const on = Math.min(1, Math.max(0, (2.5 - el) / 3.5));
+    // js/env "Lights at night": on from just before sunset to the sun at -2.5 deg, as everything
+    const on = this.env.lightsOn ?? lightsOn(el);
     // Lights at night (js/env/README.md): the display keeps a night scene darker than a
     // dark-adapted eye sees it. Once the sky's own light is negligible next to the lamps (below
     // ~30 lux, sun under -4.5 deg), lit surfaces get the missing adaptation, up to the exposure of

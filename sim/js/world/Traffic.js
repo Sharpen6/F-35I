@@ -25,6 +25,7 @@
 
 import * as THREE from 'three';
 import { TILE_M, CORE_HALF } from './roadMesh.js';
+import { lightsOn } from '../env/Environment.js';
 
 /** Per quality: radius around the camera (m) and the most cars. */
 const QUALITY = {
@@ -216,8 +217,10 @@ export class Traffic {
 
   update(cam, dt = 1 / 60) {
     if (!this.enabled || !this.roads.index) return;
-    const el = this.env.sunElevationDeg ?? 30;
-    if (el > 2) { this.points.visible = false; this._shown = false; return; }
+    // with the street lights (js/env "Lights at night": env.lightsOn); their intensity is the
+    // airfield lights' switch group 3, which follows the same schedule
+    const on = this.env.lightsOn ?? lightsOn(this.env.sunElevationDeg ?? 30);
+    if (!(on > 0)) { this.points.visible = false; this._shown = false; return; }
     this._cam.copy(cam);
     if (this._dirty || cam.distanceToSquared(this._refreshedAt) > REFRESH * REFRESH) this._refresh(cam);
     this._move(Math.min(Math.max(dt, 0), 0.1));
