@@ -95,6 +95,10 @@ const rws = new Runways([{ icao: 'LLEK', runways: [{ width_m: 45.7, surface: 'as
 const r36 = rws.list[0];
 check('Tel Nof 36 overrun follows the imagery (390 m)', r36.overrun[1] === 390 && r36.overrun[0] === 215);
 check('the pavement 300 m south of threshold 36 is runway', rws.find(-19662.59 + 300 * -0.0491, -2812.92 + 300 * 0.9988) === r36);
+// a data set built with the corrections (runways.py OVERRUN_CONFIRMED_M) or a longer measure wins
+const rws2 = new Runways([{ icao: 'LLEK', runways: [{ width_m: 45.7, surface: 'asphalt', ends: [
+  { id: '18', x: -19544.25, z: -5219.09, overrun_m: 215 }, { id: '36', x: -19662.59, z: -2812.92, overrun_m: 420 }] }] }]);
+check('OVERRUN_FIX is a lower bound (data 420 m kept)', rws2.list[0].overrun[1] === 420);
 
 if (failures) { console.log(`${failures} failure(s)`); process.exit(1); }
 console.log('all terrain analysis tests passed');

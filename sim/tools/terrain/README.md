@@ -152,4 +152,11 @@ the pavement beyond every runway end in the colour tiles and flags ends where it
 the painted overrun (`overrun_m`), with a contact sheet to look at
 (`/home/claude/simdata/terrain_extra/overrun_check.jpg` by default). The `runways` stage's
 saturation test stops early where an overrun is paler, yellower concrete than the runway; the
-confirmed cases are corrected at runtime in `sim/js/terrain/Surface.js` (`OVERRUN_FIX`).
+cases confirmed on that sheet (Tel Nof 36 and 15R 390 m, Palmachim 21 300 m) are applied by the
+`runways` stage itself (`OVERRUN_CONFIRMED_M`, a lower bound, with a note in the report), so
+the `heights` stage flattens the whole blast pad and `airports.json` carries it. Data sets built
+before that (the delivered one: 145 / 195 / 25 m) get the lengths from the runtime fallback in
+`sim/js/terrain/Surface.js` (`OVERRUN_FIX`); their ground under the outer part of those pads is
+the DEM, up to 0.8 m off a straight grade with up to 2.3 % cross slope, which a rebuild of the
+`runways,heights,json,previews,manifest` stages removes (0.07 m, 0.02 %; measured by
+re-running the flattening on the delivered tiles).

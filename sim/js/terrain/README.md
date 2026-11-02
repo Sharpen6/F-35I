@@ -150,8 +150,10 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   centreline, aiming point, touchdown zone, edge lines, displaced thresholds, rubber
   deposits) over asphalt, with yellow chevrons on the paved overruns (`overrun_m`). The
   rectangles agree with the runways in the imagery (`telnof_top_*` screenshots). Three
-  overruns the build measured too short are corrected in `Surface.js` (`OVERRUN_FIX`: Tel Nof
-  36 and 15R 390 m, Palmachim 21 300 m, measured on the L0 imagery).
+  overruns the build used to measure too short (Tel Nof 36 and 15R 390 m, Palmachim 21 300 m,
+  measured on the L0 imagery) are now set by the build (`tools/terrain/runways.py`
+  `OVERRUN_CONFIRMED_M`, flattened with the runway); `Surface.js` `OVERRUN_FIX` keeps them as a
+  lower bound for data sets built before (the delivered one).
 * **Light**: sun irradiance through the atmosphere at each point (transmittance LUT), sky
   irradiance from `uAmbient` (less in furrows and between crowns), the aircraft's shadow from
   three's shadow map (terrain receives; its own shadows come from the horizon maps), aerial

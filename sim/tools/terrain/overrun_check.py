@@ -5,7 +5,8 @@ centreline beyond the end: the strip counts as continuing while its centre (+-20
 is at least 18 grey levels brighter than the ground 30 m beside it (gaps up to 30 m allowed).
 Ends where that strip runs more than 60 m past the painted overrun (`overrun_m`) are flagged, and
 a contact sheet of them is written (red: runway end, yellow: painted overrun end, cyan: end of the
-strip) so a person can decide; the confirmed ones are in sim/js/terrain/Surface.js OVERRUN_FIX.
+strip) so a person can decide; the confirmed ones go into runways.py OVERRUN_CONFIRMED_M (applied
+by the build) and sim/js/terrain/Surface.js OVERRUN_FIX (fallback for data sets built before).
 
     python3 sim/tools/terrain/overrun_check.py [--data sim/data/terrain] [--sheet FILE.jpg]
 
