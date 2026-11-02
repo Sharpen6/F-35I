@@ -11,6 +11,10 @@ It starts serve.py on its own port, opens index.html?test=1 in Chrome or Edge (h
 through the DevTools protocol, and for each start point flies live for `--seconds` (full throttle
 on the runway starts), then saves a screenshot and the numbers: frames per second, draw calls,
 triangles, textures, the GPU name, console errors.  Report: <out>/pc_check.json (+ .jpg shots).
+Start-up hitches (js/env/warmup.js): the report has the shader warm-up's summary after loading,
+the menu drawn live for 3 s, and for every scene the frames of its first 3 s (worst frame) and the
+names of the shader programs made after the scene started ("programs_made"; each one is a stall of
+0.1-0.8 s on ANGLE / Direct3D, so the lists should be empty).
 Headless Chrome paces its frames at about 56-60 per second whatever the load; `--uncapped` turns
 vsync and the frame-rate limit off, so the frame times show what a frame really costs.
 """
@@ -186,6 +190,14 @@ FPS_JS = r"""new Promise((done) => {
   requestAnimationFrame(f);
 })"""
 
+# shader programs: a mark (the id the next one gets), the names of those made since a mark, the
+# warm-up's summary (js/env/warmup.js; its "late" list says what made each program after start-up)
+MARK_JS = "(() => { let id = -1; for (const p of window.__sim.app.renderer.info.programs) id = Math.max(id, p.id); return id + 1; })()"
+MADE_JS = "window.__sim.app.renderer.info.programs.filter((p) => p.id >= %d).map((p) => p.name || p.type || '?')"
+WARMUP_JS = "(() => { const w = window.__sim.app.warmup; return w && w.info ? w.info() : null; })()"
+LATE_JS = "(() => { const w = window.__sim.app.warmup; return w ? w.late.slice(%d) : []; })()"
+LATE_N_JS = "(() => { const w = window.__sim.app.warmup; return w ? w.late.length : 0; })()"
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -275,27 +287,43 @@ def main():
             raise RuntimeError(f"app did not load: {st}")
         spawns = cdp.js("window.__sim.spawns()")
         report["spawns_available"] = spawns
+        report["warmup"] = cdp.js(WARMUP_JS)
+        report["programs_at_load"] = cdp.js("window.__sim.app.renderer.info.programs.length")
+        # the menu, live: its first frames
+        mark, late0 = cdp.js(MARK_JS), cdp.js(LATE_N_JS)
+        cdp.js("window.__sim.setLive(true); true")
+        menu = cdp.js(FPS_JS % 3000, timeout=60)
+        cdp.js("window.__sim.setLive(false); true")
+        report["menu"] = {"first3s": menu, "programs_made": cdp.js(MADE_JS % mark), "warmup_late": cdp.js(LATE_JS % late0)}
+        print(json.dumps({"menu": menu, "programs_made": report["menu"]["programs_made"]}), flush=True)
         for sp in [s for s in a.spawns.split(",") if s]:
             if sp not in spawns:
                 report["errors"].append(f"no spawn {sp}")
                 continue
             for cam in [c for c in a.cameras.split(",") if c]:
+                mark, late0 = cdp.js(MARK_JS), cdp.js(LATE_N_JS)
                 cdp.js(f"window.__sim.setLive(false); window.__sim.start({json.dumps(sp)}, {{camera: {json.dumps(cam)}}});"
                        f" window.__sim.camera({json.dumps(cam)}); true")
                 ground = cdp.js("window.__sim.summary().onGround")
                 cdp.js("window.__sim.setInput(" + json.dumps({"throttle": 1.0, "brake": 0} if ground else {}) + "); true")
                 cdp.js("window.__sim.setLive(true); true")
-                time.sleep(max(2.0, a.seconds - 5))
+                first = cdp.js(FPS_JS % 3000, timeout=60)        # the scene's first 3 s: any start-up hitch
+                time.sleep(max(0.0, a.seconds - 8))
                 fps = cdp.js(FPS_JS % 5000, timeout=60)
+                made = cdp.js(MADE_JS % mark)
+                late = cdp.js(LATE_JS % late0)
                 stats = cdp.js(STATS_JS)
                 shot = cdp.call("Page.captureScreenshot", {"format": "jpeg", "quality": 88}, timeout=60)
                 fn = os.path.join(a.out, f"pc_{sp}_{cam}.jpg")
                 with open(fn, "wb") as fh:
                     fh.write(base64.b64decode(shot["data"]))
                 cdp.js("window.__sim.setLive(false); window.__sim.setInput(null); true")
-                run = {"spawn": sp, "camera": cam, "fps": fps, **stats, "shot": fn}
+                run = {"spawn": sp, "camera": cam, "fps": fps, "first3s": first, "programs_made": made, "warmup_late": late,
+                       **stats, "shot": fn}
                 report["runs"].append(run)
-                print(json.dumps({k: run[k] for k in ("spawn", "camera", "fps", "calls", "triangles")}), flush=True)
+                line = {k: run[k] for k in ("spawn", "camera", "fps", "calls", "triangles", "programs_made")}
+                line["first_worst_ms"] = first.get("worst_ms") if first else None
+                print(json.dumps(line), flush=True)
         for e in cdp.events:
             m = e.get("method")
             p = e.get("params", {})
@@ -309,6 +337,10 @@ def main():
     except Exception as e:
         report["errors"].append("check failed: " + repr(e))
     finally:
+        try:
+            report["warmup_end"] = cdp.js(WARMUP_JS)
+        except Exception:
+            pass
         try:
             br.terminate()
             br.wait(10)
