@@ -18,17 +18,18 @@
 
 import * as THREE from 'three';
 import {
-  HeightField, CORE_HALF, FAR_HALF, TILE_M, TILES, CORE_N, FAR_N, CORE_SPACING, FAR_SPACING,
+  HeightField, CORE_HALF, FAR_HALF, TILE_M, TILES, CORE_N, FAR_N, CORE_SPACING,
 } from './HeightField.js';
 import { QuadTree, GRID, RANGE0, MORPH_START, MORPH_END } from './QuadTree.js';
 import { Runways, LandCover, surfaceType } from './Surface.js';
 import {
   makePackedHeightTexture, makePackedCodeTexture, makeColorTexture, makeTileDataTexture, releasePacked,
-  renderNormalMap, floatTargetsSupported, FAR_HEIGHT_X,
+  renderNormalMap, renderFarNormalMap, floatTargetsSupported,
 } from './textures.js';
 import { makeDetailArray } from './detailTextures.js';
 import { TERRAIN_VERT, TERRAIN_FRAG, MAX_RWY } from './terrainShaders.js';
 import { HorizonMap } from './horizonMap.js';
+import { DeadSea } from './DeadSea.js';
 import { packCodes, DATA_N } from './fieldAnalysis.js';
 import { fetchJSON, fetchU16, fetchBitmap, fetchCodes, runPool } from './loaders.js';
 
@@ -265,16 +266,20 @@ export class Terrain {
   /**
    * fieldsUrl: the field data of the data build (sim/tools/terrain/fields.py), by default
    * data/terrain_extra/fields/ beside data/terrain/; '' = none (each tile is analysed on its own).
+   * landscapeUrl: the landscape data (the rift strip, sim/tools/terrain/rift.py), by default
+   * data/landscape/ beside data/terrain/; '' = none (the far grid's 200 m there, ?rift=0 too).
    * quality: the one to load with (setQuality later works too, but the load then compiles the
    * programs of 'high' first).
    */
-  constructor({ renderer, scene, env, baseUrl = 'data/terrain/', fieldsUrl, quality = 'high' }) {
+  constructor({ renderer, scene, env, baseUrl = 'data/terrain/', fieldsUrl, landscapeUrl, quality = 'high' }) {
     this.renderer = renderer;
     this.scene = scene;
     this.env = env;
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
     this.fieldsUrl = fieldsUrl ?? '../terrain_extra/fields/';
     this.fields = null;           // index.json of the field data when it is there
+    this.landscapeUrl = urlSwitch('rift') === false ? '' : landscapeUrl ?? '../landscape/';
+    this.rift = null;             // rift.json of the rift strip when it is loaded
     this.group = new THREE.Group();
     this.group.name = 'Terrain';
     this.group.matrixAutoUpdate = false;
@@ -345,9 +350,9 @@ export class Terrain {
     this.module = {
       name: 'terrain',
       setQuality: (q) => this.setQuality(q),
-      update: (f) => this._shadeSunLight(f),
-      reset: () => { this._sunVisInit = false; },
-      setTime: () => { this._sunVisInit = false; },
+      update: (f) => { this._shadeSunLight(f); this.lake?.frame(f); },
+      reset: () => { this._sunVisInit = false; this.lake?.reset(); },
+      setTime: () => { this._sunVisInit = false; this.lake?.reset(); },
     };
     this.sunOcclusion = 1;          // terrain shadow on the aircraft (sunVisibilityAt at the jet), smoothed
     this._sunVisInit = false;
@@ -396,6 +401,7 @@ export class Terrain {
       if (done % 8 === 0) progress(0.02 + 0.45 * done / jobs.length, `terrain: heights ${done}/${jobs.length}`);
     });
     this.hf.setFar(await fetchU16(B + 'height/far.bin'));
+    await this._loadRift();
     progress(0.5, 'terrain: imagery');
     this.hf.buildMinMax();
     this._hMax = this.hf.nodeMinMax(8, 0, 0)[1];            // highest point of the whole area
@@ -430,27 +436,50 @@ export class Terrain {
     }
     this._buildGpu(ovBmp, farBmp, lcOv, lcFar);
     progress(0.95, 'terrain: shaders');
-    await this._tier(this._gd).ready;
+    await Promise.all([this._tier(this._gd).ready, this.lake?.compile()]);
     this._loader = new TileLoader(TILE_WORKERS);
     // the horizon worker reads the heights again (from the HTTP cache) in the background
-    this.horizon.start(new URL(B, globalThis.location?.href ?? 'http://localhost/').href);
+    this.horizon.start(new URL(B, globalThis.location?.href ?? 'http://localhost/').href, this.rift?.url ?? null);
     this.loaded = true;
     progress(1, 'terrain: ready');
     return this;
+  }
+
+  /**
+   * The rift strip (data/landscape/rift.json + rift.bin, sim/tools/terrain/rift.py): 50 m
+   * heights over the Dead Sea rift outside the core. Optional: without it the far grid's 200 m.
+   */
+  async _loadRift() {
+    if (!this.landscapeUrl) return;
+    const lb = new URL(this.landscapeUrl, new URL(this.baseUrl, globalThis.location?.href ?? 'http://localhost/')).href;
+    try {
+      const meta = await fetchJSON(lb + 'rift.json');
+      this.hf.setRift(await fetchU16(lb + 'rift.bin'), meta);
+      this.rift = { url: lb, meta };
+      if (meta.attribution && !this.attribution.includes('Copernicus DEM')) {
+        this.attribution = [this.attribution, meta.attribution].filter(Boolean).join(' | ');
+      }
+    } catch (e) {
+      this.hf.rift = null;
+      this.hf.riftInfo = null;
+      console.warn(`terrain: no rift strip at ${lb} (sim/tools/terrain/rift.py): the far grid's 200 m there`);
+    }
   }
 
   _buildGpu(ovBmp, farBmp, lcOv, lcFar) {
     const r = this.renderer, aniso = this._maxAniso;
     const tex = {};
     // texelFetch grids share textures (sampler budget, see textures.js)
-    tex.heights = makePackedHeightTexture(this.hf.core, this.hf.far);
+    const ri = this.hf.riftInfo;
+    tex.heights = makePackedHeightTexture(this.hf.core, this.hf.far, this.hf.rift, ri);
     // The name other modules know (the vegetation's Scatter.js reads terrain.textures.hCore with
     // texelFetch(clamp(p, 0, 4096))): the core sits at x 0..4096, y 0..4096 of the packed
     // texture with the same encoding, so those reads return the same values.
     tex.hCore = tex.heights;
     r.initTexture(tex.heights);
     this._normalCoreRT = renderNormalMap(r, tex.heights, CORE_N, CORE_SPACING, aniso, 0);
-    this._normalFarRT = renderNormalMap(r, tex.heights, FAR_N, FAR_SPACING, aniso, FAR_HEIGHT_X);
+    // the far grid's normals, the rift strip's under them (riftGLSL.js)
+    this._normalFarRT = renderFarNormalMap(r, tex.heights, aniso, ri ? ri.nz : 0);
     releasePacked(tex.heights);
     tex.overview = makeColorTexture(ovBmp, aniso);
     tex.far = makeColorTexture(farBmp, aniso);
@@ -471,6 +500,13 @@ export class Terrain {
       uRange0: { value: RANGE0 },
       uMorphStart: { value: MORPH_START },
       uMorphEnd: { value: MORPH_END },
+      // the rift strip in the vertex shader's 25 m units and in metres (an empty box without it)
+      uRiftU: {
+        value: ri ? new THREE.Vector4((ri.x0 + FAR_HALF) / CORE_SPACING, (ri.z0 + FAR_HALF) / CORE_SPACING,
+          (ri.x1 + FAR_HALF) / CORE_SPACING, (ri.z1 + FAR_HALF) / CORE_SPACING) : new THREE.Vector4(1, 1, -1, -1),
+      },
+      uRiftBox: { value: ri ? new THREE.Vector4(ri.x0, ri.z0, ri.x1, ri.z1) : new THREE.Vector4(1, 1, -1, -1) },
+      uNormalFarRows: { value: FAR_N + (ri ? ri.nz : 0) },
       uOverview: { value: tex.overview },
       uFarColor: { value: tex.far },
       uNormalCore: { value: this._normalCoreRT.texture },
@@ -486,6 +522,7 @@ export class Terrain {
       uDebugLod: { value: 0 },
       uDebugHeight: { value: 0 },
       uDebugView: { value: 0 },
+      uLake: { value: 0 },
       ...this.horizon.uniforms,
     };
     this._defines = floatTargetsSupported(r) ? {} : { NORMAL_UNORM: 1 };
@@ -493,6 +530,13 @@ export class Terrain {
     this.baseMaterial = this._makeMaterial(false);
     this._baseGroup = new PatchGroup(this._templates, BASE_CAPACITY, this.baseMaterial, 0);
     for (const m of this._baseGroup.meshes) this.group.add(m);
+    // the Dead Sea's own water (DeadSea.js; ?deadSea=0 leaves it to the terrain's water)
+    this.lake = urlSwitch('deadSea') === false ? null : new DeadSea(this, PatchGroup);
+    if (this.lake) {
+      this.lake.setQuality(this.quality);
+      const w = Number(new URLSearchParams(globalThis.location?.search || '').get('lakeWind'));
+      if (Number.isFinite(w) && w > 0) this.lake.windOverride = w;
+    }
   }
 
   _makeMaterial(l0) {
@@ -585,6 +629,7 @@ export class Terrain {
   setQuality(q) {
     this.quality = TERRAIN_QUALITY[q] ? q : 'high';
     this.horizon.setQuality(TERRAIN_QUALITY[this.quality].horizon);
+    this.lake?.setQuality(this.quality);
     const gd = TERRAIN_QUALITY[this.quality].groundDetail;
     const job = ++this._tierJob;
     if (!this.baseMaterial) {             // before the load, which compiles this tier
@@ -768,6 +813,10 @@ export class Terrain {
       t.material.uniforms.uL0Fade.value = f * f * (3 - 2 * f);
       t.material.uniforms.uRwyCount.value = this.debug.runways ? t.rwyCount : 0;
     }
+    // the Dead Sea's lake pass over the basin's patches (its mirror is drawn by the module
+    // update, on drawn frames only)
+    S.uLake.value = this.lake && this.lake.update(camera, patches, (now - (this._lastNow ?? now)) / 1000) ? 1 : 0;
+    this._lastNow = now;
     // wireframe toggle
     if (this.baseMaterial.wireframe !== this.debug.wireframe) {
       this.baseMaterial.wireframe = this.debug.wireframe;
@@ -914,6 +963,7 @@ export class Terrain {
     this.scene.remove(this.group);
     this._loader?.dispose();
     this.horizon.dispose();
+    this.lake?.dispose();
     if (!this.textures) return;
     for (const x of new Set(Object.values(this.textures))) x.dispose?.();   // (hCore is an alias)
     this._normalCoreRT.dispose();

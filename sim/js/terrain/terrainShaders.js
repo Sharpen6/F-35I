@@ -33,6 +33,8 @@
 import { ATMOSPHERE_PARS, ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
 import { DETAIL_LAYERS, SLOPE_SCALE, GLYPH_GRID } from './detailTextures.js';
 import { HORIZON_GLSL } from './horizonMap.js';
+import { LAKE_GATE, BASIN_HAZE_GLSL } from './lakeShaders.js';
+import { RIFT_NORMAL_GLSL } from './riftGLSL.js';
 
 export const MAX_RWY = 4;
 
@@ -52,6 +54,9 @@ uniform vec3 uCamLo;                // camera x, z remainder (m) in .x / .z; cam
 uniform float uRange0;
 uniform float uMorphStart;
 uniform float uMorphEnd;
+// the rift strip (HeightField.setRift: 50 m, packed at x 4097.., y 2049..) in 25 m units from the
+// far area's north-west corner: first and last sample x, z; x > z.x (no strip): never inside
+uniform vec4 uRiftU;
 
 varying vec3 vRel;                  // camera-relative position as rendered (curved)
 varying vec2 vWorldXZ;              // world x, z (m)
@@ -62,9 +67,10 @@ varying float vLevel;
 float decodeH(uint v) { return float(v) * 0.05 - 500.0; }
 float hCore(ivec2 p) { return decodeH(texelFetch(uHeights, clamp(p, ivec2(0), ivec2(4096)), 0).r); }
 float hFar(ivec2 p) { return decodeH(texelFetch(uHeights, clamp(p, ivec2(0), ivec2(2048)) + ivec2(4097, 0), 0).r); }
+float hRift(ivec2 p) { return decodeH(texelFetch(uHeights, p + ivec2(4097, 2049), 0).r); }
 
-// Height at a position in 25 m units: bilinear on the core grid (exact at samples), the far
-// grid outside the core (same function as HeightField on the CPU).
+// Height at a position in 25 m units: bilinear on the core grid (exact at samples), the rift
+// strip or the far grid outside the core (same function as HeightField on the CPU).
 float heightU(vec2 u) {
   // one return at the end: Direct3D's compiler (ANGLE on Windows) warns about an early return
   float h;
@@ -75,6 +81,14 @@ float heightU(vec2 u) {
     ivec2 p = ivec2(i);
     float h00 = hCore(p), h10 = hCore(p + ivec2(1, 0));
     float h01 = hCore(p + ivec2(0, 1)), h11 = hCore(p + ivec2(1, 1));
+    h = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+  } else if (all(greaterThanEqual(u, uRiftU.xy)) && all(lessThanEqual(u, uRiftU.zw))) {
+    vec2 g = (u - uRiftU.xy) * 0.5;                       // 50 m samples
+    vec2 i = min(floor(g), (uRiftU.zw - uRiftU.xy) * 0.5 - 1.0);
+    vec2 f = g - i;
+    ivec2 p = ivec2(i);
+    float h00 = hRift(p), h10 = hRift(p + ivec2(1, 0));
+    float h01 = hRift(p + ivec2(0, 1)), h11 = hRift(p + ivec2(1, 1));
     h = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
   } else {
     vec2 g = u * 0.125;
@@ -141,7 +155,9 @@ uniform sampler2D uOverview;         // core colour, 25 m / px
 uniform sampler2D uNormalCore;        // normal x / z per core sample (4097^2)
 #ifndef USE_L0
 uniform sampler2D uFarColor;          // far colour, 200 m / px
-uniform sampler2D uNormalFar;
+uniform sampler2D uNormalFar;         // far normals (2049^2, 200 m), then the rift strip's (50 m) below them
+uniform vec4 uRiftBox;                // the rift strip: x0, z0, x1, z1 (m); x1 < x0: none
+uniform float uNormalFarRows;         // rows of uNormalFar: 2049 + the strip's
 #endif
 uniform highp usampler2D uLc;         // land cover codes: overview 4096^2, far 2048^2 below it
 uniform highp sampler2DArray uDetailArr;
@@ -156,6 +172,7 @@ uniform vec2 uTreeCover;              // 3D trees within .x m (fade .y m): plain
 uniform float uDebugLod;
 uniform float uDebugHeight;           // 1: output (height, x, z) of the rendered surface (tests)
 uniform float uDebugView;             // 1 classes, 2 row direction, 3 near detail weight, 4 crop state, 5 terrain shadow
+uniform float uLake;                  // 1: the Dead Sea's lake pass draws the basin's water (DeadSea.js)
 
 #ifdef USE_L0
 uniform sampler2D uL0Color;           // 1024 x 1024 for this tile, 6.25 m / px
@@ -169,11 +186,15 @@ uniform int uRwyCount;
 #endif
 
 ${HORIZON_GLSL}
+${BASIN_HAZE_GLSL}
 
 #ifdef NORMAL_UNORM
   #define DECODE_N(v) ((v) * 2.0 - 1.0)
 #else
   #define DECODE_N(v) (v)
+#endif
+#ifndef USE_L0
+${RIFT_NORMAL_GLSL}
 #endif
 
 #define DL_MACRO ${f1(L.MACRO.index)}
@@ -1124,7 +1145,7 @@ void main() {
   #ifdef USE_L0
     vec2 nF = coreW < 1.0 ? DECODE_N(textureLod(uNormalCore, ((xz + 51200.0) / 25.0 + 0.5) / 4097.0, 3.0).rg) : nC;
   #else
-    vec2 nF = DECODE_N(texture(uNormalFar, ((xz + 204800.0) / 200.0 + 0.5) / 2049.0).rg);
+    vec2 nF = farNormalXZ(xz);
   #endif
   vec2 nxz = mix(nF, nC, coreW);
   vec3 N = normalize(vec3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.01)), nxz.y));
@@ -1207,7 +1228,11 @@ void main() {
   // wet sand along the shore (land side)
   float wet = smoothstep(0.02, 0.3, wA.x) * (1.0 - water) * step(vH, 3.0);
   radiance *= 1.0 - 0.35 * wet;
-  if (water > 0.0) {
+  // the Dead Sea basin: the lake pass (DeadSea.js, its own program) draws the water over this
+  // pixel weighted by 1 - alpha; here only the land part (lakeShaders.js LAKE_GATE)
+  float lakeW = uLake > 0.5 && vH < ${LAKE_GATE.toFixed(1)} ? water : 0.0;
+  radiance *= 1.0 - lakeW;
+  if (water > 0.0 && lakeW == 0.0) {
     float t = uTime;
     vec2 qA = gQ / 64.0 + t * vec2(0.013, 0.008);
     vec2 qB = gQ / 16.0 + t * vec2(-0.024, 0.016);
@@ -1262,7 +1287,7 @@ void main() {
   }
 
   // ---- aerial perspective, and the far edge dissolving into the sky's own haze ----
-  vec3 color = atmoAerial(radiance, V, dist, vH);
+  vec3 color = basinAerial(radiance, V, dist, vH);
   float farFade = smoothstep(204800.0 - 30000.0, 204800.0 - 800.0, edge);
   if (farFade > 0.0) {
     vec2 suv = atmoSkyViewUv(V);
@@ -1300,7 +1325,7 @@ void main() {
     return;
   }
 
-  gl_FragColor = vec4(color, 1.0);
+  gl_FragColor = vec4(color, 1.0 - lakeW);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }

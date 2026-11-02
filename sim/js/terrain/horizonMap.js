@@ -126,8 +126,11 @@ export class HorizonMap {
     this.uniforms.uHorizon.value = this.texture;
   }
 
-  /** Starts the worker (browser only); it fetches the heights from baseUrl itself. */
-  start(baseUrl) {
+  /**
+   * Starts the worker (browser only); it fetches the heights from baseUrl itself, and the rift
+   * strip from riftUrl when Terrain loaded one (null: none).
+   */
+  start(baseUrl, riftUrl = null) {
     if (typeof Worker === 'undefined') { this.enabled = false; return; }
     try {
       this.worker = new Worker(new URL('./horizonWorker.js', import.meta.url), { type: 'module' });
@@ -138,7 +141,7 @@ export class HorizonMap {
     }
     this.worker.onmessage = (e) => this._onMessage(e.data);
     this.worker.onerror = (e) => { console.warn('terrain: horizon worker error', e.message || e); this.enabled = false; this.busy = false; };
-    this.worker.postMessage({ type: 'init', baseUrl });
+    this.worker.postMessage({ type: 'init', baseUrl, riftUrl });
   }
 
   setQuality(q) {

@@ -37,6 +37,11 @@ export class QuadTree {
     this.hf = heightField;
     this.patches = [];
     this._pool = [];
+    /**
+     * LOD ranges times this (a coarser selection below 1: the Dead Sea's mirror, DeadSea.js);
+     * the material drawing the patches must morph with the same ranges (uRange0).
+     */
+    this.rangeScale = 1;
   }
 
   /**
@@ -80,11 +85,11 @@ export class QuadTree {
     const x0 = -FAR_HALF + I * size, z0 = -FAR_HALF + J * size;
     const [mn, mx] = this.hf.nodeMinMax(k, I, J);
     const c = this._cam;
-    const r = lodRange(k);
+    const r = lodRange(k) * this.rangeScale;
     if (distSqToBox(c, x0, mn, z0, x0 + size, mx, z0 + size) > r * r) return false;
     if (!this._boxVisible(x0, z0, size, mn, mx)) return true;
     if (k === 0) { this._emit(x0, z0, size, 0, false); return true; }
-    const rc = lodRange(k - 1);
+    const rc = lodRange(k - 1) * this.rangeScale;
     if (distSqToBox(c, x0, mn, z0, x0 + size, mx, z0 + size) > rc * rc) {
       this._emit(x0, z0, size, k, false);
       return true;

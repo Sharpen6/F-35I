@@ -5,7 +5,9 @@
 // Sampler budget: Direct3D 11 (ANGLE on Windows) has 16 texture units per shader stage and
 // three.js counts the vertex and fragment samplers of a program together, so the terrain
 // packs grids that are read with texelFetch into shared textures:
-//   heights      R16UI  6146 x 4097: core 4097^2 at x 0..4096, far 2049^2 at x 4097..6145
+//   heights      R16UI  6146 x 4097: core 4097^2 at x 0..4096, far 2049^2 at x 4097..6145,
+//                       the rift strip (optional, HeightField.setRift) 2049 x 2048 under the far
+//                       grid at x 4097..6145, y 2049..4096
 //   land cover   R8UI   4096 x 6144: overview 4096^2 at y 0..4095, far 2048^2 at y 4096..6143
 
 import * as THREE from 'three';
@@ -14,6 +16,8 @@ import { CORE_N, FAR_N } from './HeightField.js';
 export const HEIGHT_PACK_W = CORE_N + FAR_N;   // 6146
 export const HEIGHT_PACK_H = CORE_N;           // 4097
 export const FAR_HEIGHT_X = CORE_N;            // far grid's column offset
+export const RIFT_HEIGHT_Y = FAR_N;            // the rift strip's row offset (same columns as the far grid)
+export const RIFT_MAX_N = [HEIGHT_PACK_W - FAR_HEIGHT_X, HEIGHT_PACK_H - FAR_N];   // 2049 x 2048
 export const LC_OV_N = 4096;
 export const LC_FAR_N = 2048;
 export const LC_FAR_Y = LC_OV_N;               // far land cover's row offset
@@ -39,11 +43,16 @@ export function makeHeightTexture(u16, n) {
  * Core and far heights in one R16UI texture (layout above). The packed copy is only needed
  * for the upload: call releasePacked(texture) after renderer.initTexture(texture).
  */
-export function makePackedHeightTexture(core, far) {
+export function makePackedHeightTexture(core, far, rift = null, riftInfo = null) {
   const W = HEIGHT_PACK_W, H = HEIGHT_PACK_H;
   const data = new Uint16Array(W * H);
   for (let j = 0; j < CORE_N; j++) data.set(core.subarray(j * CORE_N, (j + 1) * CORE_N), j * W);
   for (let j = 0; j < FAR_N; j++) data.set(far.subarray(j * FAR_N, (j + 1) * FAR_N), j * W + FAR_HEIGHT_X);
+  if (rift) {
+    const { nx, nz } = riftInfo;
+    if (nx > RIFT_MAX_N[0] || nz > RIFT_MAX_N[1]) throw new Error(`rift strip ${nx} x ${nz} does not fit`);
+    for (let j = 0; j < nz; j++) data.set(rift.subarray(j * nx, (j + 1) * nx), (RIFT_HEIGHT_Y + j) * W + FAR_HEIGHT_X);
+  }
   const t = intTexture(data, W, H, THREE.RedIntegerFormat, THREE.UnsignedShortType, 'R16UI', 2);
   t.name = 'TerrainHeights';
   return t;
@@ -125,6 +134,61 @@ export function runPass(renderer, material, target) {
 
 export function floatTargetsSupported(renderer) {
   return renderer.extensions.has('EXT_color_buffer_float');
+}
+
+/**
+ * The far normal map: 2049 columns, the far grid's normals (200 m) in rows 0..2048 and, with
+ * the rift strip, its normals (50 m) in the rows under them (texel (i, 2049 + j) = strip sample
+ * (i, j)): the same place the strip has in the packed height texture, one sampler for both
+ * (riftGLSL.js reads them). Like renderNormalMap otherwise.
+ */
+export function renderFarNormalMap(renderer, heightTex, anisotropy, riftRows = 0) {
+  const float = floatTargetsSupported(renderer);
+  const rows = FAR_N + riftRows;
+  const rt = new THREE.WebGLRenderTarget(FAR_N, rows, {
+    type: float ? THREE.HalfFloatType : THREE.UnsignedByteType,
+    format: float ? THREE.RGFormat : THREE.RGBAFormat,
+    depthBuffer: false, stencilBuffer: false,
+    minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: true,
+    wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+  });
+  rt.texture.anisotropy = anisotropy;
+  rt.texture.colorSpace = THREE.NoColorSpace;
+  rt.texture.name = 'TerrainNormalFar';
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uH: { value: heightTex }, uX0: { value: FAR_HEIGHT_X }, uRows: { value: riftRows } },
+    defines: float ? {} : { ENCODE_UNORM: 1 },
+    vertexShader: PASS_VERT,
+    fragmentShader: /* glsl */ `
+      uniform highp usampler2D uH;
+      uniform int uX0;
+      uniform int uRows;
+      void main() {
+        ivec2 p = ivec2(gl_FragCoord.xy);
+        // the block this texel is in: the far grid (rows 0..2048, 200 m) or the strip (50 m)
+        bool strip = p.y >= ${FAR_N};
+        int y0 = strip ? ${FAR_N} : 0;
+        int y1 = strip ? ${FAR_N} + uRows - 1 : ${FAR_N - 1};
+        float spacing = strip ? 50.0 : 200.0;
+        int il = max(p.x - 1, 0), ir = min(p.x + 1, ${FAR_N - 1}), ju = max(p.y - 1, y0), jd = min(p.y + 1, y1);
+        float hl = float(texelFetch(uH, ivec2(uX0 + il, p.y), 0).r) * 0.05;
+        float hr = float(texelFetch(uH, ivec2(uX0 + ir, p.y), 0).r) * 0.05;
+        float hu = float(texelFetch(uH, ivec2(uX0 + p.x, ju), 0).r) * 0.05;
+        float hd = float(texelFetch(uH, ivec2(uX0 + p.x, jd), 0).r) * 0.05;
+        float dhdx = (hr - hl) / (float(ir - il) * spacing);
+        float dhdz = (hd - hu) / (float(jd - ju) * spacing);
+        vec3 nrm = normalize(vec3(-dhdx, 1.0, -dhdz));
+        #ifdef ENCODE_UNORM
+          gl_FragColor = vec4(nrm.xz * 0.5 + 0.5, 0.0, 1.0);
+        #else
+          gl_FragColor = vec4(nrm.x, nrm.z, 0.0, 1.0);
+        #endif
+      }`,
+    depthTest: false, depthWrite: false,
+  });
+  runPass(renderer, mat, rt);
+  mat.dispose();
+  return rt;
 }
 
 /**
