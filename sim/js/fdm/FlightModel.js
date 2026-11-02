@@ -119,7 +119,7 @@ export class FlightModel {
       crashed: false, crashReason: '', warnings: [],
       // extras (SI unless named): handy for the HMD / HUD and tests
       ias_kt: 0, tas_kt: 0, alt_ft: 0, vs_fpm: 0, gamma: 0, groundSpeed: 0, qbar: 0, mass: 0, time: 0,
-      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false, apc: false, apcRetard: false,
+      fcsMode: 'ground', p: 0, q: 0, r: 0, gLateral: 0, lastTouchdown: null, trimThrottle: 0, highAoA: false, apc: false, apcRetard: false, tyreBurst: false,
     };
     this._stance = this._computeStance();
     this.reset({ x: 0, y: 0, z: 0, heading_deg: 0, on_ground: true });
@@ -736,12 +736,16 @@ export class FlightModel {
     st.onGround = this.gear.units.some((g) => g.wow);
     // wheels
     const units = this.gear.units;
-    if (st.wheels.length !== units.length) st.wheels = units.map((g) => ({ name: g.name, wow: false, compression: 0, steer: 0, force: 0, staticCompression: g.cs }));
+    if (st.wheels.length !== units.length) st.wheels = units.map((g) => ({ name: g.name, wow: false, compression: 0, steer: 0, force: 0, staticCompression: g.cs, burst: false }));
+    let burst = false;
     for (let i = 0; i < units.length; i++) {
       const g = units[i], o = st.wheels[i];
       o.name = g.name; o.wow = g.wow; o.compression = g.compression; o.steer = g.steer; o.force = g.force;
       o.staticCompression = g.cs;
+      o.burst = g.burst;                     // the tyre burst (a locked-wheel skid): on the rim
+      if (g.burst) burst = true;
     }
+    st.tyreBurst = burst;
     st.gear = this.gearPos;
     // engine
     const e = this.engine;
@@ -791,8 +795,10 @@ export class FlightModel {
       if (st.ias > lim.vne || st.mach > lim.mmo + 0.05) wn.push('OVERSPEED');
       if (!e.running) wn.push('ENGINE');
       else if (this.fuelKg < 800) wn.push('BINGO FUEL');
-      // taking off against the parking brake (it drags the wheels now); meaningless once airborne
-      if (inp && inp.parkingBrake && this._throttle > 0.5 && st.onGround) wn.push('PARKING BRAKE');
+      // taking off against the parking brake (it locks the wheels: the tyres burst), or about to
+      // land on it (gear down in the air)
+      if (inp && inp.parkingBrake && (st.onGround ? this._throttle > 0.5 : gearDown)) wn.push('PARKING BRAKE');
+      if (burst) wn.push('TYRE BURST');
       if (this._hardTimer > 0) wn.push('HARD LANDING');
     }
     return st;

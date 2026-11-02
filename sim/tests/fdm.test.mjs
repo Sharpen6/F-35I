@@ -169,7 +169,7 @@ function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAft
   const st = fdm.state;
   const z0 = st.position.z;
   const inp = { ...base(), throttle, parkingBrake: parking };
-  let t = 0, rot = false, lo = null, maxPitch = 0, maxAlpha = 0, warnGround = false, warnAir = false;
+  let t = 0, rot = false, lo = null, maxPitch = 0, maxAlpha = 0, warnGround = false, warnAir = false, warnGearUp = false, burst = null;
   let hand = null, qHand = 0, pitchHand = null;   // the take-off -> air law hand-over; max |q| (deg/s) in the 1.5 s after
   while (t < 90 && !st.crashed) {
     if (st.ias_kt >= vr) rot = true;
@@ -179,7 +179,8 @@ function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAft
     fdm.step(DT, inp);
     t += DT;
     const w = st.warnings.includes('PARKING BRAKE');
-    if (st.onGround) warnGround ||= w; else warnAir ||= w;
+    if (st.onGround) warnGround ||= w; else if (st.gear > 0.99) warnAir ||= w; else warnGearUp ||= w;
+    if (!burst && st.tyreBurst) burst = { dist: z0 - st.position.z, ias: st.ias_kt };
     if (rot && !lo && !st.onGround) lo = { t, ias: st.ias_kt, dist: z0 - st.position.z };
     if (lo && hand === null && st.fcsMode === 'air') { hand = t; pitchHand = st.pitch * R2D; }
     if (hand !== null && t - hand <= 1.5) qHand = Math.max(qHand, Math.abs(st.q) * R2D);
@@ -189,7 +190,7 @@ function takeoffRun({ stick = 1, throttle = 0.75, vr = 150, hold = 15, gearUpAft
       if (t - lo.t > hold) break;
     }
   }
-  return { st, lo, maxPitch, maxAlpha, warnGround, warnAir, qHand, pitchHand };
+  return { st, lo, maxPitch, maxAlpha, warnGround, warnAir, warnGearUp, burst, qHand, pitchHand };
 }
 
 tests.handling = () => {
@@ -218,14 +219,43 @@ tests.handling = () => {
     check('pitch change after the hand-over, part pull held on', p.st.pitch * R2D - p.pitchHand, 2, 40, 'deg', 'the C* law answers a held pull, smoothly');
   }
   {
-    // parking brake left on with full afterburner: it brakes once the wheels slide; the warning only
-    // on the ground
+    // The parking brake locks the main wheels.  It holds the jet at part power (at MIL the thrust
+    // moves so much load onto the unbraked nose wheel that the mains slide: 0.8 x ~110 kN < 122 kN);
+    // a take-off or a landing on it skids the locked tyres until they burst.  Both used to skid for
+    // a kilometre with no consequence (it braked like full pedals with anti-skid).
+    const hold = newFdm();
+    hold.reset({ x: 0, y: RWY.elev, z: 1000, heading_deg: 0, on_ground: true, fuel: 0.6 });
+    const p0 = hold.state.position.clone();
+    for (let i = 0; i < 15 * 60; i++) hold.step(DT, { ...base(), throttle: 0.5, parkingBrake: true });
+    const creep = Math.hypot(hold.state.position.x - p0.x, hold.state.position.z - p0.z);
     const free = takeoffRun({ stick: 1, throttle: 1, vr: 140, hold: 5 });
-    const park = takeoffRun({ stick: 1, throttle: 1, vr: 140, hold: 5, parking: true });
-    info(`max A/B ground roll ${free.lo ? free.lo.dist.toFixed(0) : '-'} m; with the parking brake set ${park.lo ? park.lo.dist.toFixed(0) : '-'} m;`
-      + ` PARKING BRAKE warning on the ground ${park.warnGround}, in the air ${park.warnAir}`);
-    check('ground roll with the parking brake / without', park.lo && free.lo ? park.lo.dist / free.lo.dist : 0, 1.3, 3, '', 'the parking brake drags the sliding wheels like full brakes');
-    checkTrue('PARKING BRAKE warning on the ground only', park.warnGround && !park.warnAir, `ground ${park.warnGround}, air ${park.warnAir}`, 'meaningless once airborne');
+    const park = takeoffRun({ stick: 1, throttle: 1, vr: 140, hold: 5, parking: true, gearUpAfter: 3 });
+    info(`parking brake at 50 % throttle (${(hold.state.engine.thrust / 1000).toFixed(0)} kN): moved ${creep.toFixed(2)} m in 15 s;`
+      + ` max A/B take-off on it: tyres burst ${park.burst ? `${park.burst.dist.toFixed(0)} m into the roll at ${park.burst.ias.toFixed(0)} KIAS` : 'never'},`
+      + ` lift-off after ${park.lo ? park.lo.dist.toFixed(0) : '-'} m (${free.lo ? free.lo.dist.toFixed(0) : '-'} m without);`
+      + ` PARKING BRAKE warning on the ground ${park.warnGround}, in the air gear down ${park.warnAir}, gear up ${park.warnGearUp}`);
+    check('parking brake: holds the jet at 50 % throttle', creep, 0, 0.3, 'm', 'locked wheels on static friction');
+    check('parking brake take-off: the locked tyres burst', park.burst ? park.burst.dist : 1e4, 30, 250, 'm', 'a ~100 m skid at speed wears through the tread (it skidded 600 m with no damage)');
+    checkTrue('parking brake take-off: TYRE BURST shown, no crash', park.st.warnings.includes('TYRE BURST') && !park.st.crashed, park.st.crashReason || park.st.warnings.join(','), 'the wheels run on their rims until the next spawn');
+    checkTrue('PARKING BRAKE warning: with power on the ground and with the gear down in the air', park.warnGround && park.warnAir && !park.warnGearUp,
+      `ground ${park.warnGround}, gear down ${park.warnAir}, gear up ${park.warnGearUp}`, 'a landing on it would burst the tyres');
+  }
+  {
+    // a landing with the parking brake set: 140 KIAS onto the runway at ~1.4 m/s
+    const fdm = newFdm();
+    const r = fdm.reset({ x: 0, y: RWY.elev + 4, z: 0, heading_deg: 0, on_ground: false, gear: 1, speed_ms: tasFromCas(140 * KT, RWY.elev + 4), flight_path_deg: -1.2, fuel: 0.45 });
+    const st = fdm.state;
+    let td = null, burst = null, stop = null;
+    for (let i = 0; i < 90 * 60 && !st.crashed && !stop; i++) {
+      // nose held up for 2 s after the touchdown, then lowered
+      fdm.step(DT, { ...base(), parkingBrake: true, throttle: td ? 0 : r.throttle, pitch: td && i - td.i > 120 ? -0.2 : 0, yaw: clamp(-0.08 * st.position.x - 0.3 * st.velocity.x, -1, 1) });
+      if (!td && st.onGround) td = { z: st.position.z, i };
+      if (td && !burst && st.tyreBurst) burst = { dist: td.z - st.position.z, ias: st.ias_kt };
+      if (td && st.groundSpeed < 0.5) stop = { dist: td.z - st.position.z };
+    }
+    info(`landing on the parking brake: tyres burst ${burst ? `${burst.dist.toFixed(0)} m after the touchdown at ${burst.ias.toFixed(0)} KIAS` : 'never'}, stopped after ${stop ? stop.dist.toFixed(0) : '-'} m`);
+    check('landing on the parking brake: the tyres burst', burst ? burst.dist : 1e4, 20, 200, 'm', 'locked wheels at landing speed (it stopped in 785 m with no damage)');
+    checkTrue('landing on the parking brake: stops on the rims, no crash', stop && !st.crashed && Math.abs(st.position.x) < RWY.halfWidth, st.crashReason || `x ${st.position.x.toFixed(1)} m`, '');
   }
   {
     // slow flight at the 25 deg AoA limit, ~120 KCAS: full right stick

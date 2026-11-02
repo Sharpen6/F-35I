@@ -171,6 +171,12 @@ export const F35I_CONFIG = {
     casterDamping: 2000,
     rollingResistance: { runway: 0.015, ground: 0.06, water: 0.2 },
     anchorStiffness: 4e5, anchorDamping: 6e4, anchorCapture: 0.10, anchorRelease: 0.6,
+    // Parking brake = locked main wheels (no anti-skid).  Sliding, a locked tyre grips skidMu of the
+    // surface friction (dry concrete: ~0.6 locked against ~0.8 at the peak).  Skidding wears the tread
+    // through: burstSkid m of skid bursts the tyre (counted in full above burstSpeed[1] m/s, 30 kt,
+    // not at all below burstSpeed[0]; a locked-wheel skid at landing speed bursts a fighter's tyre
+    // within a second or two).  On the rim: burstDrop m lower, rimRolling resistance, rimMu grip.
+    skidMu: 0.75, burstSkid: 100, burstSpeed: [3, 15], burstDrop: 0.12, rimRolling: 0.3, rimMu: 0.45,
     steering: { maxAngle: 60 * D, lateralAccel: 3.4, rate: 60 * D },   // NWS full lock while taxiing
     // Sink rate at a wheel's first contact.  Land-based fighter gear is designed for 10 ft/s
     // (3.05 m/s): beyond it the landing is logged and shown as HARD LANDING; the struts give way at
