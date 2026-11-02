@@ -362,6 +362,19 @@ the first rows of *before* at 960 x 540): the shader programs made after the loa
 | 250 m over Tel Aviv, by day and at 21:30 (buildings, roads, lamps, trees streaming in) | (not reached) | 0, 0 |
 | the wingmen | none when they load; built when they first come into view | 11 when they load, finished before they show |
 
+A whole `tests/e2e.mjs` run (medium quality: the runway, a take-off, the cameras, sunset over
+Jerusalem, the Tel Aviv towers by day and by night) made none either: `app.warmup.late` stayed
+empty.
+
+Nothing looks different. `--phases shots` took the noon view at Tel Nof 36 and the 21:30 view at
+Ben Gurion 26, from the chase camera and from the cockpit, with both versions (960 x 540,
+`clouds=clear`; each view once the vegetation was idle, after two settled frames): at noon the
+cockpit view is the same to the pixel and the chase view differs in 0.014 % of its pixels (by
+more than 8 of 255); at 21:30 0.7 % (chase) and 1.4 % (cockpit) differ, all of them at lights
+that change with the clock: the approach lights' sequenced flashers and their glow, blinking
+obstruction lights and moving lights on the horizon. (Taken sooner, the old version's first
+frames still lack what it builds at its first draw: the airfield's surfaces, then the trees.)
+
 SwiftShader has no parallel compile, and the container's 4 CPUs were shared with other jobs: the
 warm-up took 31-65 s there (each first use waits for its compile), and its first frames take
 seconds; that says nothing about the PC. On the PC each of the menu's 59 programs cost ~90 ms

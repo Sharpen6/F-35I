@@ -172,10 +172,11 @@ export class Roads {
   }
 
   /**
-   * The programs of what streams in later, built ahead (js/env/warmup.js calls this at start-up and
-   * after a quality change): the road chunks of both groups (their meshes come from the worker; to
-   * three only the material, the kind of object and whether the geometry has normals select the
-   * program), and through AirportLights the airfield lights, street lamps and traffic (Points).
+   * The programs of what streams in later, built ahead (js/env/warmup.js calls this at start-up; a
+   * quality change moves only ranges and uniforms): the road chunks of both groups (their meshes
+   * come from the worker; to three only the material, the kind of object and whether the geometry
+   * has normals select the program), and through AirportLights the airfield lights, street lamps
+   * and traffic (Points).
    */
   warmup(w, camera) {
     const tmp = new THREE.Group();
