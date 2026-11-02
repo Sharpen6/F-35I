@@ -52,6 +52,7 @@ export class UI {
     $('opt-wingmen').addEventListener('change', (e) => app.setOption('wingmen', e.target.checked));
     $('opt-mousestick').addEventListener('change', (e) => app.setOption('mouseStick', e.target.checked));
     $('opt-buildings')?.addEventListener('change', (e) => app.setOption('buildings', e.target.checked));   // js/world/Buildings.js
+    $('opt-vegetation')?.addEventListener('change', (e) => app.setOption('vegetation', e.target.checked));
     $('opt-volume').addEventListener('input', (e) => {
       app.setOption('volume', Number(e.target.value) / 100);
       $('opt-volume-val').textContent = e.target.value;
@@ -133,6 +134,7 @@ export class UI {
     $('opt-wingmen').checked = !!settings.wingmen;
     $('opt-mousestick').checked = !!settings.mouseStick;
     if ($('opt-buildings')) $('opt-buildings').checked = settings.buildings !== false;
+    if ($('opt-vegetation')) $('opt-vegetation').checked = settings.vegetation !== false;
     $('opt-volume').value = Math.round(settings.volume * 100);
     $('opt-volume-val').textContent = Math.round(settings.volume * 100);
   }

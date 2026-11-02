@@ -32,6 +32,7 @@ import { AircraftFX } from './aircraft/AircraftFX.js';     // graphics module: v
 import { Roads } from './world/Roads.js';                 // roads, railways, airfield surfaces and lights (roads track)
 import { Cockpit } from './aircraft/Cockpit.js';      // cockpit track: live PCD, interior, canopy glass
 import { DisplayLevels } from './env/displayLevels.js';   // lighting fix: the jet's displays at a picture level
+import { Scatter } from './terrain/Scatter.js';           // vegetation (trees, orchards, palms, shrubs)
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -56,7 +57,7 @@ const QUALITY = {
 };
 
 const SETTINGS_KEY = 'f35i.settings.v1';
-const DEFAULTS = { spawn: null, time: 7.0, quality: 'high', volume: 0.7, wingmen: false, mouseStick: false, camera: 'cockpit', hmd: true };
+const DEFAULTS = { spawn: null, time: 7.0, quality: 'high', volume: 0.7, wingmen: false, mouseStick: false, camera: 'cockpit', hmd: true, vegetation: true };
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
@@ -69,6 +70,7 @@ function loadSettings() {
   if (params.has('quality') && QUALITY[params.get('quality')]) s.quality = params.get('quality');
   if (params.has('cam') && VIEWS.includes(params.get('cam'))) s.camera = params.get('cam');
   if (params.has('wingmen')) s.wingmen = params.get('wingmen') === '1';
+  if (params.has('vegetation')) s.vegetation = params.get('vegetation') !== '0';   // trees on / off
   if (!QUALITY[s.quality]) s.quality = 'high';
   return s;
 }
@@ -275,6 +277,7 @@ class App {
     this.addModule(new AircraftFX(ctx));      // aircraft: vapour, contrail, tyre smoke, landing-light pool, burner quality
     this.addModule(new Roads(ctx));                      // js/world/Roads.js (owns js/world/AirportLights.js)
     if (!STUBS) this.addModule(new DisplayLevels(ctx));   // lighting fix: PCD, tablet, LEDs = level / exposure (steps aside for app.cockpit)
+    this.addModule(new Scatter(ctx));                      // vegetation: js/terrain/Scatter.js
   }
 
   /**
@@ -351,6 +354,7 @@ class App {
     if (key === 'volume') this.sound.setVolume(value);
     if (key === 'mouseStick') this.input.setMouseStick(value);
     if (key === 'wingmen') this._lazyWingmen();      // loads them once, then shows / hides
+    for (const m of this.modules) m.setOption?.(key, value);   // module options (e.g. 'vegetation')
     this._saveSettings();
   }
 
