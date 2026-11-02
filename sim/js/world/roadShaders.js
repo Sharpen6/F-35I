@@ -252,9 +252,23 @@ void main() {
     vec2 slab = floor(vec2(u, v) / 5.0);
     float sv = hash11(slab.x * 17.0 + slab.y * 131.0 + tone * 97.0);
     albedo = vec3(0.30, 0.295, 0.28) * (0.9 + 0.16 * sv + 0.25 * nM.g * detail + 0.12 * nL.a) * (1.0 + 0.25 * nF.r * detail);
+    // airfield track: the odd replaced slab (newer, lighter) and corner cracks, sealed
+    albedo *= sv > 0.955 ? 1.12 : 1.0;
+    vec2 sq = mod(vec2(u, v), 5.0);
+    float crack = band(sq.x * 0.7 + sq.y - 2.6 - 0.4 * sv, -0.015, 0.015, max(pu, pv)) * step(0.85, fract(sv * 13.7)) * step(sq.x, 3.2);
+    albedo *= 1.0 - 0.35 * crack * detail * (1.0 - smoothstep(0.08, 0.3, max(pu, pv)));
     float joint = max(band(mod(u + 2.5, 5.0), 2.49, 2.51, pu), band(mod(v + 2.5, 5.0), 2.49, 2.51, pv));
     albedo *= 1.0 - 0.45 * joint * detail;
     albedo *= 1.0 - 0.35 * smoothstep(0.18, 0.4, nM.b + 0.15 * nL.g) * detail;      // oil and rubber stains
+    // airfield track: fuel and hydraulic drips, small dark spots where aircraft stand
+    albedo *= 1.0 - 0.3 * smoothstep(0.3, 0.42, nF.b + 0.6 * nM.b) * smoothstep(0.0, 0.2, nL.b + 0.1) * detail;
+    // and the stands themselves: darker, oil-stained ground under parked aircraft (a 30 x 45 m
+    // grid along the apron's axis, about half of it in use), streaked along the way in and out
+    vec2 cP = floor(vec2(u / 30.0, v / 45.0));
+    float hP = hash11(cP.x * 7.3 + cP.y * 61.1 + tone * 13.0);
+    vec2 qP = vec2(mod(u, 30.0) - 15.0, mod(v, 45.0) - 22.5) / vec2(8.0, 15.0);
+    float stand = step(0.5, hP) * (1.0 - smoothstep(0.55, 1.0, length(qP) + 0.3 * nM.g + 0.15 * nF.g));
+    albedo *= 1.0 - (0.12 + 0.1 * fract(hP * 7.7)) * stand * detail;
     alpha = 1.0;
     rough = 0.75;
   } else if (cls == 10 || cls == 11) {
@@ -314,7 +328,26 @@ void main() {
     rough = 0.62;
     float av = abs(v);
     if (cls == 12) {
-      // taxiway: paved shoulders beyond the full-strength pavement, lighter and dustier
+      // airfield track: concrete where the jets wait and run up, from 60 m before a holding
+      // position on to the runway (slabs across the full-strength width, sealed joints, oil and
+      // fuel where they stand)
+      if (vRad.x > 0.5 && detail > 0.3) {
+        float sH = dP * (vRad.x > 1.5 ? -1.0 : 1.0);
+        float conc = band(sH, -60.0, 1e4, pu) * band(av, -1.0, hc, pv);
+        float nx = max(floor(cw / 5.0 + 0.5), 1.0), sw = cw / nx;
+        float sv = hash11(floor(u / 5.0) * 17.0 + floor((v + hc) / sw) * 131.0 + tone * 97.0);
+        vec3 concC = vec3(0.33, 0.325, 0.31) * (0.9 + 0.16 * sv + 0.2 * nM.g * detail + 0.1 * nL.a) * (1.0 + 0.2 * nF.r * detail);
+        float joint = max(band(mod(u + 2.5, 5.0), 2.49, 2.51, pu), band(mod(v + hc + 0.5 * sw, sw), 0.5 * sw - 0.01, 0.5 * sw + 0.01, pv));
+        concC *= 1.0 - 0.45 * joint * detail;
+        concC *= 1.0 - 0.3 * smoothstep(0.15, 0.4, nM.b + 0.15 * nL.g) * band(sH, -45.0, 0.0, pu) * detail;
+        albedo = mix(albedo, concC, conc);
+      }
+      // the main gears' tracks either side of the centreline (polished, rubbered, streaky
+      // along) and oil drips on the line the nose wheel follows
+      float trk = band(av, 0.8, 2.6, pv) * (0.75 + 0.5 * (nM.b + 0.5));
+      float drips = band(av, 0.0, 0.6, pv) * smoothstep(0.1, 0.35, nM.b + 0.2 * nF.b);
+      albedo *= 1.0 - detail * (0.10 * trk + 0.15 * drips);
+      // paved shoulders beyond the full-strength pavement, lighter and dustier
       albedo = mix(albedo, albedo * 1.35 + 0.02, band(av, hc, 99.0, pv));
       alpha = band(v, vL, vR, pv + 0.3);
     } else if (urban && (mL > 0.5 || mR > 0.5) && cls >= 2 && cls <= 7) {

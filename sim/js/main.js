@@ -292,6 +292,7 @@ class App {
     if (!STUBS) this.exterior = this.addModule(new Exterior(ctx));   // exterior: jet shadow map + ground pass (?exterior=0, ?jetshadow=0)
     // js/world/Roads.js (owns js/world/AirportLights.js); the terrain draws only the far city glow beyond its lamps
     this.terrain.lampSource = this.addModule(new Roads(ctx));
+    if (!STUBS) import('./world/Runways.js').then(({ Runways }) => this.addModule(new Runways(ctx))).catch((e) => console.warn('Runways:', e));   // airfield: runway surfaces over the terrain's paint (?runways=0)
     if (!STUBS) this.addModule(new DisplayLevels(ctx));   // lighting fix: PCD, tablet, LEDs = level / exposure (steps aside for app.cockpit)
     this.addModule(new Scatter(ctx));                      // vegetation: js/terrain/Scatter.js
   }

@@ -12,7 +12,8 @@
 //   1. Tel Nof runway 36 at noon: the jet stands on its gear (every wheel on the runway, tyres
 //      pressed in by their modelled deflection, FDM struts and modelled oleos at their static
 //      compression, the stance pitch, nose wheel on the centreline, no sinking or floating);
-//      screenshots chase + cockpit; HMD numbers against the flight model; every camera mode.
+//      screenshots chase + cockpit; HMD numbers against the flight model; every camera mode;
+//      the airfield's runway surfaces built, the one under the jet among them.
 //   2. Takeoff with the scripted pilot (js/test/TestPilot.js): MIL then afterburner, nose-wheel
 //      steering on the centreline, rotation at ~150 kt, gear up after a positive climb, climb to
 //      3,000 m and a turn toward Tel Aviv; screenshots of the roll in burner, the climb-out
@@ -248,6 +249,16 @@ async function main() {
     await S(() => window.__sim.camera('cockpit'));
     await shot('02_telnof36_noon_cockpit', 1500);
     await cameraCheck('runway');
+    // airfield track: the runway surfaces (js/world/Runways.js) drawn over the terrain's uniform
+    // paint, the one under the jet among them (shader errors fail the console check at the end)
+    const rws = await S(() => {
+      const m = window.__sim.app.modules?.find((x) => x.name === 'runways');
+      const p = window.__sim.fdm().position;
+      return m ? { ...m.stats, enabled: m.enabled, under: m.covers(p[0], p[2]) } : null;
+    });
+    check('runway surfaces built (airfields.py runways data)', rws && rws.enabled && rws.runways >= 10 && rws.triangles > 5000 && rws.building === 0,
+      rws ? `${rws.runways} runways at ${rws.airfields} airfields, ${rws.triangles} triangles, ${rws.fixtures} fixtures` : 'no runways module');
+    check('the runway under the jet is drawn by them', rws && rws.under === 'LLEK 18/36', `${rws?.under}`);
 
     // =============================================================== 2. takeoff, climb, turn
     log('--- takeoff: MIL, afterburner, rotate, gear up, climb to 3,000 m toward Tel Aviv');
