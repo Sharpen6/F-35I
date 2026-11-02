@@ -75,7 +75,11 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   over blue). At night a long flame (4.8 m of core at full burner): a yellow-white throat in the
   nozzle, an orange core fading to red-orange, a blue-violet sheath along its edge for the first
   metre, and a train of five or six yellow-white shock diamonds, each weighted by the core where it
-  sits (attached, none past the flame). The two looks are tables (`FLAME_DAY`, the look tuned
+  sits (attached, none past the flame), small and peaked: crisp Mach disks, not soft blobs. Seen 28
+  deg off the tail at 21:30 the body between the diamonds is (213,111,72), the diamonds
+  (242,198,149), the tail at 70 % of the core (186,67,44) (e2e checks them; the night table is set
+  through the output's hue-preserving curve, which shows a light's colours as they are). The two
+  looks are tables (`FLAME_DAY`, the look tuned
   against daylight; `FLAME_NIGHT`) blended by the light level (`flameDayLook`, from `fxEnv`: the
   sun's elevation, not the exposure); noon draws `FLAME_DAY` exactly. Each channel saturates and
   the flame covers what is behind by its opacity (premultiplied; higher by day, as the core is in
@@ -85,12 +89,19 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   brightness grows only with the 4th root of the exposure (`flameDisplayGain`, normalised to the
   meter's noon value `fxEnv.noonExposure`) and goes through a hue-preserving shoulder (the
   brightest channel rolls off, the others keep their ratio); at night it is fixed, whatever the
-  meter (40 or 285 give the same flame), with colours AgX keeps saturated: the body at display
-  ~0.3-1 with little green, the diamonds and the throat ~2-3, the sheath ~0.2-0.4 in blue. Throat
-  glow (`throatGlow`): a dull red-orange at idle, orange at MIL (both only seen in the dark),
-  orange-yellow in burner by day, yellow-white at night; with the burner lit it is drawn inside
-  the plume shader, under the same shoulder (two separately tone-mapped layers added up to white
-  before). Nozzle petals: open at idle
+  meter (40 or 285 give the same flame). At night the flame is a light (env README "Lights at
+  night"): once the night look is complete it adds its light (no opacity: a soot-light gas) and
+  writes its mark into the frame's alpha, so the output pass shows it by its hue and night vision
+  leaves it alone (before, the rods' shift turned the orange body salmon-pink). The glow inside the
+  nozzle (`NOZZLE_GLSL`, `throatGlow`): rays that pass the exit and the throat end on the turbine's
+  exit a metre further in, a hot annulus round the dark tail cone with the flame holder's struts
+  across it, the nozzle's wall between dimly lit (a cavity with parallax, never a flat disc at the
+  exit); without the burner it is drawn on a disc in the exit plane that looks into the nozzle,
+  with the burner inside the plume shader under the same shoulder. Its light: the engine's heat,
+  by day the faint table value, at night a black body by the rule for lights (~930 K at idle, a
+  dim dark red ~0.06 on the display; ~1030 K at MIL, an orange-red ~0.7; the dusk's gain of 1 shows
+  next to nothing of it), plus the burner (orange-yellow by day, yellow-white at night). Nozzle
+  petals: open at idle
   (the F135's idle nozzle), closed at MIL, opening again with the burner (`nozzleIdleOpen`); they
   follow the engine, not the lever (`lagThrottle`, first order, `NOZZLE_TAU` 1.3 s: the spool takes
   ~4.5 s from idle to MIL).
@@ -102,9 +113,14 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   spread, energy-conserving): a light brighter than the display can show looks bigger, as glare
   does, and fades out at its edge rather than ending as a flat disc. A hue-preserving shoulder in
   the glow shader (lower for a saturated light) keeps a distant red or green light red or green (no
-  white core with a coloured rim); on the canvas it is the glow's whole tone curve (three's ACES on
+  white core with a coloured rim); on the canvas it is the glow's whole tone curve (a tone mapper on
   top of it bleached a bright green to a pale mint): green tops out at ~(85, 243, 152), red at
-  ~(243, 66, 46). The sprite is drawn 0.6 m (+ 0.2 % of the distance) nearer the camera than the
+  ~(243, 66, 46). On the HDR chain's target the glows and the lenses write their mark as lights
+  (env README "Lights at night"): from sunset the output pass keeps their hue (AgX alone turned a
+  nav lens white and the glows salmon) and night vision leaves them alone. At night a lens is a
+  coloured surface at 0.8 on the display (`AircraftLights.lensCap`, `LENS_NIGHT`; an LED lens's
+  ~100,000 cd/m^2 was ~1,000-3,000 there) under its glow, which carries the light's brightness.
+  The sprite is drawn 0.6 m (+ 0.2 % of the distance) nearer the camera than the
   lamp, so the lamp's housing and the wing's edge beside it do not bite into the glow. On the
   canvas the brighter of glow and frame wins, channel by channel (`MaxEquation`): the wing-tip and
   the fuselage light of one side seen from abeam, or a lens on the sunlit skin, no longer add up
@@ -112,8 +128,10 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   Nav lights (red left, green right; white tail light, glow only) seen only within their sectors;
   the anti-collision beacons (spine, belly) flash 90 ms a second each, alternating; formation
   strips a soft green at night. The landing lamp has two beams: the landing beam (400,000 cd, 7 deg
-  1/e half width) aimed 12 deg below the body axis, which on a 3 deg approach at ~12 deg alpha points
-  along the glide path and at the flare lights the touchdown zone, and the wider taxi beam
+  1/e half width) aimed 20 deg below the body axis, which on a 3 deg approach (the nose ~10 deg up)
+  meets the runway 10 deg below the horizon, 170 m ahead from 30 m up, 370 m from 65 m, and still
+  points ~6 deg down at the 14 deg pitch of the touchdown (aimed 12 deg below the axis it lit the
+  ground a kilometre ahead on final and pointed above the horizon in the flare), and the wider taxi beam
   (250,000 cd, 13 deg) 5 deg below the axis, which takes over with weight on wheels (blended over
   0.8 s). The lens brightens when the camera is in a beam; `visual.lights.landing` `{on, position,
   direction, intensity, spread, spill, beams: [{name, direction, intensity, spread, weight}]}`
@@ -125,10 +143,16 @@ that also reads as an array: `p.x === p[0]`); `visual.info.raw` is the plain jso
   of 40). A light many times over the threshold of a point source against the ground
   (`fxEnv.pointThreshold`) keeps a visible core however far (`AircraftLights.visibleFloor`, the
   airfield lights' floor), and its centre is at most 64 on the display at night, the cap of every
-  point light where the bloom clamps (`AircraftLights.coreCap`, eased in with `fxEnv.lightNight`,
-  none by day): a light a few metres from the camera is a small hard point with a modest bloom
-  (the tail light from the chase seat at 960 x 540: a 5 px white core in a 14 px glow; 8 in 22 px
-  uncapped, 21 in 52 px with the old gain).
+  point light where the bloom clamps (`AircraftLights.coreCap`, eased in over the first tenth of
+  `fxEnv.lightNight` and then the cap whatever the exposure, none by day; it was divided by
+  `lightNight`, which let a blue-hour tail light hold five times the cap and grow into a 21 px
+  ball): a light a few metres from the camera is a small hard point with a modest bloom. Under the
+  cap the core keeps its base radius (`AircraftLights.capWeight`; by day a light far over the
+  display's white grows up to 1.6 x, which at night only widened the held centre into an 8 px
+  white disc): the tail light from the chase seat at 960 x 540 is a 4 px white core in an 8 px
+  glow at half height, the same at -5 deg (Jerusalem 19:30) as at night (Tel Aviv 21:30). At night
+  the sprite reaches out to where its skirt is invisible (a skirt cut off at the sprite's edge
+  showed as the edge of a disc: e2e checks that the skirt's steps shrink outwards).
   When the frame goes to the HDR chain's float target (`fxEnv.bloomOn`)
   the halo is fainter (the bloom makes the glare) and the shoulder higher;
   `visual.lights.haloGain` scales the halo further.
@@ -151,7 +175,7 @@ the player's FlightModel state and the AircraftVisual, never changes them, and d
 | --- | --- |
 | `Vapor.js` | wing-tip vortex trails (thin white lines, high lift in humid air), chine vortex tubes over the wing roots at high alpha, vapour sheets over the upper wings at high g low down (streaky, drifting aft, up to two layers hugging the skin from the leading-edge flap's hinge aft, fading where seen edge-on: no hairlines from ahead), the transonic vapour cone (Mach 0.93-1.01 in humid air: up to three nested, slightly irregular shells, densest near the skin, each fading where seen edge-on, streaks along the flow from the side and a mottled cloud along the axis, a sharp but ragged aft edge at the shock), the contrail above ~8-9 km (a gap of clear exhaust first, spreading and fading over 25 s; its points are spaced by speed so that they always cover the whole life: no blunt end) |
 | `TyreSmoke.js` | puffs of rubber smoke from each wheel at touchdown (ground speed > 25 m/s), denser the faster and harder: one GPU-animated point cloud (rise, growth, drift, fade over ~3 s) |
-| `LandingPool.js` | the landing and taxi beams on the ground (the terrain's shaders ignore three.js lights): a terrain-following grid ahead of the lamp, `E = sum I(theta) cos(i) / r^2` per fragment against the light already on the ground `E_amb`. By day, at sunset and at dusk the physical ratio `E / E_amb` is all there is (a faint brightening near the nose wheel); at night the lamp's light counts `fxEnv.lightGain` times (the rule for lights at night, env README: ~6 at exposure 230 against the boosted moonlit ground of ~20 lux), under a logarithmic roll-off far above the night's light (`poolFactor`, `POOL_KNEE` 64, the channels kept in proportion): bright under the nose, falling off along the beam as the light grazes the ground, not a flat white wedge. The canvas is already tone-mapped, and the tone curve is no multiplication (its toe crushes the red of the dark bluish night ground, its shoulder squeezes white paint), so the pool is worked out on two reference grounds, the runway's asphalt and its paint (`POOL_ALBEDO` 0.115 / 0.62), without and with the lamp through the renderer's own tone curve, and the canvas gets the map per channel that is exact on both, `drawn = dst x M + A`: three draws multiply (an 8-bit canvas clamps a blend factor at x2 a draw), one adds. The asphalt turns the lamp's warm grey, not the night's blue made brighter; the paint stays brighter and turns white, not bluish. On the HDR chain's float target the draws multiply by `1 + gain E / E_amb` per channel instead (right for any albedo). Faded by the fog; no draws with the sun more than ~4 deg up |
+| `LandingPool.js` | the landing and taxi beams on the ground (the terrain's shaders ignore three.js lights): a terrain-following grid ahead of the lamp, `E = sum I(theta) cos(i) / r^2` per fragment against the light already on the ground `E_amb`. By day, at sunset and at dusk the physical ratio `E / E_amb` is all there is (a faint brightening near the nose wheel); at night the lamp's light counts `fxEnv.lightGain` times (the rule for lights at night, env README: ~6 at exposure 230 against the boosted moonlit ground of ~20 lux), under a logarithmic roll-off far above the night's light (`poolFactor`, `POOL_KNEE` 64, the channels kept in proportion): bright under the nose, falling off along the beam as the light grazes the ground, not a flat white wedge. The canvas is already tone-mapped, and the tone curve is no multiplication (its toe crushes the red of the dark bluish night ground, its shoulder squeezes white paint), so the pool is worked out on two reference grounds, the runway's asphalt and its paint (`POOL_ALBEDO` 0.115 / 0.62), without and with the lamp through the renderer's own tone curve, and the canvas gets the map per channel that is exact on both, `drawn = dst x M + A`: three draws multiply (an 8-bit canvas clamps a blend factor at x2 a draw), one adds. The asphalt turns the lamp's warm grey, not the night's blue made brighter; the paint stays brighter and turns white, not bluish. On the HDR chain's float target the draws multiply by `F` per channel instead (right for any albedo). On dark land the pool keeps a floor, as the point lights keep theirs (env README "Lights at night"): the eye adapted to that land weighs the lamp against the ground's real light (`fxEnv.groundLightPhysical`: the night's glow and the moon without their boosts), its brightening the log of the ratio (Fechner), `F >= 1 + ln(1 + E / E_real)`. By the rule alone the landing beam's ~0.5 lux on the runway ~370 m ahead on short final (65 m up) was x1.2 against the boosted moonlit ground (~20 lux as drawn), nothing; with the floor it is a lit stretch of runway, the touchdown zone brighter in the flare (Tel Nof at 21:30, the ground at the beam's centre: x5 from 65 m up, x15 in the flare); near the nose the rule's value is the higher; by day and at dusk the floor stays under the rule. The pool's own light draws its edges, not the grid: each beam ends at 3.4 of its 1/e widths (a reflector's rim; the floor's log of a bright beam's tail would otherwise reach any edge) and the grid reaches past that, 45 deg either side for the taxi beam, ~27 deg for the landing beam, 1.2-3 km ahead (30 x the lamp's height): from 65 m the landing beam's light is still x1.3 1.1 km ahead, and a grid that ended at 600 m (and 22 deg) drew its own border across the approach. From 250 m up the pool fades out (gone at 400 m). Drawn after the terrain and the roads and before every light's sprite (the lamp lights the ground; it does not make the runway's lights brighter). The lamp and its rule are shared, `LAMP_GLSL` (`lampLight(L, N)`, `lampFactor(E, Eamb, Ereal)`) with `LAMP_UNIFORMS` by reference, written every frame (`uLampRule.w` 0 while the pool is off): the buildings light their walls and roofs with it (`js/world/buildingShaders.js`), so on short final over a town the facades facing the lamp light up with the ground between them (it was lit ground between dark blocks). The pool multiplies what is drawn under it, so a street already lit by its lamps comes out brighter than the lamp's share of its light would make it. Faded by the fog; no draws with the sun more than ~4 deg up |
 | `fxshared.js` | the light level `fxEnv` (sky illuminance from the sun's elevation after the twilight tables, `darkness` 0..1, `noonExposure`, bloom detection), `fxExposure`, the air model (temperature, humidity, dew point), `condensation(state, mass, out)`, a tileable noise texture, the vapour lighting (sun with forward scattering + sky, from the Environment), three's fog for premultiplied and additive effects (`fogUniforms`, `FOG_PARS_GLSL`), camera-facing trail ribbons (a preallocated ring, vertex arrays written in place) |
 
 Condensation (`fxshared.condensation`): the local cooling `V^2 / (2 cp)` x a factor x CL (CL from
@@ -214,7 +238,7 @@ export predates all this and has neither (re-export on the PC, `tools/aircraft/R
   per surface crossing (the canopy's amber through both walls, as in Cycles) and an additive
   physical pass (thin-film iridescence for the canopy's gold coating) adds the reflections on the
   outer surface only.
-* Draw order of the transparent parts: landing pool 1 (its additive draw 1.5), decals 1, glass
+* Draw order of the transparent parts: landing pool 0.5 (its additive draw 0.6), decals 1, glass
   tint 2 / reflection 3, plume and throat glow 4, light glows 5, trails, smoke and the cone's back
   6, sheets 7, the cone's front 8. Decals use polygon offset; all custom shaders support the
   logarithmic depth buffer and three's fog, and tone-map themselves (premultiplied alpha for the
@@ -229,7 +253,7 @@ export predates all this and has neither (re-export on the PC, `tools/aircraft/R
   Frustum culling works per part (the plume's bounds follow its length; the glows are one draw).
   The effects add nothing while idle; in a hard turn up to 4 trail ribbons + 2 sheet draws, near
   Mach 1 two cone draws (one to three shells by quality, ~2-7k triangles), a touchdown one point
-  draw (<= 160 points), the pool four draws of one grid (1,024 triangles) at night with the gear
+  draw (<= 160 points), the pool four draws of one grid (2,304 triangles) at night with the gear
   down: a few draw calls, under 10k triangles.
   Measured in the whole app (`aircraft_scenes.mjs --shots parked,chase`, the parked jet, a night
   take-off roll in burner, a 7 g turn, Mach 0.98 over the sea; against the commit before the fix

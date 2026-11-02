@@ -533,7 +533,7 @@ export class AircraftLights {
           core = Math.max(core, AircraftLights.visibleFloor(Elux / threshold) * dark / (exposure * s.peak)) * coreFade;
           // a little wider once it is far over the cap (the skirt alone would leave a 1 px pin); not
           // at night, where the core's centre is held at NIGHT_PEAK: then it is the size of any
-          // point light at that cap (the airfield's: ~5 px over white), a grown one was ~9 px
+          // point light at that cap (the tail light from the chase seat: 4 px over white; grown, 8)
           const over = core * exposure * s.peak / (capWhite + (capSat - capWhite) * s.sat);
           if (over > 4) {
             const grow = 1 + (Math.min(1.6, Math.sqrt(over / 4)) - 1) * (1 - capK);
