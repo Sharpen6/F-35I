@@ -10,7 +10,7 @@ and joystick (HOTAS) all work.
 
 Made for Windows 11 with a recent GPU (developed for an RTX 3070) and Chrome or Edge.
 
-This is the **v1 preview** (git tag `v1-preview`): the jet, its cockpit and the whole landscape
+This is the **v1 preview** (branch `release/v1-preview` on GitHub): the jet, its cockpit and the whole landscape
 are in and flyable. Still to come: more convincing clouds, rooftops and night windows in the
 cities, parked aircraft, ships and daytime traffic, and a smoother first second after a start.
 
