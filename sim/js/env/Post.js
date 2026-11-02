@@ -500,6 +500,21 @@ export class Post {
     this.stats.passes++;
   }
 
+  /**
+   * Builds the passes' programs ahead (js/env/warmup.js), as render() draws them: bloom and the
+   * sun's visibility into float targets, the output pass into the canvas (its sRGB variant).
+   */
+  warmup(w) {
+    const q = this._quad, keep = q.material;
+    for (const m of [this._downMat, this._upMat, this._sunMat]) {
+      q.material = m;
+      w.compile(q, this._camera, { target: w.floatTarget() });
+    }
+    q.material = this._outMat;
+    w.compile(q, this._camera, { target: null });
+    q.material = keep;
+  }
+
   /** Draw the frame: scene into the HDR target, clouds, bloom, glare, output to the canvas. */
   render(scene, camera) {
     const r = this.renderer;
