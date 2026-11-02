@@ -33,6 +33,7 @@ import { Roads } from './world/Roads.js';                 // roads, railways, ai
 import { Cockpit } from './aircraft/Cockpit.js';      // cockpit track: live PCD, interior, canopy glass
 import { DisplayLevels } from './env/displayLevels.js';   // lighting fix: the jet's displays at a picture level
 import { Scatter } from './terrain/Scatter.js';           // vegetation (trees, orchards, palms, shrubs)
+import { Shore } from './world/Shore.js';                 // landscape: breakwaters, quays, piers, port cranes
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -282,6 +283,7 @@ class App {
     this.terrain.lampSource = this.addModule(new Roads(ctx));
     if (!STUBS) this.addModule(new DisplayLevels(ctx));   // lighting fix: PCD, tablet, LEDs = level / exposure (steps aside for app.cockpit)
     this.addModule(new Scatter(ctx));                      // vegetation: js/terrain/Scatter.js
+    this.addModule(new Shore(ctx));                        // landscape: the coast's breakwaters, quays, cranes (js/world/Shore.js)
   }
 
   /**

@@ -12,6 +12,7 @@ Builders for what stands on the terrain of the flight sim. Each one writes into
 | `volumes.py` | building volumes for `buildings.py`: parts and their outline, raised volumes onto what holds them up, duplicates |
 | `airbases.py`, `airbases.json` | the buildings of Tel Nof, Hatzor and Palmachim, traced in the imagery (below) |
 | `shots.mjs` | screenshots of the scenes the buildings are judged by (Playwright, `window.__sim`) |
+| `shore.py` | breakwaters, quays, piers and the container cranes of Ashdod: `sim/data/landscape/shore.json` (below) |
 
 Python 3 with numpy, pyarrow and Pillow (as `sim/tools/terrain`).
 
@@ -164,6 +165,51 @@ building statistics) into `--out` (default `/home/claude/simdata/shots/buildings
 buildings=0` turns the buildings off, `--query buildingsDebug=1` tints boxes blue and full-detail
 chunks red.
 
+## Shore structures (`shore.py`)
+
+```
+python3 sim/tools/world/shore.py --out sim/data/landscape [--cache DIR] [--release latest]
+```
+
+The terrain draws the coast from imagery on a 25 m grid, so a 15 m wide breakwater 800 m out
+to sea was a few sea-coloured pixels and the ports had nothing standing in them. This writes the
+coast's structures between Ashkelon and Herzliya as small 3D data for `js/world/Shore.js`
+(about 80 kB, a few seconds from the Overture cache):
+
+* **breakwaters** (Overture `base/infrastructure` class `breakwater` / `groyne`, from
+  OpenStreetMap): the mapped outline is the footprint at sea level, the crest the outline
+  inset along the vertex bisectors by the slope's run (1 : 1.5), never more than 42 % of the
+  local width, at a height by size: the short detached breakwaters off the Tel Aviv and Bat Yam
+  beaches 1.8 m, marinas 4-5 m, the Ashdod main breakwater 6.5 m. The few mapped as lines
+  become 8-12 m wide mounds. Each footprint edge gets its exposure to the swell (`exp`, 0-100):
+  how far it faces the west-north-west (285 deg, the open Mediterranean's fetch), 0 where
+  another structure lies within 1.5 km in that direction (a port's inner faces). The white
+  water is drawn there.
+* **decks** (class `pier` / `quay`): polygons become decks 1.2 m (piers) or 2 m (quays) above
+  the sea with vertical sides; lines become 2.5-4 m wide jetties and marina pontoons
+  (0.9-1.5 m).
+* **cranes**: 25 ship-to-shore container cranes at Ashdod, spaced along six container quays
+  (`CRANE_QUAYS`: edges of the OSM coastline, which follows the quay walls, picked against the
+  Sentinel-2 imagery where the container stacks are), the boom toward the side the ocean
+  polygon is on, about a third with the boom raised. Their size follows the port's published
+  figures (44 m lift height, 60.5 m outreach); the build only places them, `Shore.js` models
+  them.
+
+Output `shore.json` (format `f35i-shore` v1): world metres (sim/DESIGN.md), rings with signed
+area < 0 (`geom.py`):
+
+```
+{ "breakwaters": [ { "foot": [[x, z], ...], "crest": [[x, z], ...], "h": 1.8, "exp": [0..100 per edge] } ],
+  "decks":       [ { "ring": [[x, z], ...], "h": 2.0 } ],
+  "cranes":      [ { "x": .., "z": .., "heading": rad from north toward east (the boom), "boom_up": false, "variant": 0 } ],
+  "attribution": "..." }
+```
+
+Counts of the current build: 48 breakwater polygons and 11 lines, 19 decks, 100 jetties and
+pontoons, 25 cranes. At run time `js/world/Shore.js` builds one mesh per 8 km area from it
+(17,000 triangles in all, 12 meshes, plus the white water bands and the cranes' obstruction
+lights); see that file and `sim/README.md`. Without the file the app runs as before.
+
 ## Licences
 
 Overture Maps buildings combine OpenStreetMap (ODbL 1.0, (c) OpenStreetMap contributors) and
@@ -174,3 +220,8 @@ https://docs.overturemaps.org/attribution/. The 759 air base buildings are trace
 terrain's imagery and land cover (ESA WorldCover 2021, contains modified Copernicus Sentinel data,
 CC BY 4.0, credited with the terrain and in the attribution line). Facades, roofs and all other
 building detail are procedural (no textures or models).
+
+The shore structures (`shore.py`) come from the same Overture release (OpenStreetMap, ODbL 1.0,
+(c) OpenStreetMap contributors), credited by the `attribution` line of `shore.json`; the
+crane positions are picked against the terrain's Sentinel-2 imagery (CC BY 4.0), the cranes'
+shape and colours are made up.

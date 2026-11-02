@@ -5,7 +5,7 @@
 //
 //   node sim/tests/landscape_shots.mjs [--port 8500] [--out DIR] [--quality high] [--size 960x540]
 //                                      [--scenes a,b,c] [--root SIM_FOLDER] [--tag suffix]
-//                                      [--url-extra "&deadsea=0"] [--mirror] [--list]
+//                                      [--url-extra "&deadSea=0"] [--mirror] [--list]
 //
 // --mirror also saves the Dead Sea's mirror picture of each scene (<name>_mirror.png, simple
 // tone map; DeadSea.js), when it was drawn.
@@ -67,8 +67,13 @@ export const SCENES = [
   // Ein Gedi (Nahal David, Nahal Arugot): 500 m above the water, along the shore
   { name: 'eingedi500_0900_chase', spawn: { x: 36500, z: 46000, alt: 70, hdg: 345, speed: 160 }, time: 9, camera: 'chase' },
   { name: 'eingedi500_1600_cockpit', spawn: { x: 37500, z: 44000, alt: 70, hdg: 330, speed: 160 }, time: 16, camera: 'cockpit', look: { yaw: 30, pitch: -2 } },
+  // the sinkholes and the waterline on the flats south of Ein Gedi (-400 .. -425 m), 150 m up
+  { name: 'sinkholes150_1000_cockpit', spawn: { x: 35200, z: 47800, alt: -250, hdg: 15, speed: 130 }, time: 10, camera: 'cockpit', look: { yaw: 20, pitch: -25 } },
   // the evaporation ponds south of the Lisan, from 3,000 m over the Lisan strait looking south
   { name: 'ponds3000_1100_cockpit', spawn: { x: 41000, z: 50000, alt: 3000, hdg: 185, speed: 200 }, time: 11, camera: 'cockpit', look: { yaw: 0, pitch: -12 } },
+  // pond 5 and the Ein Bokek hotels from over the western cliffs, 1,200 m, looking east-south-east
+  { name: 'einbokek1200_1100_cockpit', spawn: { x: 29000, z: 64000, alt: 1200, hdg: 110, speed: 160 }, time: 11, camera: 'cockpit', look: { yaw: 0, pitch: -20 } },
+  { name: 'einbokek1200_1600_chase', spawn: { x: 29000, z: 64000, alt: 1200, hdg: 110, speed: 160 }, time: 16, camera: 'chase' },
   // the coast
   { name: 'tlv3000_1200_chase', spawn: 'tlv_3000', time: 12, camera: 'chase' },
   { name: 'tlv3000_1845_chase', spawn: 'tlv_3000', time: 18.75, camera: 'chase' },
@@ -77,16 +82,22 @@ export const SCENES = [
   { name: 'coast_low_0700_chase', spawn: 'coast_low', time: 7, camera: 'chase' },
   { name: 'coast_low_1845_chase', spawn: 'coast_low', time: 18.75, camera: 'chase' },
   // Tel Aviv's detached breakwaters and the marina, Jaffa port, from 600 m over the sea
-  { name: 'tlv_breakwaters600_1100_cockpit', spawn: { x: -27000, z: -27500, alt: 600, hdg: 20, speed: 160 }, time: 11, camera: 'cockpit', look: { yaw: -35, pitch: -18 } },
+  { name: 'tlv_breakwaters600_1100_cockpit', spawn: { x: -27000, z: -27500, alt: 600, hdg: 20, speed: 160 }, time: 11, camera: 'cockpit', look: { yaw: -18, pitch: -11 } },
+  { name: 'tlv_breakwaters200_1100_chase', spawn: { x: -26000, z: -28800, alt: 200, hdg: 20, speed: 140 }, time: 11, camera: 'chase' },
   // Ashdod port from 1,000 m, west of it heading north-east
   { name: 'ashdod1000_1100_cockpit', spawn: { x: -40500, z: -1000, alt: 1000, hdg: 30, speed: 160 }, time: 11, camera: 'cockpit', look: { yaw: -15, pitch: -18 } },
   { name: 'ashdod1000_1100_chase', spawn: { x: -40500, z: -1000, alt: 1000, hdg: 30, speed: 160 }, time: 11, camera: 'chase' },
   // the kurkar cliffs at Apollonia (Herzliya) and Ashkelon, 150 m
   { name: 'apollonia150_1500_chase', spawn: { x: -21800, z: -40500, alt: 150, hdg: 10, speed: 150 }, time: 15, camera: 'chase' },
   { name: 'ashkelon150_1500_chase', spawn: { x: -46200, z: 11500, alt: 150, hdg: 20, speed: 150 }, time: 15, camera: 'chase' },
+  // the Apollonia cliff (35-40 m of kurkar) from 60 m over the sea, 700 m out, the head turned to it
+  { name: 'apollonia_cliff60_1500_cockpit', spawn: { x: -21300, z: -43800, alt: 60, hdg: 15, speed: 140 }, time: 15, camera: 'cockpit', look: { yaw: -55, pitch: -3 } },
+  { name: 'apollonia_cliff60_1500_chase', spawn: { x: -21500, z: -43400, alt: 60, hdg: 25, speed: 140 }, time: 15, camera: 'chase' },
   // Tel Nof: the ground beside the runway (capture_v2/0480.jpg, 70 m at 16:48) and on the runway
   { name: 'telnof70_1648_chase', spawn: { x: -19661, z: -2838, agl: 70, hdg: 358, speed: 110 }, time: 16.8, camera: 'chase', steps: 30 },
   { name: 'telnof36_1200_chase', spawn: 'telnof_36', time: 12, camera: 'chase' },
+  { name: 'telnof70_1648_chase_lc', spawn: { x: -19661, z: -2838, agl: 70, hdg: 358, speed: 110 }, time: 16.8, camera: 'chase', steps: 30, debugView: 1 },
+  { name: 'telnof70_1648_chase_gd', spawn: { x: -19661, z: -2838, agl: 70, hdg: 358, speed: 110 }, time: 16.8, camera: 'chase', steps: 30, debugView: 3 },
 ];
 
 async function startServer() {
@@ -258,6 +269,8 @@ async function main() {
           };
         }
         sim.start(name, { time: s.time, camera: s.camera });
+        // debug: the terrain's false-colour view (Terrain.js debug.view: 1 land cover, 3 ground detail ...)
+        app.terrain.debug.view = s.debugView || 0;
         if (s.time != null) sim.time(s.time);
         sim.setInput({ throttle: s.spawn === 'telnof_36' ? 0 : 0.6 });
         return true;
@@ -287,6 +300,8 @@ async function main() {
         if (app.terrain?.lake) out.lake = { ...app.terrain.lake.stats };
         const m = (app.modules || []).find((x) => x && x.name === 'landscape');
         if (m?.stats) out.landscape = { ...m.stats };
+        const sh = (app.modules || []).find((x) => x && x.name === 'shore');
+        if (sh?.stats) out.shore = { ...sh.stats };
         return Object.keys(out).length ? out : null;
       });
       const file = join(OUT, `${sc.name}${TAG}.png`);
