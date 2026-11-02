@@ -104,7 +104,11 @@ export class PCD {
   /**
    * The TSD's map: the terrain's overview (25 m/px over the 102 km core) and far (200 m/px over
    * 410 km) colour, reduced to 2048 / 1024 px copies (the canvas keeps its own GPU copy of what it
-   * draws). From the terrain's loaded bitmaps when it has them, else fetched.
+   * draws), each with its own mip levels down to 256 px: the TSD draws the level that is minified
+   * at most ~1.4:1 on the canvas (pages.js drawTSD). At the long ranges the 2048 copy is 3-6:1
+   * smaller on the canvas, and a canvas's bilinear (or cubic) smoothing then skips texels: the map
+   * sparkled as it turned and moved, whatever imageSmoothingQuality asked for. From the terrain's
+   * loaded bitmaps when it has them, else fetched.
    */
   async setMaps(terrain, baseUrl = 'data/terrain/') {
     const get = async (tex, file) => {
@@ -117,13 +121,17 @@ export class PCD {
     try {
       const T = terrain && terrain.textures;
       const [ov, far] = await Promise.all([get(T && T.overview, 'color/overview.jpg'), get(T && T.far, 'color/far.jpg')]);
-      const [core, farS] = await Promise.all([
-        createImageBitmap(ov, { resizeWidth: 2048, resizeHeight: 2048, resizeQuality: 'medium' }),
-        createImageBitmap(far, { resizeWidth: 1024, resizeHeight: 1024, resizeQuality: 'medium' }),
-      ]);
+      // each level resampled from the source (a box-like 'high' filter, once at start-up)
+      const levels = (src, size, min) => {
+        const out = [];
+        for (let s = size; s >= min; s >>= 1) out.push(createImageBitmap(src, { resizeWidth: s, resizeHeight: s, resizeQuality: 'high' }));
+        return Promise.all(out);
+      };
+      const [coreL, farL] = await Promise.all([levels(ov, 2048, 256), levels(far, 1024, 256)]);
+      const core = coreL[0];
       this.maps = {
-        core: { img: core, metres: 102400, x0: -51200, z0: -51200 },
-        far: { img: farS, metres: 409600, x0: -204800, z0: -204800 },
+        core: { img: core, levels: coreL, metres: 102400, x0: -51200, z0: -51200 },
+        far: { img: farL[0], levels: farL, metres: 409600, x0: -204800, z0: -204800 },
       };
       // mean colour of the imagery (for the display's glow on the cockpit)
       const c = document.createElement('canvas');

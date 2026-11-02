@@ -240,19 +240,27 @@ export function drawTSD(ctx, r, d, maps) {
     // dimmed to about half, so the white and coloured symbols stand out (an F-35 TSD's imagery
     // underlay is a background, not a picture)
     ctx.globalAlpha = 0.56;
+    const S = ctx.canvas.width / REF_W;      // canvas pixels per reference pixel
     for (const mp of [maps.far, maps.core]) {
       if (!mp) continue;
-      const k = mp.metres / mp.img.width;    // m per pixel of the source
+      // the finest mip level minified at most ~1.4:1 on the canvas (PCD.setMaps): smoothing then
+      // filters every texel, and the map does not sparkle as it turns and moves
+      const L = mp.levels;
+      let img = mp.img;
+      if (L) {
+        let i = 0;
+        while (i + 1 < L.length && (mp.metres / L[i].width) * ppm * S < 1 / 1.4) i++;
+        img = L[i];
+      }
+      const k = mp.metres / img.width;       // m per pixel of the source
       ctx.save();
       ctx.translate(sx, sy);
       ctx.rotate(-hdg);
       ctx.scale(ppm * k, ppm * k);
       ctx.translate(-(ox - mp.x0) / k, -(oz - mp.z0) / k);
-      // minified up to ~10:1 at the long ranges: 'high' filters with mipmaps (the default 'low'
-      // samples bilinearly, and the imagery sparkled as the map turned and moved)
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(mp.img, 0, 0);
+      ctx.drawImage(img, 0, 0);
       ctx.restore();
     }
     ctx.globalAlpha = 1;
