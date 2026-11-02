@@ -27,13 +27,22 @@ import * as THREE from 'three';
 
 /**
  * Per quality: map size (0: off, the scene's shadow as before), the light's turn that redraws it
- * (rad, ~1 texel at 8 m), the shortest time between redraws (s), the filter radius (texels),
- * the occlusion map's size, ground grid cells per side.
+ * (rad: on high at most ~1.4 texels of lag for parts 7 m apart, inside the 1.6-texel filter, as
+ * the cockpit's map, pcd/shadow.js), the shortest time between redraws (s), the shortest time
+ * between redraws for moving parts (s: the control surfaces and the nozzle move a little all the
+ * time), the filter radius (texels), the occlusion map's size, ground grid cells per side, the
+ * ground pass's taps (8 on every tier: one program, so a quality change in flight builds none;
+ * the pass covers only the ground under the jet and its shadow).
+ *
+ * Why the redraw rules: each redraw is a depth pass of the whole jet (~190 draws, ~320k
+ * triangles); redrawn for every 1e-3 of the lagged throttle and the stick, the map was drawn
+ * several times a second in level flight and up to every frame on the take-off roll and the
+ * approach, and on the PC (RTX 3070, ANGLE / D3D11) those frames took ~20 ms against ~4.5.
  */
 export const JET_SHADOW_QUALITY = {
   low: { size: 0 },
-  medium: { size: 1024, turn: 0.0018, minAge: 0.05, kernel: 1.4, ao: 128, grid: 16, taps: 4 },
-  high: { size: 2048, turn: 0.0009, minAge: 0, kernel: 1.6, ao: 256, grid: 24, taps: 8 },
+  medium: { size: 1024, turn: 0.0018, minAge: 0.05, partAge: 0.05, kernel: 1.4, ao: 128, grid: 16, taps: 8 },
+  high: { size: 2048, turn: 0.0017, minAge: 0, partAge: 0.05, kernel: 1.6, ao: 256, grid: 24, taps: 8 },
 };
 
 /** Ground pass: lift over the terrain (m), and the relative depth pull towards the camera. */
@@ -85,7 +94,7 @@ uniform mat4 uF35ViewToBody;     // view -> body
 uniform mat4 uAOMat;             // body -> occlusion map clip
 uniform sampler2D uAO;
 uniform vec4 uShadowG;           // depth range (m), body origin's map depth, map half size (m), texel (m)
-uniform vec4 uGround;            // shadow on, occlusion amount, -, reference plane (body y)
+uniform vec4 uGround;            // shadow's strength (0 off), occlusion amount, -, reference plane (body y)
 uniform vec3 uSunShare;          // the light's share of the light on the open ground, per channel
 uniform vec2 uAOScale;           // height scale (m), log2(map size / 256): the blur in metres
 uniform float uPull;             // log-depth pull (relative distance)
@@ -95,7 +104,7 @@ float sunVis(vec3 vp) {
   float vis = 1.0;
   vec4 c = uF35ShadowMat * vec4(vp, 1.0);
   vec3 s = c.xyz * 0.5 + 0.5;
-  if (uGround.x > 0.5 && all(greaterThan(s.xy, vec2(0.0))) && all(lessThan(s.xy, vec2(1.0)))) {
+  if (uGround.x > 0.0 && all(greaterThan(s.xy, vec2(0.0))) && all(lessThan(s.xy, vec2(1.0)))) {
     // the penumbra grows with the distance along the ray behind the jet's middle (sun's disc
     // 0.53 deg), from the filter's own width at the tyres
     float behind = max(s.z - uShadowG.y, 0.0) * uShadowG.x;
@@ -120,6 +129,8 @@ float sunVis(vec3 vp) {
     #endif
     // long shadows fade as the penumbra eats them (sunset)
     vis = mix(vis, 1.0, smoothstep(0.3, 0.6, rm));
+    // and the whole shadow with the height, towards GROUND.maxAgl (not at once)
+    vis = mix(1.0, vis, uGround.x);
   }
   return vis;
 }
@@ -181,26 +192,33 @@ function swapVisit(o) {
   if (cast) { _swapList.push(o, m); o.material = _swapMat; } else { _swapList.push(o, null); o.visible = false; }
 }
 
-/** Renders the jet's opaque meshes with one material into a target (CockpitShadow's swap). */
+/**
+ * Renders the jet's opaque meshes with one material into a target (CockpitShadow's swap).
+ * clearAlpha null: depth only (the shadow map: its colour is never read, so it is neither cleared
+ * nor written: the material has colorWrite off).
+ */
 function drawJet(renderer, root, target, camera, material, swap, clearAlpha) {
   _swapList = swap; _swapMat = material;
   root.traverseVisible(swapVisit);
   _swapList = null; _swapMat = null;
   const prevTarget = renderer.getRenderTarget(), prevAuto = renderer.autoClear, prevShadow = renderer.shadowMap.enabled;
   const prevColor = renderer.getClearColor(_clear), prevAlpha = renderer.getClearAlpha();
+  const color = clearAlpha !== null;
   renderer.shadowMap.enabled = false;
   renderer.autoClear = false;
   renderer.setRenderTarget(target);
-  renderer.setClearColor(0x000000, clearAlpha);
-  renderer.clear(true, true, false);
+  if (color) renderer.setClearColor(0x000000, clearAlpha);
+  renderer.clear(color, true, false);
   // count this pass's draws without resetting the frame's counters (the frame's own render does)
   const info = renderer.info, prevReset = info.autoReset, calls0 = info.render.calls;
   info.autoReset = false;
   renderer.render(root, camera);
   const calls = info.render.calls - calls0;
   info.autoReset = prevReset;
+  // (three's clear() does not set the colour mask: a later clear must not find it off)
+  if (!color) renderer.state.buffers.color.setMask(true);
   renderer.setRenderTarget(prevTarget);
-  renderer.setClearColor(prevColor, prevAlpha);
+  if (color) renderer.setClearColor(prevColor, prevAlpha);
   renderer.autoClear = prevAuto;
   renderer.shadowMap.enabled = prevShadow;
   for (let k = 0; k < swap.length; k += 2) {
@@ -227,10 +245,15 @@ export class JetShadow {
     this.hook = visual.exterior.hookState;
     this.size = 0;
     this.redraws = 0;
+    this.redrawBy = { first: 0, turn: 0, parts: 0, age: 0 };   // what redrew the map (stats, the PC check)
     this.aoRedraws = 0;
+    this._aoUsed = true;                            // the ground pass looks at the underside map (_updateGround)
     this.active = false;
     this.lastCalls = 0;
     this._swap = [];
+    // the 1x1 depth texture bound while there is no map: the skin's own (exteriorUniforms), reused
+    const ph = this.U.uF35Shadow.value;
+    this._ph = ph && ph.isDepthTexture && ph.image && ph.image.width === 1 ? ph : null;
     this._age = Infinity;
     this._aoAge = Infinity;
     this._sunBody = new THREE.Vector3();
@@ -255,13 +278,16 @@ export class JetShadow {
     // the ground plane in the body frame: the lowest tyre bottom (fully extended)
     const gc = (visual.info && visual.info.gearContacts) || [];
     this.groundY = gc.length ? Math.min(...gc.map((g) => g.pos.y)) - 0.02 : this.box.min.y;
+    // made with the gear up (a menu in the air) the box would leave the lowered gear out of the map
+    this.box.min.y = Math.min(this.box.min.y, this.groundY - 0.05);
     this.radius = Math.hypot(Math.max(-this.box.min.x, this.box.max.x), Math.max(-this.box.min.z, this.box.max.z));
 
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 60);
     this.camera.name = 'JetShadowCamera';
     this.camera.matrixAutoUpdate = false;
     this.camera.matrixWorldAutoUpdate = false;
-    this.depthMaterial = new THREE.MeshDepthMaterial({ side: THREE.DoubleSide });
+    // depth only (colorWrite is GL state, not a program variant: three's depth program as before)
+    this.depthMaterial = new THREE.MeshDepthMaterial({ side: THREE.DoubleSide, colorWrite: false });
     this.depthMaterial.name = 'JetShadowDepth';
 
     // the underside map (coverage, height), body frame, from below
@@ -341,8 +367,8 @@ export class JetShadow {
       }
       this._age = Infinity;
     }
-    if (this.groundMaterial.defines.TAPS !== (this.q.taps || 4)) {
-      this.groundMaterial.defines.TAPS = this.q.taps || 4;
+    if (this.groundMaterial.defines.TAPS !== (this.q.taps || 8)) {
+      this.groundMaterial.defines.TAPS = this.q.taps || 8;
       this.groundMaterial.needsUpdate = true;
     }
     if (this.q.grid && this.q.grid !== this._gridN) this._buildGround(this.q.grid);
@@ -392,9 +418,10 @@ export class JetShadow {
     return n;
   }
 
-  _changed(sig, n, last, lastN, eps) {
+  /** Did a value move by more than a texel shows (SIG_EPS) since `last`? */
+  _changed(sig, n, last, lastN) {
     if (n !== lastN) return true;
-    for (let i = 0; i < n; i++) if (Math.abs(sig[i] - last[i]) > eps) return true;
+    for (let i = 0; i < n; i++) if (Math.abs(sig[i] - last[i]) > SIG_EPS[i]) return true;
     return false;
   }
 
@@ -428,12 +455,17 @@ export class JetShadow {
     this._age += dt || 0;
     this._aoAge += dt || 0;
     const sig = _sigTmp, n = this._signature(sig);
-    const moved = this._changed(sig, n, this._sig, this._sigN, 1e-3);
+    const moved = this._changed(sig, n, this._sig, this._sigN);
     if (casting) {
       const Q = this.q;
       const turned = !this._sunBody.lengthSq() || sunB.angleTo(this._sunBody) > Q.turn;
-      if (this._age === Infinity || ((turned || moved) && this._age >= Q.minAge) || this._age > 2) {
+      // a turn of the light redraws at once (the shadows on the jet would lag the sun), a part
+      // that moved by what a texel shows at most every partAge s, anything at least every 2 s
+      const why = this._age === Infinity ? 'first' : this._age < Q.minAge ? null : turned ? 'turn'
+        : moved && this._age >= Q.partAge ? 'parts' : this._age > 2 ? 'age' : null;
+      if (why) {
         this._render(renderer, sunB);
+        this.redrawBy[why]++;
         this._sunBody.copy(sunB);
         this._sig.set(sig);                                   // (all 64: no view allocated; n says how many count)
         this._sigN = n;
@@ -443,15 +475,19 @@ export class JetShadow {
     U.uF35ShadowP.value.set(casting ? 1 : 0, this.texel || 0.01, this.depthRange || 40, this.q.kernel);
     this.hook.shadowFromBody = this.fromBody;
     this.hook.frame = -1;                                     // remake the view matrices this frame
-    // the underside map: when a part moved (gear, doors, struts), at most twice a second
-    const aoMoved = this._aoSigN < 0 || this._changed(sig, n, this._aoSig, this._aoSigN, 0.01);
-    if (aoMoved && this._aoAge > 0.5) {
+    this._updateGround(env, casting);
+    // the underside map: when a part moved (gear, doors, struts), at most twice a second, and only
+    // while the ground pass uses it (below ~14 m: in the air nothing looks at it); but always the
+    // first time, so its programs are built by the warm-up's frames (js/env/warmup.js drawViews)
+    // also when the menu is in the air
+    const aoFirst = this._aoSigN < 0;
+    const aoMoved = aoFirst || this._changed(sig, n, this._aoSig, this._aoSigN);
+    if (aoMoved && this._aoAge > 0.5 && (this._aoUsed || aoFirst)) {
       this._renderAO(renderer);
       this._aoSig.set(sig);
       this._aoSigN = n;
       this._aoAge = 0;
     }
-    this._updateGround(env, casting);
     return true;
   }
 
@@ -491,7 +527,7 @@ export class JetShadow {
     this.originDepth = _v.z * 0.5 + 0.5;
     cam.matrixWorld.multiplyMatrices(this.body.matrixWorld, _m2);
     cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
-    this.lastCalls = drawJet(renderer, this.root, this.target, cam, this.depthMaterial, this._swap, 1);
+    this.lastCalls = drawJet(renderer, this.root, this.target, cam, this.depthMaterial, this._swap, null);
     this.redraws++;
   }
 
@@ -533,12 +569,16 @@ export class JetShadow {
       share.set(lc.r * mu / Math.max(1e-6, lc.r * mu + amb.r), lc.g * mu / Math.max(1e-6, lc.g * mu + amb.g), lc.b * mu / Math.max(1e-6, lc.b * mu + amb.b));
     } else share.set(0, 0, 0);
     this.sunShare = (share.x + share.y + share.z) / 3;
-    const shadowOn = casting && L.y > 0.03 && agl < GROUND.maxAgl;
+    // the shadow fades out over the top 30 % of GROUND.maxAgl (cut at once, a high sun's shadow,
+    // its penumbra still under 0.3 m at 60 m, vanished in one frame at full strength in the climb)
+    const fade = casting && L.y > 0.03 ? 1 - THREE.MathUtils.smoothstep(agl, 0.7 * GROUND.maxAgl, GROUND.maxAgl) : 0;
+    const shadowOn = fade > 0;
     const aoAmount = 1 - THREE.MathUtils.smoothstep(agl, 3, 14);
+    this._aoUsed = aoAmount > 0;
     if (!shadowOn && aoAmount <= 0) { g.visible = false; return; }
     g.visible = true;
     const Gu = this.groundU;
-    Gu.uGround.value.set(shadowOn ? 1 : 0, aoAmount, 0, this.groundY);
+    Gu.uGround.value.set(fade, aoAmount, 0, this.groundY);
     this.agl = agl;
     Gu.uShadowG.value.set(this.depthRange || 40, this.originDepth ?? 0.5, this.halfSize || 9, this.texel || 0.01);
     // the grid: along the light's azimuth (away from it) from the jet, as far as its shadow reaches
@@ -599,17 +639,33 @@ export class JetShadow {
     this.U.uF35ShadowP.value.x = 0;
   }
 
+  /** The depth texture bound while there is no map: one for the jet's life (not one per quality change). */
   _placeholder() {
-    const t = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
-    t.compareFunction = THREE.LessEqualCompare;
-    t.needsUpdate = true;
-    return t;
+    if (!this._ph) {
+      const t = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
+      t.compareFunction = THREE.LessEqualCompare;
+      t.name = 'JetShadowPlaceholder';
+      t.needsUpdate = true;
+      this._ph = t;
+    }
+    return this._ph;
   }
 }
 
 /** The rig's controls that move what casts on the outside (not the stick, the throttle, the head). */
 const SIG_KEYS = ['stick_pitch', 'stick_roll', 'pedals', 'flaps', 'speedbrake', 'gear', 'nws', 'weapon_bays', 'canopy',
   'refuel_door', 'gun_door', 'tailhook', 'strut_nose', 'strut_left', 'strut_right'];
+/**
+ * The change of each signature value that redraws the maps (the rig's units): about a texel
+ * (8 mm on high) where the part moves most. The surfaces 0.01 of their travel (~1 cm at a
+ * stabilator's tip), the struts 4 mm, the nose wheel's steer 0.004, the nozzle's petals 0.02 of
+ * AB_Open (a few mm at their tips): the flight controls and the lagged throttle creep by a little
+ * all the time (the nozzle for seconds after every throttle change). The gear, the doors, the
+ * bays, the canopy and the hook move only when commanded: 1e-3. (Last: the nozzle, _signature.)
+ */
+const SIG_EPS_BY = { stick_pitch: 0.01, stick_roll: 0.01, pedals: 0.01, flaps: 0.01, speedbrake: 0.01,
+  nws: 0.004, strut_nose: 0.004, strut_left: 0.004, strut_right: 0.004 };
+const SIG_EPS = Float64Array.from([...SIG_KEYS.map((k) => SIG_EPS_BY[k] ?? 1e-3), 0.02]);
 const _box = new THREE.Box3();
 const _vc = new THREE.Vector3();
 const _sigTmp = new Float64Array(64);

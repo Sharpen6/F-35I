@@ -73,7 +73,7 @@ export class Exterior {
     const j = this.jet;
     return {
       enabled: this.enabled, shadow: this.shadowEnabled, on: this.on, quality: this.quality,
-      size: j ? j.size : 0, redraws: j ? j.redraws : 0, aoRedraws: j ? j.aoRedraws : 0,
+      size: j ? j.size : 0, redraws: j ? j.redraws : 0, redrawBy: j ? { ...j.redrawBy } : null, aoRedraws: j ? j.aoRedraws : 0,
       calls: j ? j.lastCalls : 0, texel: j ? j.texel || 0 : 0, bytes: j ? j.bytes() : 0,
       ground: !!(j && j.ground && j.ground.visible), noCast: this._noCast.size,
       sunShare: j ? +(j.sunShare || 0).toFixed(3) : 0, agl: j ? +(j.agl || 0).toFixed(2) : 0,

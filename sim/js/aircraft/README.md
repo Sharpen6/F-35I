@@ -306,20 +306,28 @@ on the spine, the doors, the gear, every junction); on the runway the shadow was
 that started 0.8 m behind the tyres. Here:
 
 * a depth map of the jet alone in its body frame (an ortho camera on the light's side of the jet's
-  box), redrawn only when the light turns in that frame (`turn`), a part moves (the rig's
-  signature: surfaces, gear, doors, struts, canopy, nozzle) or every 2 s; every exterior material
-  samples it with a bias of ~1 texel, a normal offset and 4 rotated hardware-PCF taps, in place of
-  the scene's map for the directional light (the sun or the moon);
+  box, which reaches the tyres whatever the pose it was made in), depth only (no colour cleared or
+  written), redrawn at once when the light turns in that frame by more than `turn`, when a part of
+  the rig's signature moves by what a texel shows (0.01 of a surface's travel, 4 mm of a strut,
+  0.004 of the nose wheel's steer, 0.02 of the nozzle's opening, 1e-3 of the gear, doors, bays,
+  canopy and hook; at most every `partAge`, 0.05 s), and every 2 s. (Redrawn for every 1e-3 of the
+  lagged throttle and the stick, it was drawn several times a second in level flight and nearly
+  every frame on the take-off roll and the approach: frames of ~20 ms on the PC against ~4.5.)
+  Every exterior material samples it with a bias of ~1 texel, a normal offset and 4 rotated
+  hardware-PCF taps, in place of the scene's map for the directional light (the sun or the moon);
 * an underside map (coverage and height of the jet above its ground plane, from below, mipmapped),
-  redrawn when a part moves (at most twice a second): the sky's occlusion under the jet;
+  redrawn when a part moves by the same steps (at most twice a second) while the ground pass uses
+  it (below 14 m; in the air only its first draw, so the warm-up builds its program): the sky's
+  occlusion under the jet;
 * a ground pass: a grid draped on the terrain under the jet and along its shadow (up to 250 m;
   heights from `terrain.heightAt`), drawn after the opaque scene (multiply blend, a log-depth pull
   over the runway's), factor per channel `sky * (1 - ao) + sun * visibility` with the sun's share of
   the open ground's light taken from the environment's own terms (the light's colour at its
   elevation, the sky's irradiance), the occluded sky turned a little towards neutral (horizon band,
   bounce off the underside); the penumbra grows with the distance along the ray (the sun's disc,
-  0.53 deg) and long low-sun shadows fade as it eats them; shown below 60 m above the ground (the
-  occlusion below 14 m);
+  0.53 deg) and long low-sun shadows fade as it eats them; the whole shadow fades out between 42
+  and 60 m above the ground (`GROUND.maxAgl`: cut at once, a high sun's shadow vanished in one
+  frame at full strength during the climb-out), the occlusion below 14 m;
 * `Exterior.js` keeps the jet's meshes out of the scene's map while the jet's own shadow is on (one
   shadow, not a blurred second one 0.8 m behind); everything goes back when it is off.
 
@@ -330,8 +338,14 @@ the GPU. No program variants by state (everything is a uniform); a reversed dept
 | quality | jet map | ground taps | underside map | grid | redraw |
 | --- | --- | --- | --- | --- | --- |
 | low | off (the scene's map, as before) | - | - | - | - |
-| medium | 1024 (~17 mm texels); 5.4 MB with the underside map | 4 | 128 | 16x16 | turn > 0.1 deg, at most 20 / s |
-| high | 2048 (~8 mm); 21.6 MB | 8 | 256 | 24x24 | turn > 0.05 deg, every frame |
+| medium | 1024 (~17 mm texels); 5.4 MB with the underside map | 8 | 128 | 16x16 | turn > 0.1 deg, at most 20 / s |
+| high | 2048 (~8 mm); 21.6 MB | 8 | 256 | 24x24 | turn > 0.1 deg (0.0017 rad) at once, parts at most 20 / s |
+
+The ground pass has 8 taps on every tier: one program, so a quality change in flight builds none.
+Redraws in a 120 fps run (the real rule, the passes counted; high): level flight at 3,000 m 0.6 /
+s (8.4 before), at 300 m 0.5 (4.6), the take-off roll in burner 5.4 (35.6), the approach 3.0 (45),
+parked 0.75 (7.1); a steady roll (`roll: 0.6`) still every frame (the light turns by more than
+`turn` in every frame).
 
 The coating is on at every quality. Cost: a redraw of the jet's map is the jet's 188 opaque meshes
 depth-only (0.32 M triangles); the scene's shadow pass loses the same 188 draws every frame, so a
@@ -368,6 +382,10 @@ in burner, the lift-off from the side, the menu's 26 m orbit over Tel Aviv at no
 sunset, the Dead Sea at 09:00, close-ups on the ramp at noon, the wings and tails from the cockpit,
 low-sun glints; the module's stats per shot in report.json). The e2e checks that the jet's map and
 ground pass are on with the jet out of the scene's map, and that both skins' panel tones were built.
+`node --import ./sim/tests/node-three.mjs sim/tests/jet_shadow.test.mjs`: the redraw rules, the
+depth-only pass, the ground shadow's fade, one ground program on every tier, the box, the
+placeholder (no browser). `tests/pc_check.py` logs the jet's redraws (`exterior`: start, end, and
+the FPS window's frame times with and without a redraw); `--input '{"roll": 0.6}'` for a roll.
 
 Export-side items (Blender, `scripts/f35/panels.py`, not done here): `layout()` draws the wings'
 LEF / flaperon / trailing-edge panel outlines, the stabilators' spar lines and the fins' rudder
