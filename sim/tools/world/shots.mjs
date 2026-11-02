@@ -9,10 +9,11 @@
 //                seen from the chase or the cockpit camera;
 //   free camera  `cam: {pos, look, fov}` (lon, lat, metres above sea level): the jet is hidden and
 //                the camera placed exactly (the views of the buildings review).
-// Every scene waits until the buildings have streamed (no tile or chunk loading twice in a row,
-// at most --maxwait ms). Writes <out>/<scene>_<tag>.png and <out>/info_<tag>.jsonl (renderInfo,
-// timing, GPU memory estimate, building statistics, and for `round` the share of dark speckle
-// pixels on the tower: the regression check of the style-id rounding, see tests/e2e.mjs).
+// Every scene waits until the buildings have streamed (no tile or chunk loading and no chunk
+// cross-fading twice in a row, at most --maxwait ms). Writes <out>/<scene>_<tag>.png and
+// <out>/info_<tag>.jsonl (renderInfo, timing, GPU memory estimate, building statistics, and for
+// `round` the speckle count of the frame: the regression check of the style-id rounding, see
+// Buildings.speckleCheck and tests/e2e.mjs).
 //
 // Scenes:
 //   tlv300 / tlv300c    over the Tel Aviv beach at 300 m, heading east into the city (chase / cockpit)
@@ -177,13 +178,13 @@ async function main() {
         }
         return sim.summary();
       }, sc);
-      // wait until the buildings have streamed: nothing loading twice in a row
+      // wait until the buildings have streamed: nothing loading or cross-fading twice in a row
       let quiet = 0;
       const tw = Date.now();
       while (Date.now() - tw < MAXWAIT) {
         await S(() => window.__sim.settle(1500));
         const st = await S(() => window.__sim.app.modules?.find((m) => m.name === 'Buildings')?.stats || null);
-        if (!st || (st.loading === 0 && st.tiles > 0) || st.off) quiet++; else quiet = 0;
+        if (!st || (st.loading === 0 && st.tiles > 0 && !st.fading) || st.off) quiet++; else quiet = 0;
         if (quiet >= 2) break;
       }
       const s = await S(() => window.__sim.settle(800));
@@ -192,7 +193,7 @@ async function main() {
         buildings: window.__sim.app.modules?.find((m) => m.name === 'Buildings')?.stats || null,
         exposure: window.__sim.app.env.exposure,
       }));
-      if (name === 'round') info.speckle = await S(() => window.__sim.app.modules?.find((m) => m.name === 'Buildings')?.speckleCheck?.(34.79159, 32.07462) ?? null);
+      if (name === 'round') info.speckle = await S(() => window.__sim.app.modules?.find((m) => m.name === 'Buildings')?.speckleCheck?.() ?? null);
       const file = join(OUT, `${name}_${TAG}.png`);
       await page.screenshot({ path: file });
       appendFileSync(join(OUT, `info_${TAG}.jsonl`), JSON.stringify({ name, tag: TAG, quality: QUALITY, query: QUERY, summary: sum, settled: s, ...info, wallS: (Date.now() - t1) / 1000 }) + '\n');
