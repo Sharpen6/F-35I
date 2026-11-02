@@ -154,7 +154,8 @@ export function makeDetailTexture(size = 512, seed = 35) {
  * has to follow every point of an arc. At 1024 over the canopy's 0.42 m tile (0.41 mm a texel)
  * the scratches are 0.25-0.45 mm wide: hairlines of a pixel or so at 1080p on the glass beside
  * the head (0.7-1.4 mm at 512 showed as soft strokes several pixels wide). Sizes in texels scale
- * with `size`, so the pattern is the same at any size. 1024² RGBA with mipmaps: 5.6 MB.
+ * with `size`, so the pattern is the same at any size. 1024² RGBA with mipmaps: 5.3 MB (MB of
+ * 2^20 bytes, as above).
  * @param {number} size texture size (px)
  * @returns {THREE.DataTexture}
  */

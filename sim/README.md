@@ -160,15 +160,19 @@ looks around. Bindings are kept per controller in the browser's local storage.
 
 The player's cockpit is a graphics module (`js/aircraft/Cockpit.js`, `js/aircraft/pcd/`): a live
 panoramic cockpit display (status bar, TSD moving map, FUEL, ENG, ICAWS, EFI, redrawn 4-10 times
-a second from the flight model, its brightness following the exposure); the tub repainted dark
-grey satin with grain, smudges and ambient occlusion, the skin's inner faces painted, the
-display's glow at night; a pass on the canopy glass (dust and scratches catching the sun, the
-display reflected at night). The side-stick and the pedals follow the pilot's inputs. The cockpit
-camera turns the head about the neck, vibrates on the runway, at the touchdown and in the buffet,
-and zooms with the wheel (20-80 deg). `?cockpit=0` shows the glb's cockpit as exported,
-`?shake=0` stops the vibration; `quality` sets the display's resolution and rate and the canopy
-pass. All procedural, no new data (the moving map shows the terrain imagery credited below).
-Design, overridden materials and costs: `js/aircraft/pcd/README.md`.
+a second from the flight model while it can be read, its brightness following the exposure);
+the tub repainted dark grey satin with grain, smudges, ambient occlusion and the light it passes
+round, the skin's inner faces painted to a smooth edge along the sills, the cockpit's own sun
+shadow (sills, canopy frame, seat and pilot), the display's glow at night; a pass on the canopy
+glass (haze and scratch arcs round the sun, the display reflected at night). The side-stick, the
+throttle, the hands and the pedals follow the pilot's inputs. The cockpit camera turns the head
+about the neck, vibrates on the runway, at the touchdown and in the buffet, and zooms with the
+wheel (20-80 deg). `?cockpit=0` shows the glb's cockpit as exported, `?shake=0` stops the
+vibration; `quality` sets the display's resolution and rate, the canopy pass and the cockpit
+shadow map (none / 1024 / 2048). The displays write alpha 0 into an HDR frame, for a post
+chain's night vision to leave them in colour. All procedural, no new data (the moving map shows
+the terrain imagery credited below). Design, overridden materials and costs:
+`js/aircraft/pcd/README.md`.
 
 ## Helmet display
 
