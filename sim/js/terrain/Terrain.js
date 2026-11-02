@@ -44,12 +44,66 @@ const FADE_MS = 700;
 const DEFAULT_ATTRIBUTION = 'Copernicus DEM GLO-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018, '
   + 'provided under COPERNICUS by the European Union and ESA | ESA WorldCover 2021 (CC BY 4.0) | OurAirports (public domain)';
 
-/** Per quality: near ground materials (groundMaterial in terrainShaders.js), horizon map size (horizonMap.js). */
+/**
+ * Per quality: near ground materials (the GROUND_DETAIL define of terrainShaders.js: 0 none,
+ * 1 without imagery-guided field edges, bicubic imagery, the second texture layers, single
+ * orchard crowns (hedgerow bands instead) and bales, 2 all), horizon map size (horizonMap.js).
+ */
 export const TERRAIN_QUALITY = {
   low: { groundDetail: 0, horizon: 'low' },
   medium: { groundDetail: 1, horizon: 'medium' },
-  high: { groundDetail: 1, horizon: 'high' },
+  high: { groundDetail: 2, horizon: 'high' },
 };
+
+/**
+ * The city lights' brightness: the share of built-up land (WorldCover 50) around every 100 m
+ * cell of the core and every 400 m cell of the far area, over a triangle about 3 km wide on
+ * either side (two box blurs), as 0..255 in the free corner of the packed land cover texture
+ * (x 2048..3071 core, 3072..4095 far, y 4096..5119; textures.js), for urbanShare() in the shader.
+ */
+function writeUrbanShare(dst, W, ov, ovN, far, farN) {
+  const N = 1024;
+  const share = (codes, n, k) => {
+    const out = new Float32Array(N * N);
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        let s = 0;
+        for (let b = 0; b < k; b++) {
+          const row = (j * k + b) * n + i * k;
+          for (let a = 0; a < k; a++) if (codes[row + a] === 50) s++;
+        }
+        out[j * N + i] = s / (k * k);
+      }
+    }
+    return out;
+  };
+  // box blur of radius r along rows then columns (edges: mean of the cells inside)
+  const blur = (src, r) => {
+    const tmp = new Float32Array(N * N), out = new Float32Array(N * N);
+    for (let pass = 0; pass < 2; pass++) {
+      const a = pass ? tmp : src, b = pass ? out : tmp;
+      const at = pass ? (p, q) => q * N + p : (p, q) => p * N + q;   // (line, index along it)
+      for (let line = 0; line < N; line++) {
+        let s = 0, c = 0;
+        for (let q = 0; q < r; q++) { s += a[at(line, q)]; c++; }
+        for (let q = 0; q < N; q++) {
+          if (q + r < N) { s += a[at(line, q + r)]; c++; }
+          if (q - r - 1 >= 0) { s -= a[at(line, q - r - 1)]; c--; }
+          b[at(line, q)] = s / c;
+        }
+      }
+    }
+    return out;
+  };
+  const put = (v, x0) => {
+    for (let j = 0; j < N; j++) {
+      const row = (4096 + j) * W + x0;
+      for (let i = 0; i < N; i++) dst[row + i] = Math.round(255 * Math.min(1, v[j * N + i]));
+    }
+  };
+  if (ovN === 4 * N) put(blur(blur(share(ov, ovN, 4), 15), 15), 2048);
+  if (farN === 2 * N) put(blur(blur(share(far, farN, 2), 4), 4), 3072);
+}
 
 const tileKey = (ix, iz) => `${ix},${iz}`;
 
@@ -165,18 +219,22 @@ class TileLoader {
     }
   }
 
-  /** -> Promise<{bitmap, codes: {codes, width, height}, data: Uint16Array}> */
-  load(colorUrl, lcUrl) {
+  /**
+   * fieldsUrl: the data build's field data of the tile (null: analyse the tile in the worker).
+   * -> Promise<{bitmap, codes: {codes, width, height}, data: Uint16Array}>
+   */
+  load(colorUrl, lcUrl, fieldsUrl = null) {
     if (!this.workers.length) return this._mainThread(colorUrl, lcUrl);
     const id = ++this._id;
     const w = this.workers[this._next++ % this.workers.length];
     return new Promise((resolve, reject) => {
       this.jobs.set(id, { resolve, reject, worker: w, colorUrl, lcUrl });
-      w.postMessage({ id, colorUrl, lcUrl });
+      w.postMessage({ id, colorUrl, lcUrl, fieldsUrl });
     });
   }
 
   async _mainThread(colorUrl, lcUrl) {
+    // no workers (very old browsers): land cover only, rows along x
     const [bitmap, lc] = await Promise.all([fetchBitmap(colorUrl), fetchCodes(lcUrl)]);
     return { bitmap, codes: lc, data: packCodes(lc.codes, lc.width) };
   }
@@ -204,11 +262,17 @@ class TileLoader {
 }
 
 export class Terrain {
-  constructor({ renderer, scene, env, baseUrl = 'data/terrain/' }) {
+  /**
+   * fieldsUrl: the field data of the data build (sim/tools/terrain/fields.py), by default
+   * data/terrain_extra/fields/ beside data/terrain/; '' = none (each tile is analysed on its own).
+   */
+  constructor({ renderer, scene, env, baseUrl = 'data/terrain/', fieldsUrl }) {
     this.renderer = renderer;
     this.scene = scene;
     this.env = env;
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
+    this.fieldsUrl = fieldsUrl ?? '../terrain_extra/fields/';
+    this.fields = null;           // index.json of the field data when it is there
     this.group = new THREE.Group();
     this.group.name = 'Terrain';
     this.group.matrixAutoUpdate = false;
@@ -260,11 +324,31 @@ export class Terrain {
     this._box = new THREE.Box3();
     this._maxAniso = renderer.capabilities.getMaxAnisotropy();
     this.horizon = new HorizonMap();
+    this.horizon.setRenderer(renderer);
     this._loader = null;
-    /** For app.addModule(): the quality setting (update() is called by main.js itself). */
-    this.module = { name: 'terrain', setQuality: (q) => this.setQuality(q) };
+    /**
+     * For app.addModule(): the quality setting, and the terrain's shadow on the aircraft's sun
+     * light (Terrain.update itself is called by main.js before the modules).
+     */
+    this.module = {
+      name: 'terrain',
+      setQuality: (q) => this.setQuality(q),
+      update: (f) => this._shadeSunLight(f),
+      reset: () => { this._sunVisInit = false; },
+      setTime: () => { this._sunVisInit = false; },
+    };
+    this.sunOcclusion = 1;          // terrain shadow on the aircraft (sunVisibilityAt at the jet), smoothed
+    this._sunVisInit = false;
+    this._lightDir = new THREE.Vector3();
     // 3D trees drawn by another module within this range: no painted crowns there
     this._treeCover = new THREE.Vector2(0, 1);
+    /**
+     * A module that draws the real street lamps near the camera (the roads track's Roads: any
+     * object with a lampRange getter, in metres): the city lights start beyond that range,
+     * fading in over its last 20 % (where its lamps fade out), so no lamp is drawn twice.
+     */
+    this.lampSource = null;
+    this._cityNear = new THREE.Vector2(0, 0);
   }
 
   // -------------------------------------------------------------------------------------
@@ -300,6 +384,7 @@ export class Terrain {
     this.hf.setFar(await fetchU16(B + 'height/far.bin'));
     progress(0.5, 'terrain: imagery');
     this.hf.buildMinMax();
+    this._hMax = this.hf.nodeMinMax(8, 0, 0)[1];            // highest point of the whole area
 
     // overview / far colour and land cover
     const [ovBmp, farBmp, lcOv, lcFar] = await Promise.all([
@@ -312,9 +397,26 @@ export class Terrain {
     this.landCover.farN = lcFar.width;
     progress(0.85, 'terrain: GPU');
 
+    // field data (rows, orchards, vineyards, greenhouses per field) from the data build
+    if (this.fieldsUrl) {
+      const fb = new URL(this.fieldsUrl, new URL(B, globalThis.location?.href ?? 'http://localhost/')).href;
+      try {
+        const idx = await fetchJSON(fb + 'index.json');
+        if (idx && idx.n === DATA_N) {
+          this.fields = { url: fb, index: idx };
+          // the field outlines and mapped orchards come from OpenStreetMap (ODbL): credited
+          // with the terrain data in the app's credits
+          if (idx.attribution && !this.attribution.includes(idx.attribution)) {
+            this.attribution = [this.attribution, idx.attribution].filter(Boolean).join(' | ');
+          }
+        }
+      } catch (e) {
+        console.warn(`terrain: no field data at ${fb} (sim/tools/terrain/fields.py); each tile is analysed on its own`);
+      }
+    }
     this._buildGpu(ovBmp, farBmp, lcOv, lcFar);
     progress(0.95, 'terrain: shaders');
-    this._precompile();
+    await this._precompile();
     this._loader = new TileLoader(TILE_WORKERS);
     // the horizon worker reads the heights again (from the HTTP cache) in the background
     this.horizon.start(new URL(B, globalThis.location?.href ?? 'http://localhost/').href);
@@ -328,6 +430,10 @@ export class Terrain {
     const tex = {};
     // texelFetch grids share textures (sampler budget, see textures.js)
     tex.heights = makePackedHeightTexture(this.hf.core, this.hf.far);
+    // The name other modules know (the vegetation's Scatter.js reads terrain.textures.hCore with
+    // texelFetch(clamp(p, 0, 4096))): the core sits at x 0..4096, y 0..4096 of the packed
+    // texture with the same encoding, so those reads return the same values.
+    tex.hCore = tex.heights;
     r.initTexture(tex.heights);
     this._normalCoreRT = renderNormalMap(r, tex.heights, CORE_N, CORE_SPACING, aniso, 0);
     this._normalFarRT = renderNormalMap(r, tex.heights, FAR_N, FAR_SPACING, aniso, FAR_HEIGHT_X);
@@ -335,6 +441,7 @@ export class Terrain {
     tex.overview = makeColorTexture(ovBmp, aniso);
     tex.far = makeColorTexture(farBmp, aniso);
     tex.lc = makePackedCodeTexture(lcOv.codes, lcFar.codes);
+    writeUrbanShare(tex.lc.image.data, tex.lc.image.width, lcOv.codes, lcOv.width, lcFar.codes, lcFar.width);
     r.initTexture(tex.lc);
     releasePacked(tex.lc);
     this._detailRT = makeDetailArray(r, aniso);
@@ -346,6 +453,7 @@ export class Terrain {
       uCamHiU: { value: new THREE.Vector2() },
       uCamLo: { value: new THREE.Vector3() },
       uCamMod: { value: new THREE.Vector2() },
+      uCamMod1280: { value: new THREE.Vector2() },
       uRange0: { value: RANGE0 },
       uMorphStart: { value: MORPH_START },
       uMorphEnd: { value: MORPH_END },
@@ -359,6 +467,7 @@ export class Terrain {
       uGroundDetail: { value: 1 },
       uAlbedoGain: { value: this.albedoGain },
       uCityLights: { value: this.cityLights },
+      uCityNear: { value: this._cityNear },
       uTreeCover: { value: this._treeCover },
       uDebugLod: { value: 0 },
       uDebugHeight: { value: 0 },
@@ -390,7 +499,7 @@ export class Terrain {
       uniforms,
       vertexShader: TERRAIN_VERT,
       fragmentShader: TERRAIN_FRAG,
-      defines: l0 ? { ...this._defines, USE_L0: 1 } : { ...this._defines },
+      defines: { ...this._defines, ...(l0 ? { USE_L0: 1 } : {}), GROUND_DETAIL: TERRAIN_QUALITY[this.quality].groundDetail },
       lights: true,
       fog: false,
     });
@@ -398,8 +507,15 @@ export class Terrain {
     return m;
   }
 
-  /** Compiles both terrain programs now instead of on first sight (avoids a hitch). */
-  _precompile() {
+  /**
+   * Compiles both terrain programs now instead of on first sight: the terrain shader is the
+   * largest in the app and its first compile is the slowest one on ANGLE / Direct3D. Lights
+   * come from the real scene (targetScene), so the program variants match; the sun casts its
+   * shadow only while it is up (Environment.update, the first frame), so both variants are
+   * built: with the shadow map (day) and without (night, and until the first frame).
+   * Waits for the driver's parallel compile where it has one (KHR_parallel_shader_compile).
+   */
+  async _precompile() {
     const tmp = new THREE.Scene();
     const cam = new THREE.PerspectiveCamera(60, 1, 1, 1000);
     const l0 = this._makeMaterial(true);
@@ -409,9 +525,20 @@ export class Terrain {
       m.frustumCulled = false;
       tmp.add(m);
     }
-    // lights come from the real scene (targetScene), so the program variants match
-    try { this.renderer.compile(tmp, cam, this.scene); } catch (e) { console.warn('terrain precompile', e); }
     this._tileMaterialProto = l0;
+    const sun = this.env?.sunLight;
+    const cast = sun ? sun.castShadow : false;
+    try {
+      if (sun) { sun.castShadow = !cast; this.renderer.compile(tmp, cam, this.scene); sun.castShadow = cast; }
+      const ready = this.renderer.compileAsync ? this.renderer.compileAsync(tmp, cam, this.scene) : this.renderer.compile(tmp, cam, this.scene);
+      // at most a few seconds: the loading screen goes on, a program not linked by then is
+      // finished on first use
+      await Promise.race([ready, new Promise((r) => setTimeout(r, 4000))]);
+    } catch (e) {
+      console.warn('terrain precompile', e);
+    } finally {
+      if (sun) sun.castShadow = cast;
+    }
   }
 
   // -------------------------------------------------------------------------------------
@@ -421,6 +548,16 @@ export class Terrain {
   setQuality(q) {
     this.quality = TERRAIN_QUALITY[q] ? q : 'high';
     this.horizon.setQuality(TERRAIN_QUALITY[this.quality].horizon);
+    // the ground materials' tier is compiled in (GROUND_DETAIL): new programs for the
+    // materials made so far (three.js keeps both, so switching back costs nothing)
+    const gd = TERRAIN_QUALITY[this.quality].groundDetail;
+    const mats = new Set([this.baseMaterial, this._tileMaterialProto]);
+    for (const t of this.tiles.values()) mats.add(t.material);
+    for (const m of mats) {
+      if (!m || m.defines.GROUND_DETAIL === gd) continue;
+      m.defines.GROUND_DETAIL = gd;
+      m.needsUpdate = true;
+    }
   }
 
   /**
@@ -452,19 +589,58 @@ export class Terrain {
   }
 
   /**
-   * How much of the sun the terrain lets through to (x, y, z): 1 lit, 0 behind a hill (soft
-   * over the sun's disc). Uses the horizon maps the renderer has, so it matches the ground's
-   * shadows; points more than 30 m above the ground count as lit.
+   * How much of the sun the terrain lets through to the point (x, y, z), at any height: 1 lit,
+   * 0 behind a hill or below the horizon, soft over the sun's disc (+-0.43 deg, as the ground's
+   * shadows). A ray march toward the sun over the height field, out to 40 km, with the earth's
+   * curvature: about 120 height lookups (a few microseconds). dir: unit vector toward the light
+   * (default: the sun). The terrain module uses it every frame for the sun light on the aircraft
+   * (Terrain.module.update); the ground itself uses the horizon maps.
    */
-  sunVisibilityAt(x, y, z) {
-    const sun = this.env?.sunDirection;
+  sunVisibilityAt(x, y, z, dir = this.env?.sunDirection) {
+    const sun = dir;
     if (!sun || !this.loaded || !this.shadows) return 1;
-    if (y - this.heightAt(x, z) > 30) return 1;
-    const ang = this.horizon.horizonAt(x, z);
-    if (ang == null) return 1;
-    const el = Math.asin(Math.max(-1, Math.min(1, sun.y)));
-    const t = Math.min(1, Math.max(0, (el - ang + 0.0075) / 0.015));
-    return t * t * (3 - 2 * t);
+    const hl = Math.hypot(sun.x, sun.z);
+    if (hl < 1e-4) return sun.y > 0 ? 1 : 0;                   // overhead
+    const el = Math.atan2(sun.y, hl);
+    const SOFT = 0.0075, R = 6371000;
+    // the sea horizon (dip below the level for the height) and the highest any hill can reach
+    // in elevation seen from here (the march starts at 15 m)
+    if (el < -Math.sqrt(2 * Math.max(y, 0) / R) - SOFT) return 0;
+    const reach = y < this._hMax ? Math.atan2(this._hMax - y, 15) : -Math.sqrt(2 * (y - this._hMax) / R);
+    if (el > reach + SOFT) return 1;
+    const ax = sun.x / hl, az = sun.z / hl;
+    const lim = Math.tan(el + SOFT);
+    const inv2R = 1 / (2 * R);
+    let s = -Infinity;
+    for (let t = 15; t < 40000; t += Math.max(15, t * 0.045)) {
+      const k = (this.hf.heightAt(x + ax * t, z + az * t) - y) / t - t * inv2R;
+      if (k > s) { s = k; if (s >= lim) return 0; }
+    }
+    const ang = Math.atan(s);
+    const u = Math.min(1, Math.max(0, (el - ang + SOFT) / (2 * SOFT)));
+    return u * u * (3 - 2 * u);
+  }
+
+  /**
+   * Per frame (module update, after Environment.update): the directional light that lights the
+   * aircraft (and the wingmen: standard three.js materials; the terrain, roads, buildings and
+   * trees take their sunlight from the atmosphere uniforms and are not affected) is dimmed when
+   * the hills hide it from the point it is aimed at (the shadow target, i.e. the jet). Its own
+   * direction is used, so a moonlit night works the same. Environment sets the light's intensity
+   * to 1 every frame. The sky light stays. Smoothed over ~0.15 s.
+   */
+  _shadeSunLight(f) {
+    const L = this.env?.sunLight;
+    // only on drawn frames: Environment.update (which resets the intensity) runs only on those
+    if (!L || !this.loaded || f?.draw === false) return;
+    const p = L.target.position;
+    const d = this._lightDir.subVectors(L.position, p);
+    const v = this.shadows && d.lengthSq() > 1e-6 ? this.sunVisibilityAt(p.x, p.y, p.z, d.normalize()) : 1;
+    const k = 1 - Math.exp(-Math.max(0, f?.dt ?? 1 / 60) / 0.15);
+    this.sunOcclusion = this._sunVisInit ? this.sunOcclusion + (v - this.sunOcclusion) * k : v;
+    this._sunVisInit = true;
+    L.intensity *= this.sunOcclusion;
+    this.stats.sunVisibility = Math.round(this.sunOcclusion * 1000) / 1000;
   }
 
   // -------------------------------------------------------------------------------------
@@ -486,10 +662,14 @@ export class Terrain {
     // camera modulo 256 m in double precision: the periodic ground textures use
     // camera-relative position + this, exact near the camera
     S.uCamMod.value.set(cam.x - 256 * Math.floor(cam.x / 256), cam.z - 256 * Math.floor(cam.z / 256));
+    // and modulo 1280 m for the layers turned by the 3-4-5 rotation (ROT * 1280 / 256 is integer)
+    S.uCamMod1280.value.set(cam.x - 1280 * Math.floor(cam.x / 1280), cam.z - 1280 * Math.floor(cam.z / 1280));
     S.uDetailStrength.value = this.detailStrength;
     S.uAlbedoGain.value = this.albedoGain;
     S.uGroundDetail.value = this.groundDetail && TERRAIN_QUALITY[this.quality].groundDetail ? 1 : 0;
     S.uCityLights.value = this.cityLights;
+    const lampR = Math.max(0, +(this.lampSource?.lampRange) || 0);
+    this._cityNear.set(0.8 * lampR, lampR);
     S.uDebugLod.value = this.debug.lod ? 1 : 0;
     S.uDebugHeight.value = this.debug.heightProbe ? 1 : 0;
     S.uDebugView.value = this.debug.view || 0;
@@ -497,6 +677,7 @@ export class Terrain {
     // terrain shadows: new horizon maps when the sun or the camera moved
     this.horizon.setEnabled(this.shadows);
     if (this.env?.sunDirection) this.horizon.update(cam, this.env.sunDirection);
+    this.horizon.uploadStep();
     this.stats.horizonComputes = this.horizon.stats.computes;
     this.stats.horizonMs = this.horizon.stats.lastMs;
 
@@ -603,7 +784,8 @@ export class Terrain {
     const B = this.baseUrl;
     // absolute URLs: the workers resolve relative ones against their own location
     const abs = (u) => new URL(u, globalThis.location?.href ?? 'http://localhost/').href;
-    this._loader.load(abs(`${B}color/L0/tile_${ix}_${iz}.jpg`), abs(`${B}landcover/tile_${ix}_${iz}.png`))
+    const fields = this.fields ? `${this.fields.url}tile_${ix}_${iz}.u16.gz` : null;
+    this._loader.load(abs(`${B}color/L0/tile_${ix}_${iz}.jpg`), abs(`${B}landcover/tile_${ix}_${iz}.png`), fields)
       .then(({ bitmap, codes, data }) => {
         if (this.tiles.get(key) !== entry) { bitmap.close(); return; }
         entry.bitmap = bitmap;
@@ -683,7 +865,7 @@ export class Terrain {
     this._loader?.dispose();
     this.horizon.dispose();
     if (!this.textures) return;
-    for (const x of Object.values(this.textures)) x.dispose?.();
+    for (const x of new Set(Object.values(this.textures))) x.dispose?.();   // (hCore is an alias)
     this._normalCoreRT.dispose();
     this._normalFarRT.dispose();
     this._detailRT.dispose();

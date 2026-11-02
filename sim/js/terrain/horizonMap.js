@@ -11,9 +11,15 @@
 // azimuth away from them (a time jump): then there are no terrain shadows until the new maps
 // arrive. The sun's elevation can change freely without recomputing.
 //
-// For other modules (trees, buildings, the aircraft): terrain.horizon.uniforms plus
-// HORIZON_GLSL give terrainSunVisibility(worldXZ, h, localUp) in any shader (one sampler),
-// and terrain.sunVisibilityAt(x, y, z) answers on the CPU.
+// Uploads: two textures, one in use and one being filled. New maps go to the GPU in bands of
+// rows over several frames (512 KB a frame: 16 frames for the 8 MB of the high maps, instead of
+// one 8 MB upload that stalls a frame), then the two swap, with the maps' uniforms, at once.
+// Needs the renderer (setRenderer); without it the maps are uploaded whole.
+//
+// For other modules (trees, buildings, roads): terrain.horizon.uniforms plus HORIZON_GLSL give
+// terrainSunVisibility(worldXZ, h, localUp) at the ground and terrainSunVisibilityAbove(worldXZ,
+// dh, localUp) dh metres above it, in any shader (one sampler); terrain.sunVisibilityAt(x, y, z)
+// answers on the CPU at any height (a ray march, Terrain.js).
 
 import * as THREE from 'three';
 import { decodeHorizon } from './horizonCore.js';
@@ -34,7 +40,9 @@ float horizonAngle(vec2 uv, float layer) {
   float v = textureLod(uHorizon, vec3(uv, layer), 0.0).r;
   return v * v * 1.5707963;
 }
-// 1 = sun visible from the ground at world xz, 0 = behind the terrain; upP = local vertical
+// 1 = sun visible from the ground at world xz, 0 = behind the terrain; upP = local vertical.
+// h: the ground's height there (not needed: the maps are made for the ground; kept so callers
+// need not change)
 float terrainSunVisibility(vec2 xz, float h, vec3 upP) {
   float vis = 1.0;
   if (uHorizonNear.w > 0.5 && uSunDir.y > -0.03) {
@@ -52,6 +60,15 @@ float terrainSunVisibility(vec2 xz, float h, vec3 upP) {
   }
   return vis;
 }
+// the same for a point dh metres above the ground (a crown, a roof): the maps hold what the
+// ground sees, so the point is looked up where the sun's ray through it meets the ground,
+// dh / tan(sun elevation) away from the sun (exact where the ground between is level; at most
+// 3 km away)
+float terrainSunVisibilityAbove(vec2 xz, float dh, vec3 upP) {
+  float sh = length(uSunDir.xz);
+  vec2 back = sh > 1e-3 ? -uSunDir.xz / sh * min(max(dh, 0.0) * sh / max(uSunDir.y, 0.05), 3000.0) : vec2(0.0);
+  return terrainSunVisibility(xz + back, 0.0, upP);
+}
 `;
 
 export class HorizonMap {
@@ -66,31 +83,47 @@ export class HorizonMap {
     this._id = 0;
     this._job = null;
     this._last = null;        // parameters of the maps in use: {cx, cz, ax, az}
-    this.stats = { computes: 0, lastMs: 0 };
+    this.stats = { computes: 0, lastMs: 0, uploadFrames: 0 };
+    this.renderer = null;     // for the uploads in bands (setRenderer)
+    this._tex = [];           // [in use or being replaced, the other]
+    this._front = 0;
+    this._upload = null;      // {job, maps, src, row}: new maps going up in bands
+    this._box = new THREE.Box3();
+    this._pos = new THREE.Vector3();
     this.uniforms = {
       uHorizon: { value: null },
       uHorizonNear: { value: new THREE.Vector4(0, 0, 1 / 51200, 0) },
       uHorizonFar: { value: new THREE.Vector4(0, 0, 1 / 204800, 0) },
       uHorizonAxis: { value: new THREE.Vector2(1, 0) },
     };
-    this._makeTexture(HORIZON_QUALITY.high.n);
+    this._makeTextures(HORIZON_QUALITY.high.n);
   }
 
-  _makeTexture(n) {
-    this.uniforms.uHorizon.value?.dispose();
-    const t = new THREE.DataArrayTexture(new Uint8Array(n * n * 2), n, n, 2);
-    t.format = THREE.RedFormat;
-    t.type = THREE.UnsignedByteType;
-    t.minFilter = t.magFilter = THREE.LinearFilter;
-    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
-    t.generateMipmaps = false;
-    t.unpackAlignment = 1;
-    t.colorSpace = THREE.NoColorSpace;
-    t.name = 'TerrainHorizon';
-    t.needsUpdate = true;
-    this.texture = t;
+  /** The renderer, for uploading new maps in bands of rows (otherwise whole). */
+  setRenderer(renderer) { this.renderer = renderer || null; }
+
+  _makeTextures(n) {
+    for (const t of this._tex) t.dispose();
+    this._tex = [0, 1].map((i) => {
+      const t = new THREE.DataArrayTexture(new Uint8Array(n * n * 2), n, n, 2);
+      t.format = THREE.RedFormat;
+      t.type = THREE.UnsignedByteType;
+      t.minFilter = t.magFilter = THREE.LinearFilter;
+      t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+      t.generateMipmaps = false;
+      t.unpackAlignment = 1;
+      t.colorSpace = THREE.NoColorSpace;
+      t.name = `TerrainHorizon${i}`;
+      t.needsUpdate = true;
+      // the CPU copy is only for an upload as a whole; bands come from the worker's arrays
+      t.onUpdate = () => { t.image.data = null; };
+      return t;
+    });
+    this._front = 0;
+    this._upload = null;
+    this.texture = this._tex[0];
     this.n = n;
-    this.uniforms.uHorizon.value = t;
+    this.uniforms.uHorizon.value = this.texture;
   }
 
   /** Starts the worker (browser only); it fetches the heights from baseUrl itself. */
@@ -131,7 +164,7 @@ export class HorizonMap {
     // wrong shadows: none until the new ones arrive
     const fresh = !!last && hl > 1e-4 && (hx * last.ax + hz * last.az) / hl > Math.cos(5 * Math.PI / 180);
     U.uHorizonNear.value.w = this.enabled && this.maps && fresh ? 1 : 0;
-    if (!this.enabled || !this.ready || this.busy) return;
+    if (!this.enabled || !this.ready || this.busy || this._upload) return;
     if (hl < 1e-4 || sunDir.y < -0.05) { this.pending = false; return; }       // overhead or night
     const ax = hx / hl, az = hz / hl;
     const Q = HORIZON_QUALITY[this.quality];
@@ -171,20 +204,62 @@ export class HorizonMap {
     this.busy = false;
     const job = this._job;
     if (!job || m.id !== job.id) return;
-    if (job.n !== this.n) this._makeTexture(job.n);
     const n = job.n;
-    const data = this.texture.image.data;
-    data.set(m.maps[0], 0);
-    data.set(m.maps[1], n * n);
-    this.texture.needsUpdate = true;
+    if (n !== this.n) this._makeTextures(n);
+    if (!this.renderer || !this.maps || this.maps.job.n !== n) {
+      // nothing of this size in use yet: the whole maps at once
+      const t = this._tex[this._front];
+      const data = new Uint8Array(n * n * 2);
+      data.set(m.maps[0], 0);
+      data.set(m.maps[1], n * n);
+      t.image.data = data;
+      t.needsUpdate = true;
+      this._apply(job, m.maps, 1);
+      return;
+    }
+    // into the other texture, a band of rows per frame (uploadStep); swapped when complete
+    const src = m.maps.map((a) => new THREE.Data3DTexture(a, n, n, 1));
+    this._upload = { job, maps: m.maps, src, row: 0, frames: 0 };
+  }
+
+  /**
+   * Per frame (Terrain.update): uploads the next band of rows of new maps into the texture
+   * not in use (copyTextureToTexture: texSubImage3D from the worker's arrays) and swaps the
+   * two, with the maps' uniforms, once both layers are complete.
+   */
+  uploadStep() {
+    const u = this._upload;
+    if (!u || !this.renderer) return;
+    const n = u.job.n;
+    const rows = Math.max(64, Math.floor((512 * 1024) / n));
+    const back = this._tex[1 - this._front];
+    const layer = u.row < n ? 0 : 1;
+    const y0 = u.row - layer * n, y1 = Math.min(n, y0 + rows);
+    this._box.min.set(0, y0, 0);
+    this._box.max.set(n, y1, 1);
+    this._pos.set(0, y0, layer);
+    this.renderer.copyTextureToTexture(u.src[layer], back, this._box, this._pos);
+    u.row += y1 - y0;
+    u.frames++;
+    if (u.row < 2 * n) return;
+    this._front = 1 - this._front;
+    this.texture = back;
+    this.uniforms.uHorizon.value = back;
+    this._upload = null;
+    this._apply(u.job, u.maps, u.frames);
+  }
+
+  _apply(job, maps, frames) {
+    const n = job.n;
     const U = this.uniforms;
     U.uHorizonNear.value.set(job.cx, job.cz, 1 / (n * job.near), this.enabled ? 1 : 0);
     U.uHorizonFar.value.set(job.fx, job.fz, 1 / (n * job.far), 0);
     U.uHorizonAxis.value.set(job.ax, job.az);
-    this.maps = { near: m.maps[0], far: m.maps[1], job };
+    this.maps = { near: maps[0], far: maps[1], job };
     this._last = { n, cx: job.cx, cz: job.cz, ax: job.ax, az: job.az };
     this.stats.computes++;
     this.stats.lastMs = Math.round(performance.now() - job.t0);
+    this.stats.uploadFrames = frames;
   }
 
   /** Horizon elevation (radians) toward the sun at world x, z from the maps in use, or null. */
@@ -209,6 +284,7 @@ export class HorizonMap {
   dispose() {
     this.worker?.terminate();
     this.worker = null;
-    this.texture?.dispose();
+    this._upload = null;
+    for (const t of this._tex) t.dispose();
   }
 }
