@@ -321,8 +321,8 @@ export class Runways {
   }
 
   /**
-   * Drapes one runway of the airfield at the head of the queue (one per frame: ~10-60 ms each on
-   * a loaded 4-core VM); once all its runways are in, makes the airfield's mesh.
+   * Drapes one runway of the airfield at the head of the queue (one per frame: ~5-75 ms each on
+   * the loaded 4-core test VM); once all its runways are in, makes the airfield's mesh.
    */
   _buildNext() {
     const [icao, rs] = this._queue[0];

@@ -323,8 +323,10 @@ void main() {
   // ---- concrete: slabs (7.5 m along, the lanes across), joints, odd slabs ----
   float slabS = floor(s / 7.5);
   float hs = hash21(vec2(slabS, lane * 1.3 + vRw));
-  vec3 conCol = Pc * (1.0 + 0.10 * (hs - 0.5) + 0.06 * nM.g + 0.12 * nF.r * detail);
+  vec3 conCol = Pc * (1.0 + 0.10 * (hs - 0.5) + 0.12 * nM.g + 0.06 * nL.g + 0.2 * nF.r * detail);
   conCol *= hs > 0.965 ? 1.1 : 1.0;                       // a replaced slab: newer, lighter
+  // weathering: dirt and water stains (6-40 m) drifting across the slabs, joints or not
+  conCol *= 1.0 - 0.12 * smoothstep(0.05, 0.3, nM.a + 0.5 * nL.g) * detail;
   float jT = band(mod(s, 7.5), -0.02, 0.02, pu) + band(mod(s, 7.5), 7.48, 7.52, pu);
   float jL = band(qj, -0.02, 0.02, pv);
   float joints = clamp(jT + jL, 0.0, 1.0);
