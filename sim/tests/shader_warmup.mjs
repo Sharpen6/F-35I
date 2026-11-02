@@ -7,7 +7,8 @@
 //                                    [--root SIM_FOLDER] [--extra 'post=0'] [--frames 4]
 //
 // --phases shots: only the noon and 21:30 views (cmp_*.png) for comparing two versions pixel by
-// pixel (run both with --extra clouds=clear). A server already on --port is used as it is.
+// pixel (run both with --extra clouds=clear; --root serves the other checkout), each taken once
+// the vegetation is idle and after two settled frames. A server already on --port is used as it is.
 //
 // Headless Chromium with SwiftShader (Playwright), index.html?test=1. The page's WebGL2 context is
 // hooked before the app starts (compileShader, linkProgram, the texture uploads, the synchronous
@@ -183,7 +184,7 @@ async function main() {
       return { parallel: !!gl.getExtension('KHR_parallel_shader_compile'), programs: window.__sim.app.renderer.info.programs.length,
         warmup: window.__sim.app.warmup ? window.__sim.app.warmup.info?.() || true : null };
     });
-    report.load = { ...ext, gl: await S(() => window.__probe.phases.load) };
+    report.load = { ...ext, gl: await S(() => window.__probe.phases.load), gpuMemory: await S(() => window.__sim.gpuMemory?.() || null) };
     log(`loaded in ${report.loadS} s: ${ext.programs} programs, KHR_parallel_shader_compile ${ext.parallel}`);
     // the loading screen's long tasks: the page drew nothing during each one
     const long = (report.load.gl?.long || []).map((x) => x[1]).sort((a, b) => b - a);
@@ -300,16 +301,33 @@ async function main() {
       await phase('shots');
       for (const [sp, h] of [['telnof_36', 12], ['bengurion_26', 21.5]]) {
         await S(({ sp, h }) => window.__sim.start(sp, { time: h, camera: 'chase' }), { sp, h });
+        // the streaming modules idle first (the vegetation's start-up and cells): a version without
+        // the warm-up starts them later, and what is compared is the settled picture. Update-only
+        // frames, as settle() runs them (a drawn frame takes many seconds in SwiftShader), up to 90 s
+        await S(async () => {
+          const app = window.__sim.app, t0 = performance.now();
+          const idle = () => app.modules.every((x) => typeof x.idle !== 'function' || x.idle());
+          while (!idle() && performance.now() - t0 < 90000) {
+            app._render(0.016, app.input.update(0), 1, false);
+            app.env.update(app.camera, 0.04);
+            await new Promise((r) => setTimeout(r, 40));
+          }
+        });
         for (const m of ['chase', 'cockpit']) {
           await S((c) => window.__sim.camera(c), m);
-          await S(() => window.__sim.settle(4000));
-          await S(() => window.__sim.render());
+          // settle() draws a frame at its end: twice, because a version without the warm-up builds
+          // its programs at the first frame, and one frame after a long compile is not the settled
+          // picture yet (the shot is the second one)
+          for (let k = 0; k < 2; k++) await S(() => window.__sim.settle(4000));
           await shot(`cmp_${sp}_${String(h).replace('.', '')}_${m}`);
         }
       }
       await done('shots');
     }
     report.programsAtEnd = await S(() => window.__probe.programs().map((p) => p.name));
+    // the same point in two versions: what the warm-up costs in memory, and the last frame's draws
+    report.gpuMemoryAtEnd = await S(() => window.__sim.gpuMemory?.() || null);
+    report.renderInfoAtEnd = await S(() => window.__sim.renderInfo?.() || null);
     // what the app's own warm-up logged (js/env/warmup.js): its start-up pass and its misses
     report.warmup = await S(() => window.__sim.app.warmup?.info?.() || null);
   } finally {

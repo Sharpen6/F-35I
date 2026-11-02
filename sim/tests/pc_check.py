@@ -190,6 +190,20 @@ FPS_JS = r"""new Promise((done) => {
   requestAnimationFrame(f);
 })"""
 
+# the first `ms` of a scene: goes live in the same evaluation and keeps every frame (FPS_JS drops
+# its first one, and a separate setLive call lets the first live frame pass unmeasured: that frame
+# is where a start-up hitch shows). performance.now() in the callback: the app's frame, drawn just
+# before it in the same animation frame, is inside each gap.
+FIRST_JS = r"""new Promise((done) => {
+  const t = []; let last = performance.now(); const t0 = last;
+  window.__sim.setLive(true);
+  function f() { const now = performance.now(); t.push(now - last); last = now; if (now - t0 < %d) requestAnimationFrame(f); else {
+    const s = [...t].sort((a, b) => b - a); const avg = t.reduce((a, b) => a + b, 0) / t.length;
+    done({ frames: t.length, avg_ms: +avg.toFixed(2), worst_ms: +s[0].toFixed(1), worst3_ms: s.slice(0, 3).map((x) => +x.toFixed(1)),
+           over50: t.filter((x) => x > 50).length }); } }
+  requestAnimationFrame(f);
+})"""
+
 # shader programs: a mark (the id the next one gets), the names of those made since a mark, the
 # warm-up's summary (js/env/warmup.js; its "late" list says what made each program after start-up)
 MARK_JS = "(() => { let id = -1; for (const p of window.__sim.app.renderer.info.programs) id = Math.max(id, p.id); return id + 1; })()"
@@ -291,8 +305,7 @@ def main():
         report["programs_at_load"] = cdp.js("window.__sim.app.renderer.info.programs.length")
         # the menu, live: its first frames
         mark, late0 = cdp.js(MARK_JS), cdp.js(LATE_N_JS)
-        cdp.js("window.__sim.setLive(true); true")
-        menu = cdp.js(FPS_JS % 3000, timeout=60)
+        menu = cdp.js(FIRST_JS % 3000, timeout=60)
         cdp.js("window.__sim.setLive(false); true")
         report["menu"] = {"first3s": menu, "programs_made": cdp.js(MADE_JS % mark), "warmup_late": cdp.js(LATE_JS % late0)}
         print(json.dumps({"menu": menu, "programs_made": report["menu"]["programs_made"]}), flush=True)
@@ -306,8 +319,7 @@ def main():
                        f" window.__sim.camera({json.dumps(cam)}); true")
                 ground = cdp.js("window.__sim.summary().onGround")
                 cdp.js("window.__sim.setInput(" + json.dumps({"throttle": 1.0, "brake": 0} if ground else {}) + "); true")
-                cdp.js("window.__sim.setLive(true); true")
-                first = cdp.js(FPS_JS % 3000, timeout=60)        # the scene's first 3 s: any start-up hitch
+                first = cdp.js(FIRST_JS % 3000, timeout=60)      # the scene's first 3 s from its first frame: any start-up hitch
                 time.sleep(max(0.0, a.seconds - 8))
                 fps = cdp.js(FPS_JS % 5000, timeout=60)
                 made = cdp.js(MADE_JS % mark)
