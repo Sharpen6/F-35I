@@ -771,6 +771,11 @@ export class Environment {
     U.uCloudWind.value.toArray(CLOUD_SHADOW_WIND);
   }
 
+  /** Render targets this module owns (GPU memory estimate; the PMREM is scene.environment). */
+  targets() {
+    return [this._skyRT, this._cubeRT].filter(Boolean);
+  }
+
   dispose() {
     this.scene.remove(this.sky, this.sunLight, this.sunLight.target, this.hemiLight);
     this.sky.geometry.dispose();

@@ -11,7 +11,7 @@
 // Options: &time=<h> (default 12), &quality=low|medium|high, &seconds=<n> (default 60).
 
 import { TestPilot, findRunway } from './TestPilot.js';
-import { estimateGpuMemory, frameStats, gpuName } from './stats.js';
+import { estimateGpuMemory, moduleTargets, frameStats, gpuName } from './stats.js';
 
 const KT = 0.514444;
 const TEL_AVIV = { x: -23130, z: -31074 };
@@ -57,7 +57,9 @@ export function runBench(app) {
     app.live = false;                      // freeze on the last frame
     const fs = frameStats(frames);
     const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
-    const mem = estimateGpuMemory(app.renderer, app.scene);
+    const mem = estimateGpuMemory(app.renderer, app.scene, moduleTargets(app));
+    // GPU time per pass (js/env/Post.js timer queries; null where the browser has none)
+    const gpuMs = app.post?.info?.().gpuMs || null;
     const c = app.renderer.domElement;
     const results = {
       spawn: name, time_h: app.settings.time, quality: app.settings.quality, seconds, warmup,
@@ -65,7 +67,7 @@ export function runBench(app) {
       ...fs,
       drawCallsAvg: Math.round(avg(calls)), drawCallsMax: Math.max(0, ...calls),
       trianglesAvg: Math.round(avg(tris)), trianglesMax: Math.max(0, ...tris),
-      gpuMemoryMB: mem.totalMB, gpuMemory: mem,
+      gpuMemoryMB: mem.totalMB, gpuMemory: mem, gpuMs, clouds: app.clouds?.info?.() || null,
       flight: { phase: pilot.phase, events: pilot.events, crashed: app.fdm.state.crashed },
     };
     window.__bench = { done: true, results };
@@ -82,6 +84,7 @@ export function runBench(app) {
       `draw calls   avg ${results.drawCallsAvg}   max ${results.drawCallsMax}`,
       `triangles    avg ${M(results.trianglesAvg)}   max ${M(results.trianglesMax)}`,
       `GPU memory   ~${mem.totalMB} MB (textures ${mem.texturesMB}, geometry ${mem.geometryMB}, targets ${mem.targetsMB}, framebuffer ${mem.framebufferMB})`,
+      `GPU time     ${gpuMs ? Object.entries(gpuMs).map(([k, v]) => `${k} ${v.toFixed(2)} ms`).join('   ') : 'n/a (no timer queries)'}`,
       `flight       ${pilot.phase}${app.fdm.state.crashed ? ', CRASHED' : ''}`,
     ].join('\n');
   };
