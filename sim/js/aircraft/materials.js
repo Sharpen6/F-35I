@@ -19,7 +19,9 @@
 //   ORM texture's R channel (glTF occlusionTexture, three.js aoMap), every other part per vertex in
 //   COLOR_0. three.js would tint the diffuse colour by COLOR_0; here it darkens the ambient light
 //   only, like aoMap (sky and environment, not the sun: shadow maps do that). Older exports have
-//   neither and render as before.
+//   neither and render as before. The cockpit interior and the pilot (COCKPIT_AO) take none: the
+//   cockpit computes its own occlusion of the tub (pcd/interior.js), which a second one would
+//   darken twice (the export leaves them white since, vertex_ao.py; earlier exports did not).
 
 import * as THREE from 'three';
 
@@ -172,6 +174,9 @@ function applyTune(mat, t) {
   mat.needsUpdate = true;
 }
 
+/** Cockpit interior and pilot materials: the cockpit's own occlusion, no COLOR_0 (see the header). */
+const COCKPIT_AO = /^(F35_(cockpit|cockpit_panel|canopy_bow|glare_pad|seat|seat_cushion|yellow_black|switch_guard|switch|gear_handle|SwitchLED)|P2_.*)(\.\d+)?$/;
+
 /** Vertex ambient occlusion: COLOR_0.r scales the ambient light (not the albedo). */
 function patchVertexAO(mat, shared) {
   addPatch(mat, 'f35vao', (sh) => {
@@ -280,7 +285,14 @@ export function setupMaterials(root, { anisotropy = 8, rig = null } = {}) {
         mat.needsUpdate = true;
       }
       if (mat.aoMap) mat.aoMapIntensity = 1;
-      if (mat.vertexColors && mesh.geometry.attributes.color && !mat.isShaderMaterial) patchVertexAO(mat, shared);
+      if (mat.vertexColors && mesh.geometry.attributes.color && !mat.isShaderMaterial) {
+        if (COCKPIT_AO.test(mat.name)) {
+          mat.vertexColors = false;              // neither a tint nor a second occlusion
+          mat.needsUpdate = true;
+        } else {
+          patchVertexAO(mat, shared);
+        }
+      }
     }
     if (mat.name.startsWith('F35_Decal_')) {
       mat.transparent = true;

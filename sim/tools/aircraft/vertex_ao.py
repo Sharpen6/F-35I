@@ -3,10 +3,21 @@ pilot, details), exported as the glTF COLOR_0 attribute.
 
 The skin and the other atlas parts carry their occlusion in the ORM texture (bake.py); everything
 else gets it per vertex here: from every vertex, RAYS cosine-weighted rays into the hemisphere
-around its normal are cast against the whole model at the rest pose (gear down, doors open: the
-state in which these parts are seen), glass and decals left out. A hit at distance d counts
-1 - (d / DISTANCE)^2, so near walls shade more than far ones (an obscurance, no hard cut-off).
-One smoothing pass along the edges takes the sampling noise out.
+around its normal are cast against the whole model at the rest pose (every control at its default:
+gear down with its doors open, canopy, weapon bays, gun and refuelling doors shut), glass and
+decals left out. A hit at distance d counts 1 - (d / DISTANCE)^2, so near walls shade more than far
+ones (an obscurance, no hard cut-off). One smoothing pass along the edges takes the sampling noise
+out.
+
+Two exceptions, so that every part is baked as it is seen:
+  * the doors shut at the rest pose whose insides are only ever seen open (SHUT_DOORS: the weapon
+    bays', the gun port's, the refuelling receptacle's) are left out altogether: the bays and the
+    recesses are baked open (with the doors shut they would be closed boxes, near black once the
+    doors open), the doors' insides get no occlusion of their own;
+  * the cockpit interior and the pilot (COCKPIT, PILOT) only occlude: the app's cockpit computes
+    its own occlusion of the tub (js/aircraft/pcd/interior.js: lit by the sky through the canopy
+    only) and a second one here would darken it twice. The app ignores COLOR_0 on these materials
+    too (js/aircraft/materials.js, COCKPIT_AO), whatever export it loads.
 
 The value goes into a colour attribute "AO" (point domain, R = G = B = occlusion, 1 = open) that
 is made the active and render colour of every copy of a node that has such parts (the others in
@@ -30,6 +41,13 @@ ATLAS = ("F35_Skin_A", "F35_Skin_B", "F35_Misc_B")
 GLASS = ("F35_canopy", "F35_eots_glass", "F35_das_window", "P2_Visor", "P2_Lens")
 NOT_GLASS = ("F35_canopy_bow", "F35_canopy_frame")
 ATTR = "AO"
+# occluders only (see the docstring); names as the cockpit's interior.js knows them
+COCKPIT = ("F35_cockpit", "F35_cockpit_panel", "F35_canopy_bow", "F35_glare_pad", "F35_seat",
+           "F35_seat_cushion", "F35_yellow_black", "F35_switch_guard", "F35_switch", "F35_gear_handle",
+           "F35_SwitchLED")
+PILOT = ("P2_",)
+# rig nodes shut at the rest pose and seen open only: neither occluders nor receivers
+SHUT_DOORS = ("BayDoor_", "GunDoor", "RefuelDoor")
 
 
 def _is_glass(m):
@@ -48,14 +66,19 @@ def _is_glass(m):
     return False
 
 
-def _kind(m):
-    """'atlas' (occlusion in the ORM), 'skip' (glass, decals: neither occluder nor receiver), 'recv'."""
+def _kind(m, node=""):
+    """'atlas' (occlusion in the ORM), 'skip' (glass, decals, shut doors: neither occluder nor
+    receiver), 'occl' (cockpit interior, pilot: occluder only), 'recv'."""
+    if node.startswith(SHUT_DOORS):
+        return 'skip'
     if m is None:
         return 'recv'
     if m.name.startswith(ATLAS):
         return 'atlas'
     if m.name.startswith("F35_Decal_") or _is_glass(m):
         return 'skip'
+    if m.name.startswith(COCKPIT) or m.name.startswith(PILOT):
+        return 'occl'
     return 'recv'
 
 
@@ -83,7 +106,8 @@ def _mesh_arrays(o):
     me.polygons.foreach_get("loop_total", lt)
     lv = np.empty(len(me.loops), np.int32)
     me.loops.foreach_get("vertex_index", lv)
-    kinds = [_kind(m) for m in me.materials] or ['recv']
+    node = str(o.get("node", o.name))
+    kinds = [_kind(m, node) for m in me.materials] or [_kind(None, node)]
     fk = np.array([kinds[min(i, len(kinds) - 1)] for i in mi]) if nf else np.array([], dtype='<U5')
     return co, nrm, fk, ls, lt, lv
 

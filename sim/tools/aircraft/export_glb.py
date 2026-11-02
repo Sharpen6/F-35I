@@ -246,7 +246,9 @@ def export(opt):
             "distance_m": {"orm": BAKE.AO_DISTANCE, "vertex": VAO.DISTANCE},
             "note": "ambient occlusion, applied to ambient light only. orm: the skin atlases' ORM R "
                     "(the airframe on itself, doors and gear left out); vertex: COLOR_0.r of every "
-                    "other part (rest pose, gear down; not a colour)",
+                    "other part (rest pose, gear down; bays, gun and refuelling doors baked open; "
+                    "none on the cockpit interior and the pilot: the app's cockpit has its own; "
+                    "not a colour)",
         },
         "stats": {"triangles": st["triangles"], "nodes": st["nodes"], "primitives": st["primitives"],
                   "glb_mb": round(size_mb, 2), "seconds": round(time.time() - t0, 1)},
