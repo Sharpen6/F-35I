@@ -33,6 +33,7 @@ import {
 import { sunDirection as solarDirection } from './sun.js';
 import { moonDirection, celestialFrame } from './moon.js';
 import { installCloudShadowChunk, CLOUD_SHADOW_LAYER, CLOUD_SHADOW_WIND } from './cloudShadowChunk.js';
+import { SkyGlow, LP_N, NATURAL_SKY } from './lightPollution.js';
 
 export { ATMOSPHERE_PARS, ATMOSPHERE_CORE, ATMOSPHERE_SKYVIEW };
 
@@ -103,27 +104,37 @@ const COVER_ALBEDO = { 0: 0.06, 10: 0.11, 20: 0.18, 30: 0.2, 40: 0.18, 50: 0.17,
 
 /**
  * The night (scene units). The sky's own glow (airglow, starlight, and in central Israel mostly
- * the cities' light scattered in the haze: warmer and brighter at the horizon) is part of the
- * sky-view LUT, so the haze, the sea's reflection and the ambient light all see it; the light it
- * sheds on the ground is the night floor of uAmbient. It fades in as the sun goes from -2 to -10
- * deg (fadeFrom / fadeTo), under the last of the twilight. It is ~50x the real night sky (the
- * exposure ceiling is far below a dark-adapted eye's), and as bright as the sky at the end of
- * civil twilight, so dusk still darkens on screen down to ~-8 deg and the western glow shows
- * until ~-10 deg. (It was 20x this, as bright as the sky with the sun 4 deg down: dusk ended there.)
+ * the cities' light scattered in the haze) comes from js/env/lightPollution.js for where the
+ * camera is: an orange-grey dome over Gush Dan, ~1/10-1/25 of it over the Judean desert and out at
+ * sea, the domes of the cities on the horizons. It is drawn "day for night" (the exposure ceiling
+ * is far below a dark-adapted eye's) at a gain for the place (lightPollution.js SkyGlow.gain: the
+ * eye adapts further in the dark, so the desert's sky is drawn ~1/3 of Tel Aviv's, not 1/25).
+ * Its mean over the azimuth is part of the sky-view LUT (uNightZenith / Horizon), so the haze, the
+ * sea's reflection and the ambient light all see it; the sky dome adds each dome in its direction.
+ * The light it sheds on the ground is the night floor of uAmbient. It fades in as the sun goes from
+ * -2 to -10 deg (fadeFrom / fadeTo), under the last of the twilight. Over Ben Gurion it is about as
+ * bright as the sky at the end of civil twilight, so dusk still darkens on screen down to ~-8 deg
+ * and the western glow shows until ~-10.
  * Moonlight is real (full moon 2.5e-6 of the sun above the atmosphere, its phase from js/env/moon.js)
- * on the moon's disc, but the light it casts on the scene is boosted ("day for night"): with it,
- * the quarter moon of the default date (day 172) shows the land dimly, a full moon clearly.
+ * on the moon's disc, but the light it casts on the scene and the moonlit sky are drawn at the
+ * night's gain too (_moonBoost: ~200 over Tel Aviv under a full moon, ~750 in the desert under a
+ * quarter moon), so moonlit clouds and land keep their real contrast with the sky: the quarter
+ * moon of the default date (day 172) shows the land dimly, a full moon clearly.
  */
 const NIGHT = {
-  zenith: [2.6e-5, 3.5e-5, 6.5e-5], horizon: [8.0e-5, 6.8e-5, 5.6e-5],
   fadeFrom: -2, fadeTo: -10,     // sun elevation (deg): no night glow .. all of it
   moonFull: 4.0 * 2.5e-6,        // irradiance of the full moon above the atmosphere
   moonTint: [1.04, 1.0, 0.93],   // a little redder than the sun (the lunar soil)
-  boost: 1600,                   // moonlight on the scene (full from -12 deg; real at -6 deg and above)
-  boostFrom: -6, boostTo: -12,   // in twilight the sky outshines the real moon: no boost there
+  boostFrom: -6, boostTo: -12,   // the moon's boost (the night's gain) from none to all: in twilight the sky outshines the real moon
   earthshine: 0.004,             // the dark side of a crescent, relative to the lit side
   physical: 1e-7,                // the real night sky's light on the ground (~3 mlux: night vision)
 };
+/**
+ * The moonlit sky's radiance per unit of the moon's light on a horizontal surface: the blue
+ * Rayleigh sky of the day, ~1/7 of a white surface's radiance (~40 n.u., 18 mag / arcsec^2, under
+ * a full moon 30 deg up in the hazy air; 19-20 in clean air: Krisciunas & Schaefer 1991).
+ */
+const MOON_SKY = [0.03, 0.045, 0.09];
 
 function halfFloatTexture(f32, w, h) {
   const u16 = new Uint16Array(f32.length);
@@ -171,6 +182,11 @@ export class Environment {
     this._datumTarget = 0;
     this._lutDatum = 0;
     this._skyLuma = 0.3;
+    /** The cities' glow in the night sky where the camera is (js/env/lightPollution.js). */
+    this.skyGlow = new SkyGlow();
+    this._glowAt = new THREE.Vector3(1e9, 0, 1e9);
+    /** The sky's light on a horizontal surface without the moon's direct light (for the clouds). */
+    this.skyAmbient = new THREE.Color(0.3, 0.35, 0.45);
 
     if (!renderer.extensions.has('EXT_color_buffer_float')) {
       console.warn('Environment: EXT_color_buffer_float missing, sky LUT precision reduced');
@@ -204,6 +220,12 @@ export class Environment {
       uMoonLight: { value: new THREE.Vector4(0, 0, 0, 0) },
       uCelestial: { value: new THREE.Matrix3() },
       uStarVis: { value: 0 },
+      // the cities' glow where the camera is (js/env/lightPollution.js LP_GLSL; zero by day)
+      uLPSrc: { value: new Float32Array(LP_N * 4) },
+      uLPCity: { value: new Float32Array(LP_N * 4) },
+      uLPBase: { value: new THREE.Vector4(0, 0, 0.5, 0) },
+      uLPZenith: { value: new THREE.Color(0, 0, 0) },
+      uLPHorizon: { value: new THREE.Color(0, 0, 0) },
       // the cumulus layer (set by js/env/Clouds.js; w = 0: no clouds, no cloud shadows)
       uCloudLayer: { value: new THREE.Vector4(1300, 2300, 1, 0) },
       uCloudWind: { value: new THREE.Vector4(0, 0, 3000, 0) },
@@ -357,9 +379,10 @@ export class Environment {
     U.uNight.value = night * this.nightLightGain;
     U.uStarVis.value = Math.min(1, Math.max(0, (-3 - e) / 8));
     const glow = Math.min(1, Math.max(0, (NIGHT.fadeFrom - e) / (NIGHT.fadeFrom - NIGHT.fadeTo)));
-    // the moon's boost comes in as the twilight goes (else a quarter moon outshone the dusk sky)
+    // the moon's boost comes in as the twilight goes (else a quarter moon outshone the dusk sky),
+    // up to the night's gain where the camera is (_updateNightSky)
     const mb = Math.min(1, Math.max(0, (NIGHT.boostFrom - e) / (NIGHT.boostFrom - NIGHT.boostTo)));
-    this._moonBoost = 1 + (NIGHT.boost - 1) * mb * mb * (3 - 2 * mb);
+    this._moonRamp = mb * mb * (3 - 2 * mb);
     // moon (position and phase for env.year) and the turning star field
     const m = moonDirection(hoursLocal, dayOfYear, this.year);
     this.moon = m;
@@ -372,20 +395,11 @@ export class Environment {
     U.uMoonLight.value.set(L * NIGHT.moonTint[0], L * NIGHT.moonTint[1], L * NIGHT.moonTint[2], NIGHT.earthshine * (1 - m.illumination));
     const cf = celestialFrame(hoursLocal, dayOfYear, this.year);
     U.uCelestial.value.set(...cf.A, ...cf.B, ...cf.P);
-    // the night sky's glow, plus the blue of a moonlit sky (boosted like the moonlight; it fades
-    // in with the night glow: in twilight the sky-view LUT's own sky outshines it)
-    const moonH = this._moonLightBoosted(Math.max(0, m.y));
-    const z = [0, 0, 0], h = [0, 0, 0];
-    for (let c = 0; c < 3; c++) {
-      const ms = moonH * [0.03, 0.045, 0.09][c];
-      z[c] = (NIGHT.zenith[c] + ms) * glow;
-      h[c] = (NIGHT.horizon[c] + ms) * glow;
-    }
-    U.uNightZenith.value.setRGB(z[0], z[1], z[2]);
-    U.uNightHorizon.value.setRGB(h[0], h[1], h[2]);
-    this._nightSky = { z, h };
-    // the light the night glow sheds on the ground (as in _updateGroundLight): part of the metered light
-    this._floorLuma = Math.PI * luma([0, 1, 2].map((c) => 0.65 * z[c] + 0.35 * h[c]));
+    // the night sky's glow where the camera is and the moonlit sky (_updateNightSky); a new date
+    // can move the moon alone: the sky-view LUT and the environment map are redrawn
+    this._glowFade = glow;
+    this._lutAlt = this._envAlt = -1e9;
+    this._updateNightSky();
     this._groundLight = null;           // the night floor and the moon change the ambient light
   }
 
@@ -393,7 +407,46 @@ export class Environment {
   _moonLightBoosted(scale = 1) {
     const m = this.moon;
     if (!m || m.elevationDeg < -1) return 0;
-    return NIGHT.moonFull * m.brightness * (this._moonBoost ?? NIGHT.boost) * scale;
+    return NIGHT.moonFull * m.brightness * (this._moonBoost ?? 1) * scale;
+  }
+
+  /**
+   * The night sky where the camera is (js/env/lightPollution.js): the cities' domes (uLP*: the sky
+   * dome draws each in its direction, the clouds take the light under their bases), drawn at the
+   * night's gain for this place (the zenith's brightness with the moonlit sky's: SkyGlow.gain),
+   * which also boosts the moon (_moonBoost: the moonlit land and clouds keep their real contrast
+   * with the sky). Their mean over the azimuth plus the moonlit sky's blue is the sky-view LUT's
+   * night term (uNightZenith / Horizon: the haze, the sea's reflection, the ambient light's night
+   * floor, the meter). Returns the brightness of that term (luma at the zenith + the horizon).
+   */
+  _updateNightSky() {
+    const U = this.uniforms, G = this.skyGlow, p = this._camPos, m = this.moon;
+    this._glowAt.copy(p);
+    this._glowBase = U.uCloudLayer.value.x;
+    G.update(p.x, p.y, p.z, this._glowBase);
+    U.uLPSrc.value.set(G.src);
+    U.uLPCity.value.set(G.city);
+    // the moonlit sky as it is (n.u.; the stars see it), the gain, the moon's boost
+    const moonUp = m && m.elevationDeg >= -1 ? NIGHT.moonFull * m.brightness * Math.max(0, m.y) : 0;
+    const moonNu = moonUp * luma(MOON_SKY) / NATURAL_SKY;
+    const gain = G.gain(moonNu), fade = this._glowFade ?? 0;
+    this._moonBoost = 1 + (gain / NATURAL_SKY - 1) * (this._moonRamp ?? 0);
+    const zenithNu = G.zenithArt + 1 + moonNu;
+    U.uLPBase.value.set(G.zenithArt, gain * fade, gain * fade * Math.sqrt(zenithNu), moonNu);
+    const glow = G.means(gain * fade);
+    U.uLPZenith.value.setRGB(glow.zenith[0], glow.zenith[1], glow.zenith[2]);
+    U.uLPHorizon.value.setRGB(glow.horizon[0], glow.horizon[1], glow.horizon[2]);
+    // the moonlit sky drawn as the moon lights the scene (it comes in with the moon's boost)
+    const ms = moonUp * this._moonBoost;
+    const zen = glow.zenith.map((v, c) => v + ms * MOON_SKY[c]);
+    const hor = glow.horizon.map((v, c) => v + ms * MOON_SKY[c]);
+    U.uNightZenith.value.setRGB(zen[0], zen[1], zen[2]);
+    U.uNightHorizon.value.setRGB(hor[0], hor[1], hor[2]);
+    this._nightSky = { z: zen, h: hor };
+    // the light the night sky sheds on the ground (as in _updateAmbient): part of the metered light
+    this._floorLuma = Math.PI * luma(zen.map((v, c) => 0.65 * v + 0.35 * hor[c]));
+    this._nightLuma = luma(zen) + luma(hor);
+    return this._nightLuma;
   }
 
   _invalidate() {
@@ -539,18 +592,30 @@ export class Environment {
     const tGround = sunTransmittance(P, L, 0, sun);
     const sky0 = skyIrradiance(P, L, 0, sun);
     const muS = Math.max(0, sun[1]);
-    const E = SUN_ILLUMINANCE;
-    // night floor: the light of the night sky's own glow (NIGHT, in the sky-view LUT too), and
-    // the (boosted) moon: the terrain has no moon term of its own, so it is part of the ambient
-    const ns = this._nightSky || { z: [0, 0, 0], h: [0, 0, 0] };
-    const floor = ns.z.map((z, c) => Math.PI * (0.65 * z + 0.35 * ns.h[c]));
     const md = this.uniforms.uMoonDir.value;
     const tMoon = sunTransmittance(P, L, 0, [md.x, md.y, md.z]);
-    const moonH = this._moonLightBoosted(Math.max(0, md.y));
-    const amb = sky0.irradiance.map((v, c) => v * E + floor[c] + moonH * tMoon[c] * NIGHT.moonTint[c]);
-    this.uniforms.uAmbient.value.setRGB(amb[0], amb[1], amb[2]);
-    this._groundLight = { tGround, sky0, muS, amb };
+    this._groundLight = { tGround, sky0, muS, tMoon, amb: [0, 0, 0] };
     this._groundSun.copy(this.sunDirection);
+    this._updateAmbient();
+  }
+
+  /**
+   * The ambient light from the cached sky integrals: the sky, the night floor (the light of the
+   * night sky's own glow, in the sky-view LUT too; it follows the camera from town to desert) and
+   * the (boosted) moon: the terrain has no moon term of its own, so it is part of the ambient.
+   * skyAmbient: the same without the moon's direct light (the clouds have the moon as their light).
+   * The moon's boost follows the place (_updateNightSky).
+   */
+  _updateAmbient() {
+    const G = this._groundLight;
+    if (!G) return;
+    const E = SUN_ILLUMINANCE;
+    const ns = this._nightSky || { z: [0, 0, 0], h: [0, 0, 0] };
+    const moonH = this._moonLightBoosted(Math.max(0, this.uniforms.uMoonDir.value.y));
+    const sky = [0, 1, 2].map((c) => G.sky0.irradiance[c] * E + Math.PI * (0.65 * ns.z[c] + 0.35 * ns.h[c]));
+    for (let c = 0; c < 3; c++) G.amb[c] = sky[c] + moonH * G.tMoon[c] * NIGHT.moonTint[c];
+    this.skyAmbient.setRGB(sky[0], sky[1], sky[2]);
+    this.uniforms.uAmbient.value.setRGB(G.amb[0], G.amb[1], G.amb[2]);
     this._updateGroundRadiance();
   }
 
@@ -655,6 +720,19 @@ export class Environment {
     const snap = this._frame < 3;
 
     const sunMoved = this._lutSun.distanceToSquared(this.sunDirection) > 1e-10;
+    // the night sky for where the camera is now (redone every 200 m, 50 m of height, or for a
+    // new cloud base: steps of ~2 %), the sky-view LUT and the ambient light with it, and the
+    // environment map once it changed by more than 5 % since it was drawn
+    let glowMoved = false;
+    if ((this._glowFade ?? 0) > 0) {
+      const g = this._glowAt, p = this._camPos;
+      if (Math.hypot(p.x - g.x, p.z - g.z) > 200 || Math.abs(p.y - g.y) > 50 || U.uCloudLayer.value.x !== this._glowBase) {
+        const n = this._updateNightSky();
+        this._updateAmbient();
+        glowMoved = true;
+        if (Math.abs(n - (this._envNight ?? 0)) > 0.05 * n) this._envAlt = -1e9;
+      }
+    }
     // the CPU sky integrals cost a few ms: only for sun moves of more than ~0.15 deg
     if (!this._groundLight || this._groundSun.angleTo(this.sunDirection) > 0.0025) this._updateGroundLight();
 
@@ -668,7 +746,7 @@ export class Environment {
     if (Math.abs((this._groundAlbedoUsed ?? -1) - this.groundAlbedo) > 0.004) this._updateGroundRadiance();
 
     // sky-view LUT: cheap, so redo it for any real change
-    if (sunMoved || Math.abs(alt - this._lutAlt) > 2 || Math.abs(this.groundDatum - this._lutDatum) > 0.5) {
+    if (sunMoved || glowMoved || Math.abs(alt - this._lutAlt) > 2 || Math.abs(this.groundDatum - this._lutDatum) > 0.5) {
       this._renderSkyLUT();
       this._lutAlt = alt;
       this._lutDatum = this.groundDatum;
@@ -717,6 +795,7 @@ export class Environment {
     if (!this._envRT || (envStale && (snap || now - this._envTime > 1000))) {
       this._renderEnvMap();
       this._envTime = now;
+      this._envNight = this._nightLuma;
       this._envAlt = alt;
       this._envAlbedo = this.groundAlbedo;
       this._envSun.copy(this.sunDirection);
@@ -745,7 +824,7 @@ export class Environment {
     const K = METER.sun * Edn + this._skyLuma + (this._floorLuma || 0) + METER.moon * moonLuma;
     this.meteredLight = K;
     // the same without the night's boosts, for the eye's colour vision (MESOPIC)
-    const Kp = METER.sun * Edn + this._skyLuma + NIGHT.physical + METER.sun * moonLuma / (this._moonBoost ?? NIGHT.boost);
+    const Kp = METER.sun * Edn + this._skyLuma + NIGHT.physical + METER.sun * moonLuma / (this._moonBoost ?? 1);
     // the eye's adaptation state: the light level it is adapted to (eased in log space; adapting
     // to the dark is slower than to the light)
     const ls = this.lightScale ?? 1;

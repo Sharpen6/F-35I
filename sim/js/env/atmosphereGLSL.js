@@ -5,6 +5,8 @@
 // Conventions: world space, Y up, metres; radiance is relative to a top-of-atmosphere sun
 // illuminance of 1 and gets multiplied by uSunIlluminance.
 
+import { LP_GLSL, NATURAL_SKY } from './lightPollution.js';
+
 export const SKY_LUT_W = 256;
 export const SKY_LUT_H = 128;
 
@@ -212,11 +214,12 @@ void main() {
 export const SKYVIEW_LUT_FRAG = /* glsl */ `
 precision highp float;
 in vec2 vUv;
-layout(location = 0) out vec4 outScatter;
+layout(location = 0) out vec4 outScatter;   // rgb: in-scattered light (x the sun), a: the twilight (n.u.)
 layout(location = 1) out vec4 outTrans;
 uniform vec3 uNightZenith;       // night sky radiance at the zenith (airglow, starlight, moonlit sky)
 uniform vec3 uNightHorizon;      // ... at the horizon (the glow of the cities)
 ${ATMOSPHERE_CORE}
+const float NATURAL_SKY = ${NATURAL_SKY.toExponential(4)};   // 1 natural unit of sky brightness (scene units)
 
 float rayleighPhase(float c) { return 3.0 / (16.0 * ATMO_PI) * (1.0 + c * c); }
 float miePhase(float c, float g) {
@@ -297,8 +300,12 @@ void main() {
   // in front of the hills glows like the sky above them, and the sea reflects it).
   vec3 night = mix(uNightZenith, uNightHorizon, pow(1.0 - clamp(dir.y, 0.0, 1.0), 4.0));
   if (ground) night *= 1.0 - exp(-odRM);
+  // the twilight's brightness for the eye (natural units, luma), kept apart from the night term:
+  // the sky dome reads the stars' visibility from it (from the sum, the half float's rounding,
+  // ~6e-8 x the sun, was ~20 n.u.: a dark site's sky read as Gush Dan's)
+  float twilight = min(dot(L, vec3(0.2126, 0.7152, 0.0722)) * uSunIlluminance / NATURAL_SKY, 6e4);
   L += night / max(uSunIlluminance, 1e-6);
-  outScatter = vec4(L, 1.0);
+  outScatter = vec4(L, twilight);
   outTrans = vec4(exp(-odRM), 1.0);
 }
 `;
@@ -323,7 +330,11 @@ uniform vec3 uMoonDir;      // unit vector towards the moon
 uniform vec4 uMoonLight;    // rgb: mean radiance of the full moon's disc above the atmosphere, a: earthshine
 uniform mat3 uCelestial;    // world -> equatorial frame (x: RA 0h, z: the celestial pole): the stars turn
 uniform float uStarVis;     // 0 by day .. 1 at night
+uniform vec3 uNightZenith;  // the night term of the sky-view LUT (the cities' mean glow and the moonlit sky)
+uniform vec3 uNightHorizon;
 ${ATMOSPHERE_PARS}
+${LP_GLSL}
+const float NATURAL_SKY = ${NATURAL_SKY.toExponential(4)};   // 1 natural unit of sky brightness (scene units)
 
 float hash13(vec3 p) {
   p = fract(p * 0.1031);
@@ -331,34 +342,47 @@ float hash13(vec3 p) {
   return fract((p.x + p.y) * p.z);
 }
 
-// Stars on a grid of cells over the celestial sphere: one star in ~1 of 200 cells, magnitudes
-// skewed so most are faint; colour from blue-white to orange. Point sources: one pixel wide
-// whatever the resolution, brightness scaled down when a cell is smaller than a pixel. They come
-// out one by one at dusk: a star shows once the darkness (uStarVis: 0 with the sun 3 deg down, 1
-// at 11 deg) passes its threshold, the brightest first (Sirius and the planets are out at the end
-// of civil twilight, the faint ones by the end of nautical twilight), and only where it outshines
-// the sky behind it (skyLum: the moon's glow, the cities' glow at the horizon hide the faint ones).
-const float STAR_SCALE = 0.0031;   // radiance of a 1-pixel star of brightness 1 (scene units)
-vec3 stars(vec3 q0, float dark, float skyLum) {
+// Stars on a grid of cells over the celestial sphere: one cell in ~140 has a star, at a point in
+// it (jittered) taken straight out to the sphere, and shown where that lies in the cell: ~6,500 in
+// the whole sky, as many as the real sky has to magnitude 6.3, whatever the resolution or the zoom
+// (they were the stars within ~1.3 px of the sphere: twice as many at 960 x 540 as at 1080p, and
+// they went out when zooming in). Each has a magnitude from its rank: the number of stars brighter
+// than m grows ~3x a magnitude (N(<m) ~ 7 x 10^(0.47 m) in the whole sky), so the ranks run from
+// -1.8 (Sirius) to 6.3. A star shows when it is brighter than the naked-eye limit of the sky behind
+// it (nelm: from the sky's physical brightness, the twilight, the moonlit sky and the cities'
+// glow), dimmed by the air on its way (ext, mag; tint: its reddening): on a moonless night ~20 over
+// central Tel Aviv, ~300 at Ben Gurion, ~1,500 over the Dead Sea, ~2,100 in the Negev above the
+// horizon (js/env/README.md); the brightest come out first at dusk. Points one pixel wide whatever
+// the resolution (px: a pixel in cells, measured outside any branch), the brightness compressed
+// (x1.6 a magnitude, not 2.5: on a screen the bright ones would be blobs and the faint ones
+// nothing). One return (HLSL).
+const float STAR_SCALE = 0.0031;   // radiance of a 1-pixel star of magnitude 1 (scene units)
+vec3 stars(vec3 q0, float px, float nelm, float ext, vec3 tint0) {
   vec3 q = q0 * 260.0;
   vec3 c = floor(q);
   float h = hash13(c);
-  if (h < 0.995) return vec3(0.0);
-  float m = (h - 0.995) / 0.005;                       // 0 faint .. 1 bright
-  float t0 = 0.08 + 0.8 * sqrt(1.0 - m);              // the brightest ~5 % by -6 deg, half by -8 deg
-  float fade = smoothstep(t0, t0 + 0.12, dark);
-  if (fade <= 0.0) return vec3(0.0);
-  vec3 jitter = vec3(hash13(c + 7.1), hash13(c + 3.7), hash13(c + 1.3)) - 0.5;
-  vec3 local = fract(q) - 0.5 - jitter * 0.6;
-  float d = length(local);
-  float px = max(fwidth(q.x) + fwidth(q.y) + fwidth(q.z), 1e-3) * 0.6;
-  float bright = 0.06 + 2.4 * pow(m, 7.0) + 0.4 * m * m;
-  float peak = bright * min(1.0, 0.5 / px) * STAR_SCALE;
-  fade *= smoothstep(1.5, 4.0, peak / max(skyLum, 1e-9));
-  float s = smoothstep(px * 1.3, px * 0.2, d) * peak * fade;
-  float t = hash13(c + 9.9);
-  vec3 tint = t < 0.3 ? vec3(0.78, 0.86, 1.0) : t < 0.8 ? vec3(1.0, 0.97, 0.92) : vec3(1.0, 0.8, 0.6);
-  return tint * s;
+  vec3 o = vec3(0.0);
+  if (h >= 0.99287) {
+    float u = max((1.0 - h) * 140.3, 1e-5);         // rank: ~0 the brightest .. 1 the faintest
+    float m = 6.3 + log(u) * 0.924 + ext;              // log10(u) / 0.47
+    float fade = smoothstep(nelm + 0.2, nelm - 0.8, m);
+    vec3 jitter = vec3(hash13(c + 7.1), hash13(c + 3.7), hash13(c + 1.3)) - 0.5;
+    vec3 sp = normalize(c + 0.5 + jitter * 0.6) * 260.0;   // the star on the sphere
+    vec3 inCell = step(c, sp) * step(sp, c + 1.0);
+    float d = length(q - sp);
+    float peak = STAR_SCALE * exp2(-0.6644 * (m - 1.0)) * min(1.0, 0.5 / px);
+    float s = smoothstep(px * 1.3, px * 0.2, d) * peak * fade * inCell.x * inCell.y * inCell.z;
+    float t = hash13(c + 9.9);
+    vec3 tint = t < 0.3 ? vec3(0.78, 0.86, 1.0) : t < 0.8 ? vec3(1.0, 0.97, 0.92) : vec3(1.0, 0.8, 0.6);
+    o = tint * tint0 * s;
+  }
+  return o;
+}
+// The naked-eye limiting magnitude for a sky of B natural units (Schaefer's fit, as in the light
+// pollution atlases: NELM = 7.93 - 5 log10(10^(4.316 - b / 5) + 1), b in mag / arcsec^2 = 22.0 -
+// 2.5 log10 B): 6.6 under a natural sky, ~3.8 over Tel Aviv
+float nakedEyeLimit(float B) {
+  return 7.93 - 5.0 * log(0.824 * sqrt(max(B, 1e-3)) + 1.0) / 2.302585;
 }
 
 float vnoise3(vec3 p) {
@@ -425,10 +449,23 @@ float moonAlbedo(vec3 p) {
 void main() {
   vec3 dir = normalize(vDir);
   vec2 uv = atmoSkyViewUv(dir);
-  vec3 L = uSunIlluminance * texture(uSkyViewLUT, uv).rgb;
+  vec4 sv = texture(uSkyViewLUT, uv);
+  vec3 L = uSunIlluminance * sv.rgb;
   float Rg = atmoGroundRadius();
   float r = atmoCameraRadius();
   float muHorizon = -sqrt(max(0.0, 1.0 - (Rg / r) * (Rg / r)));
+  // the star field's cells per pixel (derivatives outside the branches below)
+  vec3 qs = uCelestial * dir;
+  float starPx = max(fwidth(qs.x) + fwidth(qs.y) + fwidth(qs.z), 4e-6) * 156.0;
+  // the sky's brightness for the eye (natural units: the stars and the Milky Way); the cities'
+  // domes in their own directions (js/env/lightPollution.js: the LUT holds their mean over the
+  // azimuth)
+  float art = 0.0, Bsky = 1.0;
+  if (dir.y >= muHorizon && uLPBase.y > 0.0) {
+    float p = pow(1.0 - clamp(dir.y, 0.0, 1.0), 4.0);
+    Bsky = lpSky(dir, art);
+    L = max(L + lpDisplay(Bsky, art, dir.y) - mix(uLPZenith, uLPHorizon, p), 0.0);
+  }
   if (dir.y < muHorizon) {
     // below the geometric horizon: hazy ground beyond the terrain
     L += texture(uSkyViewTLUT, uv).rgb * uGroundRadiance;
@@ -472,13 +509,20 @@ void main() {
       vec3 tm = atmoTransmittance(r, uMoonDir.y);
       L += discM * alb * (lit + shine) * uMoonLight.rgb * tm;
     }
-    // stars and the Milky Way once the sky is dark enough to show them (the Milky Way only in a
-    // full night, faint: the cities' glow hides most of it in central Israel)
-    float skyLum = dot(L, vec3(0.2126, 0.7152, 0.0722));
+    // stars and the Milky Way where the sky is dark enough to show them: the eye sees by the
+    // physical sky (the twilight from the LUT's alpha, the moonlit sky, the cities' glow), not by
+    // the one drawn. The Milky Way's brightest star clouds add ~1.2 natural units: seen where that
+    // is more than ~10-25 % of the sky (under a natural sky, over the Dead Sea and the Negev),
+    // hidden in Gush Dan and under a bright moon (Falchi et al. 2016); drawn at the night's gain
     if (uStarVis > 0.0) {
-      vec3 q = uCelestial * dir;
-      float mw = smoothstep(0.85, 1.0, uStarVis) * clamp(2.0 - skyLum / 6e-5, 0.0, 1.0);
-      L += (stars(q, uStarVis, skyLum) + vec3(0.85, 0.9, 1.0) * milkyWay(q) * 3e-5 * mw) * tr;
+      const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+      float tl = max(dot(tr, LUMA), 1e-4);
+      float Bphys = Bsky + uLPBase.w + sv.a;
+      float ext = -1.0857 * log(tl);                    // the air's extinction, magnitudes
+      L += stars(qs, starPx, nakedEyeLimit(Bphys), ext, tr / tl);
+      float mwNu = milkyWay(qs) * 1.2;
+      float mw = smoothstep(0.85, 1.0, uStarVis) * smoothstep(0.08, 0.25, mwNu / Bphys);
+      L += vec3(0.85, 0.9, 1.0) * (uLPBase.y * mwNu * mw) * tr;
     }
   }
   gl_FragColor = vec4(L, 1.0);
