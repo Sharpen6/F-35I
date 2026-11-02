@@ -87,9 +87,10 @@ const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t
 /**
  * ix, iz: tile; lc: Uint8Array 640^2 (row 0 north); rgb: Uint8Array / Uint8ClampedArray
  * 1024^2 * stride (stride 3 or 4); heights: Uint16Array 257^2 (h = v * 0.05 - 500);
- * runways: [{cx, cz, ux, uz, halfLength, halfWidth}] (world m).
+ * runways: [{cx, cz, ux, uz, halfLength, halfWidth}] (world m); obstacles: the tile's mapped
+ * roads, railways, airfield surfaces and buildings (obstacles.js buildObstacles), or null.
  */
-export function analyseTile({ ix, iz, lc, rgb, stride = 4, heights, runways = [] }) {
+export function analyseTile({ ix, iz, lc, rgb, stride = 4, heights, runways = [], obstacles = null }) {
   const x0 = -CORE_HALF + ix * TILE_M, z0 = -CORE_HALF + iz * TILE_M;
   const N = LC_N, NN = N * N;
   // colour (RGB bytes, row 0 north)
@@ -100,7 +101,7 @@ export function analyseTile({ ix, iz, lc, rgb, stride = 4, heights, runways = []
   // heights
   const h = new Float32Array(H_N * H_N);
   for (let i = 0; i < h.length; i++) h[i] = heights[i] * 0.05 - 500;
-  const t = { ix, iz, x0, z0, lc, col, h };
+  const t = { ix, iz, x0, z0, lc, col, h, obs: obstacles };
 
   // per 10 m pixel: greenness, brightness, saturation (of the 6.25 m imagery under it)
   const exg = new Float32Array(NN), luma = new Float32Array(NN), sat = new Float32Array(NN);
@@ -402,12 +403,16 @@ function emit(t, out, x, z, species, height, rng, opts = {}) {
   // asphalt, concrete, roofs, sand: over the crown, and at the trunk itself (the one pixel: a
   // narrow road disappears in the crown's mean)
   if (grey && (isGrey(r, g, b) || isGrey(...colourAt(t, x, z, 0)))) return false;
+  // mapped roads, railways, taxiways, aprons and buildings (obstacles.js): the imagery's 6 m
+  // pixels cannot resolve a 7-30 m road or a roof that is not grey
+  const ground = heightAt(t, x, z);
+  if (t.obs && t.obs.blocked(x, z, crownR, height, ground)) return false;
   // the imagery's colour where it shows vegetation, else the species' own (lone trees in a
   // field must not take the field's colour)
   const e = (2 * g - r - b) / 255;
   const w = smooth(0.015, 0.11, e);
   const f = sp.foliage;
-  const y = heightAt(t, x, z) - 0.25;
+  const y = ground - 0.25;
   out.pos.push(x, y, z);
   const variant = rng() < 0.5 ? 0 : 1;
   out.data.push(

@@ -50,8 +50,9 @@ const WORLD_CELLS = TILES * CELLS;
 const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
 
 export class Scatter {
-  constructor({ renderer, scene, camera, env, terrain, app } = {}) {
+  constructor({ renderer, scene, camera, env, terrain, app, worldUrl } = {}) {
     this.isScatter = true;
+    this.worldUrl = worldUrl;       // data/world/ (roads, airfields, buildings) by default; '' = none
     this.name = 'vegetation';
     this.renderer = renderer;
     this.scene = scene;
@@ -77,6 +78,7 @@ export class Scatter {
     this._queue = [];               // cells waiting for the worker
     this._uploads = [];             // cells with data waiting for the GPU
     this._inflight = 0;
+    this._tiles = new Map();        // tile key -> {obstacles, timing} from the worker (statistics)
     this._free = [];                // free blocks [{off, len}] sorted by offset
     this._hw = 0;                   // high-water mark of the impostor buffer
     this._used = 0;
@@ -159,8 +161,20 @@ export class Scatter {
       instances: s.instances, highWater: s.highWater, capacity: s.capacity, near: s.near,
       nearTris: s.nearTris, bakeMs: Math.round(s.bakeMs), atlasMB: +s.atlasMB.toFixed(1), initMs: Math.round(s.initMs), startMs: Math.round(s.startMs),
       workerMs: Math.round(s.workerMs), tileMs: Math.round(s.tileMs), replies: s.replies, inflight: this._inflight, queued: this._queue.length,
+      world: s.world || null, ...this._tileSummary(),
       idle: this.idle(),
     };
+  }
+
+  /** Trees kept off roads / aprons / buildings over the tiles seen, and the worst tile costs. */
+  _tileSummary() {
+    const obstacles = { roads: 0, aprons: 0, buildings: 0, underDeck: 0 };
+    const tileCost = { loadMs: 0, obstacleMs: 0, analyseMs: 0 };
+    for (const t of this._tiles.values()) {
+      if (t.obstacles) for (const k in obstacles) obstacles[k] += t.obstacles[k] || 0;
+      if (t.timing) for (const k in tileCost) tileCost[k] = Math.max(tileCost[k], t.timing[k] || 0);
+    }
+    return { obstacles, tileCost, tiles: this._tiles.size };
   }
 
   /** Nothing left to do for the current position (tests wait for it before a screenshot). */
@@ -361,8 +375,10 @@ export class Scatter {
     this._worker.onmessage = (e) => this._onWorker(e.data);
     this._worker.onerror = (e) => { console.error('vegetation worker:', e.message || e); };
     const baseUrl = new URL(this.terrain.baseUrl, location.href).href;
+    // the roads, airfields and buildings layers (data/world/, beside data/terrain/): no tree on them
+    const worldUrl = this.worldUrl === '' ? '' : new URL(this.worldUrl || '../world/', baseUrl).href;
     const runways = (this.terrain.runways?.list || []).map((r) => ({ cx: r.cx, cz: r.cz, ux: r.ux, uz: r.uz, halfLength: r.halfLength, halfWidth: r.halfWidth }));
-    this._worker.postMessage({ type: 'init', baseUrl, runways });
+    this._worker.postMessage({ type: 'init', baseUrl, worldUrl, runways });
   }
 
   /**
@@ -469,10 +485,16 @@ export class Scatter {
   }
 
   _onWorker(m) {
+    if (m.type === 'world') {        // which world layers keep the trees off (once, at the start)
+      this.stats.world = { roads: m.roads, buildings: m.buildings, airfields: m.airfields };
+      return;
+    }
     this._inflight = Math.max(0, this._inflight - 1);
     this.stats.replies++;
     this.stats.workerMs += m.cellMs || 0;
     this.stats.tileMs = Math.max(this.stats.tileMs, m.waitMs || 0);
+    // per tile (the counts grow with the cells asked for): summed in statsJSON
+    if (m.obstacles || m.timing) this._tiles.set(`${m.ix},${m.iz}`, { obstacles: m.obstacles, timing: m.timing });
     if (m.type === 'error') {
       console.warn(`vegetation: tile ${m.ix},${m.iz}: ${m.message}`);
       for (const [cx, cz] of m.cells) {
