@@ -15,6 +15,7 @@ ambient light, the night sky and the moon, the HDR post chain, the clouds and th
 | `Clouds.js`, `cloudField.js` | ray marched cumulus and cirrus with a temporal filter, weather presets; the field's CPU twin |
 | `cloudShadowChunk.js` | the cumulus' shadow in three.js's own lit materials (the jet, buildings on three materials) |
 | `displayLevels.js` | the jet's displays (the glb's PCD glass, the tablet, the switch LEDs) at a fixed picture level |
+| `warmup.js` | the shader warm-up: every program built behind the loading screen, misses logged |
 
 ## Units
 
@@ -572,6 +573,156 @@ buildings, hangars and trees cast shadows around the runway while the jet's stay
 texels (no crawling); the depth bias is held at 0.8 m whatever the box. Modules only set
 `castShadow` / `receiveShadow` on their meshes near the ground.
 
+## Shader warm-up (`warmup.js`)
+
+three.js builds a material's shader program the first time the material is drawn. On the PC
+(Chrome on ANGLE / Direct3D 11) a new program costs 100-850 ms of main-thread time on its first
+use: the menu's first frame took 5.7 s (59 programs), the first second of a flight had two frames
+of ~0.5 s (the cockpit shadow's depth program, the roads, the near terrain), and the first dusk,
+each kind of tree, road and building streaming in and the wingmen had their own stops. Now every
+program is built behind the loading screen (its *Shaders* row), and the loading screen keeps
+drawing while they compile. `?warmup=0` turns it off.
+
+`main.js` creates a `ShaderWarmup` right after the renderer (before any module compiles) and runs
+`warmUpApp(app)` once the data and the jet are loaded:
+
+1. `install()` wraps `renderer.compile` (and so `compileAsync`): every compile, a module's own
+   too, builds the variant the frame really draws. Under the HDR chain everything but the output
+   pass goes into a float target (no tone mapping, linear output), so a compile with no target
+   bound binds a 1 x 1 half-float one. Against the main scene, lit materials are built for both
+   states of the sun's shadow (by day with the shadow map, after dusk without). The number of
+   lights is part of every program's key, but three builds an unlit material once more at its
+   first draw and then keeps that program whatever the lights do; compiled here it keeps the
+   compiled one from the start (`_keep`: a street lamp compiled by day would otherwise have been
+   a new program at dusk).
+2. The environment's own passes (the sky-view LUT, the environment map's sky, the PMREM filters,
+   which three makes on the first PMREM), one environment update (`scene.environment` and the
+   sun's shadow as the first frame has them), and update-only frames until the vegetation and the
+   cockpit interior have made their materials.
+3. `compileAll`: the scene graph, hidden objects included, a few objects at a time (stand-ins
+   against the whole scene's lights, one per material and kind of object), the page drawing a
+   frame between the slices (building a hundred programs' sources is a few hundred ms of
+   script); the shadow pass's depth programs
+   (`compileDepth`: three's `MeshDepthMaterial` or the caster's `customDepthMaterial`, with the
+   side, maps and alpha test `WebGLShadowMap` gives them, without fog, into a target, the sun
+   casting); each module's `warmup(w, camera)` for what is not in the scene yet (Post's and the
+   clouds' passes; through `Roads`, the road chunks, airfield lights, street lamps and traffic);
+   the modules' own precompiles made before (buildings, trees, terrain) once more, now that the
+   environment map is set; the cockpit shadow's depth program (`pcd/shadow.js precompile`).
+4. `finish()`: three's first use of each program (link status, uniform locations), one at a
+   time, the page drawing a frame between them. With `KHR_parallel_shader_compile` (the PC) the
+   driver compiles them all at once on its own threads and a program is touched only when it is
+   ready; without it each first use waits for its compile.
+5. The textures of the scene's materials not on the GPU yet (`renderer.initTexture`), a few a
+   frame; what a module of step 2 made meanwhile if it had not settled in time (the cockpit
+   interior's patched materials on a slow machine), compiled and finished as in 3 and 4 rather
+   than one at a time by the frames; then six real frames behind the loading screen (the menu's
+   view, the cockpit, the chase view, the same two by the other light, the menu's view again)
+   for the driver's own per-draw state, and a fence polled once a frame until the GPU has done
+   them. The bounding spheres worked out while those frames after the menu's own are drawn (by
+   three, or by `Post.js`) are handed back (`firstDrawBounds`): see *Nothing looks different*
+   below.
+
+After start-up, `check(label)` runs when a flight starts, the camera, the time of day or the
+quality changes and when the wingmen load: whatever in the scene was not compiled yet (a new
+material, or a kind of object a material was not compiled for) is compiled at once, finished in
+the background and logged as a miss. `beforeDraw` sets the scene's light state up again when the
+sun starts or stops casting (three's shadow pass reads the state of the frame before and would
+build depth programs for it), `afterDraw` logs every program a frame made. The log is
+`app.warmup.late` (`app.warmup.info()` for a summary); `tests/e2e.mjs` fails on a program made in
+the menu, the first 5 s of a flight or the first switch to each camera; `tests/pc_check.py`
+records, per scene, the programs made after it started (`programs_made`, `warmup_late`) and its
+worst frame in the first 3 s; `tests/shader_warmup.mjs` lists them for every phase below.
+
+For a module:
+
+* things added later (streamed tiles, lights that switch on at night): a `warmup(w, camera)`
+  method that compiles stand-ins with `w.compile(group, camera, { scene })`. A mesh of the
+  material with a one-vertex geometry is enough: only the material, the kind of object
+  (instanced, points ...) and the geometry's standard attributes (normal, tangent, colour, uv)
+  select the program, not its own attributes;
+* shadow casters: `app.warmup.compileDepth(root, camera)` builds their depth programs as the shadow
+  pass draws them (`castShadow` and `customDepthMaterial` set on root's meshes);
+* or keep calling `renderer.compile` / `compileAsync`: through the wrapper they build the right
+  variants, and after start-up their programs are finished in the background.
+
+Measured with `tests/shader_warmup.mjs` (headless Chromium, SwiftShader, high quality, 480 x 270;
+the first rows of *before* at 960 x 540): the shader programs made after the loading screen.
+
+| | before (23c6169) | after |
+| --- | --- | --- |
+| programs when the loading screen goes | 16 | 111 (106 built by the warm-up) |
+| the menu's first frames | 63 (the sky and its PMREM filters, the shadow depth programs, the jet, terrain, airport lights, the plume and vapour, clouds, the HDR passes, buildings ...) and 101 texture uploads | 0, no uploads |
+| the first 5 s of a flight (Tel Nof 36, cockpit) | 7: `CockpitShadowDepth`, `TerrainL0`, `Roads0`, `VegetationBake`, `VegetationMesh`, `VegetationImpostor`, `VegetationShadow` | 0 |
+| first switch to the chase, tower, fly-by camera | 0 (8 uploads each) | 0 |
+| first switch to the orbit, cockpit camera | (not reached: the browser was killed) | 0 |
+| afterburner | (not on its own: that run started with it, 72 with the menu's) | 0 |
+| take-off with the gear and doors moving; vapour | 4 (the trees: depth, mesh, impostor, shadow); 0 | 0; 0 |
+| dusk 19:15; 21:30 chase; 21:30 cockpit | 30 (`TerrainL0` and every lit material of the jet without the sun's shadow); 1 (`Roads0`); 0 | 0; 0; 0 |
+| 05:00; noon again | (not reached) | 0; 0 |
+| quality low, medium, high | (not reached) | 0, 0, 0 |
+| 250 m over Tel Aviv, by day and at 21:30 (buildings, roads, lamps, trees streaming in) | (not reached) | 0, 0 |
+| the wingmen | none when they load; built when they first come into view | 11 when they load, finished before they show |
+
+A whole `tests/e2e.mjs` run (medium quality, the default weather: the runway, a take-off, the
+cameras, sunset over Jerusalem, the Tel Aviv towers by day and by night) made none either:
+`app.warmup.late` stayed empty (86 of 86 checks passed; the GPU memory estimate at its end
+836.7 MB). `tests/pc_check.py --swiftshader` (Tel Nof 36, cockpit) found none in the menu or the
+flight (`programs_made`, `warmup_late` empty).
+
+**Nothing looks different.** `--phases shots` takes the noon view at Tel Nof 36 and the 21:30
+view at Ben Gurion 26, from the chase camera and from the cockpit (960 x 540, `clouds=clear`),
+as a user gets there: the menu until its streaming is idle, then each flight until the
+vegetation and the terrain's colour tiles are idle, after two settled frames. Two runs of the
+same version differ in 0.03-0.08 % of their pixels (by more than 8 of 255: lights that flash
+with the clock), and the two versions no more than that: at 21:30 in 0.04-0.06 % (cockpit) and
+0.06-0.08 % (chase); at noon the cockpit view is the same to the pixel, and the chase view
+differs in 0.016 % (the old version's runs among themselves 0.003 %): the outline of one tree's
+crown at the edge of the view (the vegetation's streaming state depends on where the camera has
+been, and the warm-up's views of that start point came first). The draw lists are the same
+(189 draws, 2.83 M triangles, 143 k points at 21:30), but for an opaque building tile or the
+tree impostors a place earlier or later (opaque: the same pixels). The programs differ only
+where no pixel can: the unlit materials the warm-up compiled by day keep the sun's shadow map
+in their key (three keeps an unlit material's first program whatever the lights do, and none of
+these shaders reads it).
+
+The comparison found one difference, fixed: three works out a geometry's bounding sphere the
+first time it draws it and keeps it, and the landing light's pool, whose grid is rewritten in
+place wherever the jet is, was first drawn in the warm-up's night view at the menu's start
+point. Its sphere stayed there, and it was sorted among the transparent draws as if it were
+there too: at night at Ben Gurion its multiplication of the ground came before the airfield's
+lights instead of after them, their glow dimmer (1.4 % of the cockpit view's pixels, 0.7 % of
+the chase view's). The spheres worked out while the warm-up's frames after the menu's own are
+drawn are now handed back, to be worked out again where the object is first really drawn
+(`firstDrawBounds`; `info().bounds` counts them). With clouds in the sky (the menu's default
+weather, `few`) the pool's is worked out by `Post.js` before three draws (it picks the near
+transparent things to draw over the clouds): with that counted too, the pool has no sphere when
+the menu shows, as with `warmup=0` (the default start, Tel Nof at 07:00: 2 handed back; before,
+the pool kept the one of the night view). (Without the warm-up the pool's sphere stays wherever
+it was first drawn as well, so a night flight after one elsewhere sorts it the same way: for
+`LandingPool.js`, a sphere set when it rebuilds its grid.)
+
+**Cost.** In flight nothing: the same draws, and the GPU memory estimate within 0.1 MB (916 MB
+at the 21:30 view; the warm-up keeps a 1 x 1 float target and its depth materials). Per frame,
+`beforeDraw` compares a bit mask of the lights that cast shadows, `afterDraw` looks at the
+programs made since the frame before, and `check()` walks the scene only on the events above.
+The textures it uploads behind the loading screen (27 by itself, 319 MB counted at 4 bytes a
+texel, the rest in its frames) are those the old version uploaded in the menu's first frames
+(101 uploads). What it costs is loading time.
+
+SwiftShader has no parallel compile, and the container's 4 CPUs were shared with other jobs: the
+warm-up took 31-65 s there (each first use waits for its compile; the page loaded in 5-12 s
+before, in 34-48 s after), and its first frames take seconds; that says nothing about the PC.
+Nor does the menu's first frame there: the wait for the GPU gives up after 15 s with SwiftShader
+still drawing the warm-up's frames, and the menu's first frame then waits for them (72-123 s;
+before, 15-34 s of compiling). On the PC each of the menu's 59 programs cost ~90 ms of
+main-thread time (5.3 s for its first frame); compiled in parallel by the driver behind the
+loading screen, the ~106 programs should add roughly 2-4 s to the loading screen, which keeps
+moving (`app.warmup.info().worstGapMs` is its longest frame, `worstGapBy` per step; `gpuIdle`
+whether the GPU was done in time). The menu, the first flight, every camera, dusk and night, a
+quality change and the streaming then make no program. Run `tests/pc_check.py` on the PC to see
+it: `programs_made` per scene should be empty.
+
 ## Quality tiers
 
 | | low | medium | high |
@@ -685,6 +836,17 @@ calls, programs, samplers and the GPU memory estimate are unchanged.
   (AgX shows them; they are warm and dim enough to keep their tint).
 * There is no GPU in the development container: the GPU costs above are estimates; the bench's
   GPU time line measures them on a real GPU.
+* Shader warm-up: the wingmen's cockpit materials are not the player's (the cockpit interior
+  patches only his), so loading the wingmen builds their programs then (11, both shadow states),
+  compiled in parallel and finished before they show. What ANGLE builds on the first draw of a
+  program with a new vertex layout or target (Direct3D's own variants) cannot be seen from
+  WebGL; the frames drawn behind the loading screen make it for the views they show.
+  SwiftShader (the tests) has no `KHR_parallel_shader_compile`: there each first use waits.
+  Uploads that are not a first use stay where they are: the terrain's 1024 x 1024 tiles as they
+  stream in (`js/terrain`) and the live PCD's canvas, redrawn a few times a second
+  (`js/aircraft/pcd`). A module's pass that has not settled in 12 s (a slow machine: the
+  vegetation, the cockpit interior) is compiled as it is; what it makes before the frames behind
+  the loading screen is built then, what it makes later is caught at the next check (`late`).
 
 ## Sources
 

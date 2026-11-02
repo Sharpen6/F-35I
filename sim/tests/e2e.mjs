@@ -6,6 +6,9 @@
 //
 // The render loop stays paused: the simulation runs in fixed 1/120 s steps (much faster than real
 // time) and a frame is drawn only for the checks and screenshots that need one.
+//   0. start-up (js/env/warmup.js): the shader warm-up ran behind the loading screen, and no
+//      shader program is made when the menu draws, in the first 5 s of a flight started from it,
+//      nor on the first switch to each camera (a new program is a stall of 0.1-0.8 s on the PC).
 //   1. Tel Nof runway 36 at noon: the jet stands on its gear (every wheel on the runway, tyres
 //      pressed in by their modelled deflection, FDM struts and modelled oleos at their static
 //      compression, the stance pitch, nose wheel on the centreline, no sinking or floating);
@@ -185,6 +188,32 @@ async function main() {
       check(`${where}: orbit camera around the jet`, r.orbit.dist > 10 && r.orbit.dist < 200 && r.orbit.look > 0.95, `${f2(r.orbit.dist, 1)} m`);
       check(`${where}: fly-by camera beside the path, looking at the jet`, r.flyby.dist > 20 && r.flyby.dist < 3000 && r.flyby.look > 0.9 && r.flyby.agl > 0.5, `${f2(r.flyby.dist, 0)} m, ${f2(r.flyby.agl, 1)} m above ground`);
       check(`${where}: tower camera above ground, looking at the jet`, r.tower.agl > 2 && r.tower.look > 0.9, `${f2(r.tower.dist, 0)} m away, ${f2(r.tower.agl, 1)} m up`);
+    }
+
+    // =============================================================== 0. start-up: the shader programs
+    // (js/env/warmup.js) every program is built behind the loading screen: one made later is a
+    // stop of 0.1-0.8 s on the PC (ANGLE / Direct3D 11), here it shows as a new program id
+    log('--- start-up: no shader program made after the loading screen');
+    const progMark = () => S(() => { let id = -1; for (const p of window.__sim.app.renderer.info.programs) id = Math.max(id, p.id); return id + 1; });
+    const progSince = (m) => S((k) => window.__sim.app.renderer.info.programs.filter((p) => p.id >= k).map((p) => p.name || p.type || '?'), m);
+    const wu = await S(() => window.__sim.app.warmup?.info?.() || null);
+    check('start-up: shader warm-up done behind the loading screen', wu && wu.enabled && wu.done,
+      wu ? `${wu.programs} programs, ${f2(wu.ms / 1000, 1)} s compiling + ${f2(wu.framesMs / 1000, 1)} s of first frames${wu.frameMade.length ? `; made by the frames: ${wu.frameMade.join(', ')}` : ''}` : 'no warm-up');
+    let pm = await progMark();
+    for (let i = 0; i < 2; i++) await S(() => window.__sim.render());
+    const menuMade = await progSince(pm);
+    check('start-up: the menu draws with no new shader program', menuMade.length === 0, menuMade.join(', '));
+    pm = await progMark();
+    await S(() => window.__sim.start('telnof_36', { time: 12, camera: 'cockpit' }));
+    for (let i = 0; i < 10; i++) await S(() => window.__sim.advance(0.5));      // 5 s, a frame every 0.5 s
+    const flightMade = await progSince(pm);
+    check('start-up: no shader program made in the first 5 s of a flight from the menu', flightMade.length === 0, flightMade.join(', '));
+    for (const m of ['chase', 'tower', 'flyby', 'orbit', 'cockpit']) {
+      pm = await progMark();
+      await S((c) => window.__sim.camera(c), m);
+      for (let i = 0; i < 2; i++) await S(() => window.__sim.advance(0.25));
+      const made = await progSince(pm);
+      check(`start-up: first switch to the ${m} camera makes no shader program`, made.length === 0, made.join(', '));
     }
 
     // =============================================================== 1. on the runway at noon
@@ -531,8 +560,11 @@ async function main() {
     const mem = await S(() => window.__sim.gpuMemory());
     log(`timing: ${timing.steps} steps at ${timing.stepMsAvg} ms, ${timing.renders} frames at ${timing.renderMsAvg} ms (${timing.gpu})`);
     log(`GPU memory estimate ${mem.totalMB} MB (textures ${mem.texturesMB}, geometry ${mem.geometryMB})`);
+    // every program made after the loading screen in the whole run (for the record: the checks above fail on theirs)
+    const warmup = await S(() => window.__sim.app.warmup?.info?.() || null);
+    if (warmup) log(`shader programs made after the loading screen: ${warmup.late.length ? warmup.late.map((l) => `${l.label}: ${l.programs.join(', ')}`).join('; ') : 'none'}`);
     check('no console errors, page errors or failed requests', problems.length === 0, problems.slice(0, 5).join(' | '));
-    writeFileSync(join(OUT, 'report.json'), JSON.stringify({ when: new Date().toISOString(), size: [W, H], quality: QUALITY, checks, frames, timing, gpuMemory: mem, problems, shots }, null, 1));
+    writeFileSync(join(OUT, 'report.json'), JSON.stringify({ when: new Date().toISOString(), size: [W, H], quality: QUALITY, checks, frames, timing, gpuMemory: mem, warmup, problems, shots }, null, 1));
   } finally {
     await browser.close();
     server.kill();

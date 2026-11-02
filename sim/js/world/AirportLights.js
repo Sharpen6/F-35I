@@ -333,6 +333,15 @@ export class AirportLights {
     this._built = false;
   }
 
+  /**
+   * Stand-ins for the shader warm-up (js/env/warmup.js, through Roads.warmup): the airfield lights,
+   * the street lamp tiles and the traffic (which draws with this.material) are Points of these two
+   * materials, loaded later, near the camera.
+   */
+  warmupObjects(group, geometry) {
+    group.add(new THREE.Points(geometry, this.material), new THREE.Points(geometry, this.lampMaterial));
+  }
+
   setQuality(q) {
     this.quality = LAMP_RANGE[q] ? q : 'high';
     this.uniforms.uRange.value.z = LAMP_RANGE[this.quality];

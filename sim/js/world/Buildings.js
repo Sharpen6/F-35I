@@ -326,11 +326,13 @@ export class Buildings {
    * Compiles the building programs in the background (no hitch when the first tile shows): boxes
    * and chunks with their cross-fade variants, ground shadows, lights, and the chunks' shadow-map
    * depth program. Program parameters depend on the render target (colour space, tone mapping):
-   * the depth program is compiled with a target bound, as the shadow pass draws it, and with
-   * parallel compilation the colour programs both for the canvas and for a post chain's target.
-   * They depend on the lights too: with the sun casting shadows (by day) and without (at night,
-   * and at start-up, before js/env switches them on), so both are compiled, the depth program
-   * only with (the shadow pass runs only then).
+   * with parallel compilation the colour programs are built both for the canvas and for a post
+   * chain's target. They depend on the lights too: with the sun casting shadows (by day) and
+   * without (at night, and at start-up, before js/env switches them on), so both are compiled.
+   * The depth program is built by the shader warm-up (js/env/warmup.js compileDepth) as three's
+   * shadow pass draws it: on the side the pass sets (the back faces: compiled on the front side it
+   * was a program the pass never used, and the pass built its own in the first frame with
+   * shadows), with the sun casting, without the scene's fog, into a target.
    */
   _precompile() {
     const tmp = new THREE.Scene(), tmpD = new THREE.Scene();
@@ -363,7 +365,10 @@ export class Buildings {
       new THREE.Mesh(cg, this.chunkMaterial), new THREE.Mesh(cg, this._chunkDitherProto),
       new THREE.Mesh(sg, this.shadowMaterial), new THREE.Points(pg, this.lightMaterial)];
     for (const m of objs) { m.frustumCulled = false; m.receiveShadow = true; tmp.add(m); }
-    const dm = new THREE.Mesh(cg, this.chunkDepthMaterial);
+    // a chunk as the shadow pass sees it: a caster with the depth material as its customDepthMaterial
+    const dm = new THREE.Mesh(cg, this.chunkMaterial);
+    dm.castShadow = true;
+    dm.customDepthMaterial = this.chunkDepthMaterial;
     dm.frustumCulled = false;
     tmpD.add(dm);
     const rt = new THREE.WebGLRenderTarget(1, 1);
@@ -381,15 +386,13 @@ export class Buildings {
         if (parallel) {
           p.push(r.compileAsync(tmp, cam, this.scene));
           r.setRenderTarget(rt);
-          if (s || states.length === 1) p.push(r.compileAsync(tmpD, cam, this.scene));
           p.push(r.compileAsync(tmp, cam, this.scene));
         } else {
           r.compile(tmp, cam, this.scene);
-          r.setRenderTarget(rt);
-          if (s || states.length === 1) r.compile(tmpD, cam, this.scene);
         }
         r.setRenderTarget(prev);
       }
+      this.app?.warmup?.compileDepth?.(tmpD, cam);
     } catch (e) {
       r.setRenderTarget(prev);
       console.warn('Buildings: precompile', e);

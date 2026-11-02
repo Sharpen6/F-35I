@@ -750,6 +750,18 @@ export class Clouds {
     this._histValid = false;
   }
 
+  /** The five passes' programs, built ahead (js/env/warmup.js): each draws into a float target. */
+  warmup(w) {
+    if (!this.enabled) return;
+    const q = this._quad, keep = q.material;
+    for (const m of [this._noiseMat, this._coverMat, this._marchMat, this._resolveMat, this._compMat]) {
+      if (!m) continue;
+      q.material = m;
+      w.compile(q, this._cam, { target: w.floatTarget() });
+    }
+    q.material = keep;
+  }
+
   _pass(material, target) {
     this._quad.material = material;
     this.renderer.setRenderTarget(target);

@@ -17,6 +17,7 @@
 //   const s = new CockpitShadow({ root, box, alsoCast });   // box: {min, max} in the root frame
 //   s.setQuality('medium');                                 // SHADOW_QUALITY: low has none
 //   s.update(renderer, camera, lightDirWorld, dt, force);   // before the frame is drawn
+//   s.precompile(warmup);                                   // the depth program ahead (js/env/warmup.js)
 //   s.uniforms -> uCkShadow (sampler2DShadow), uCkShadowMat, uCkShadowOn, uCkSunView, uCkShadowTexel
 
 import * as THREE from 'three';
@@ -185,6 +186,33 @@ export class CockpitShadow {
     }
     swap.length = 0;
     this.redraws++;
+  }
+
+  /**
+   * Builds the depth pass's program ahead (js/env/warmup.js; before, it was built in the first
+   * cockpit frame of a flight: ~0.5 s on ANGLE), as _render draws it: the casters with the depth
+   * material and nothing else, no scene (no fog, none of the scene's lights), shadow maps off,
+   * into a target (any: also when the quality has no map yet, so a later switch finds it built).
+   */
+  precompile(w) {
+    const r = w.renderer, swap = this._swap;
+    swap.length = 0;
+    this.root.traverse((o) => {
+      if (!o.isMesh && !o.isSprite && !o.isPoints && !o.isLine) return;
+      const m = o.material;
+      const cast = o.isMesh && m && !Array.isArray(m) && !m.transparent && m.depthWrite !== false && m.colorWrite !== false && !m.isShaderMaterial;
+      swap.push(o, m);
+      o.material = cast ? this.depthMaterial : null;      // (renderer.compile skips an object without a material)
+    });
+    const prevShadow = r.shadowMap.enabled;
+    r.shadowMap.enabled = false;
+    try {
+      w.compile(this.root, this.camera, { target: this.target || w.floatTarget() });
+    } finally {
+      r.shadowMap.enabled = prevShadow;
+      for (let k = 0; k < swap.length; k += 2) swap[k].material = swap[k + 1];
+      swap.length = 0;
+    }
   }
 
   _disposeTarget() {

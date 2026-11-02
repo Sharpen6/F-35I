@@ -536,7 +536,10 @@ export class Scatter {
 
   /**
    * Compiles the programs ahead (in parallel where the browser has KHR_parallel_shader_compile):
-   * the bake program as it renders into the bake target, then the three drawn ones.
+   * the bake program as it renders into the bake target, then the three drawn ones (through the
+   * shader warm-up, js/env/warmup.js: for the frame's float target and both states of the sun's
+   * shadow), and the near trees' shadow-map program as three's shadow pass draws it (they cast
+   * only near the ground: before, it was built in the first frame they did).
    */
   _compile(baker) {
     const r = this.renderer;
@@ -552,6 +555,13 @@ export class Scatter {
       m.frustumCulled = false;
       m.receiveShadow = true;
       tmp.add(m);
+    }
+    const w = this.app?.warmup;
+    if (w?.compileDepth) {
+      const caster = new THREE.Mesh(geo, this._meshMat);
+      caster.castShadow = true;
+      caster.customDepthMaterial = this._depthMat;
+      w.compileDepth(caster, this.camera);
     }
     return Promise.all([bake, r.compileAsync(tmp, this.camera, this.scene)]);
   }

@@ -17,6 +17,8 @@
 //   depth=log|reversed   depth buffer (default log: the cockpit and a 400 km horizon in one view)
 //   post=0         no HDR post-processing (js/env/Post.js): draw straight to the canvas (fallback)
 //   clouds=clear|few|scattered|broken|cirrus   weather for this session (js/env/Clouds.js; default: the menu's)
+//   warmup=0       no shader warm-up behind the loading screen (js/env/warmup.js): each program is
+//                  built when first drawn (a stall of 0.1-0.8 s each on ANGLE / Direct3D)
 
 import * as THREE from 'three';
 import { Input } from './input/Input.js';
@@ -33,6 +35,7 @@ import { Roads } from './world/Roads.js';                 // roads, railways, ai
 import { Cockpit } from './aircraft/Cockpit.js';      // cockpit track: live PCD, interior, canopy glass
 import { DisplayLevels } from './env/displayLevels.js';   // lighting fix: the jet's displays at a picture level
 import { Scatter } from './terrain/Scatter.js';           // vegetation (trees, orchards, palms, shrubs)
+import { ShaderWarmup, warmUpApp } from './env/warmup.js';   // start-up: the shader programs before they are needed
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -146,6 +149,7 @@ class App {
       this.mods = await loadModules();
       const { Environment, Terrain, AircraftVisual } = this.mods;
       this.env = new Environment({ renderer: this.renderer, scene: this.scene });
+      this.warmup.setScene(this.scene, [this.env.sunLight]);
       // the HDR frame and its output transform (the canvas has no MSAA or depth of its own then)
       if (POST && !STUBS) this.post = new (await import('./env/Post.js')).Post({ renderer: this.renderer, env: this.env, quality: this.settings.quality });
       this.effects = new Effects(this.scene);
@@ -183,6 +187,10 @@ class App {
     this.selectSpawn(this.settings.spawn);
     this.setQuality(this.settings.quality, true);
     this.toMenu();
+    // the shader programs, built behind the loading screen before the menu shows (js/env/warmup.js)
+    this.ui.show('loading');
+    await warmUpApp(this, { progress: (f, label) => this.ui.progress('shaders', f, label) });
+    this.toMenu();
     if (TEST) { await this._testApi; window.__sim.ready = true; }
     requestAnimationFrame(this._frame);
     if (BENCH) {
@@ -209,6 +217,8 @@ class App {
     document.getElementById('view').appendChild(r.domElement);
     r.domElement.tabIndex = 0;
     this.renderer = r;
+    // before any module compiles: every renderer.compile() then builds the variants the frame draws
+    this.warmup = new ShaderWarmup(r, { hdr: !direct, enabled: params.get('warmup') !== '0' }).install();
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, FAR);
     this.camera.rotation.order = 'YXZ';
@@ -331,6 +341,7 @@ class App {
     this.env.setTime(h, (this.spawn && this.spawn.day_of_year) || 172);
     for (const m of this.modules) m.setTime?.(h, (this.spawn && this.spawn.day_of_year) || 172);
     this.env.snapExposure?.();
+    this.warmup.check('time', this.camera);
     this._saveSettings();
     if (!quiet && this.state !== 'flying') this.ui.syncMenu(this.settings, this.spawn);
   }
@@ -349,6 +360,8 @@ class App {
     }
     this.post?.setQuality(q);
     for (const m of this.modules) m.setQuality?.(q);
+    // new variants (defines that follow the quality) built before the menu's backdrop draws again
+    this.warmup.check(`quality ${q}`, this.camera, { hold: this.state !== 'flying' });
     this._saveSettings();
     if (!quiet) this.ui.syncMenu(this.settings, this.spawn);
   }
@@ -433,6 +446,7 @@ class App {
       : `${sp.label}.${this.input.levers.apc ? ` Auto-throttle on${pad ? '' : ' (Y)'}.` : ''} ${pad ? 'Start: menu' : 'F1: help'}`;
     if (this.settings.mouseStick && !pad) hint += '. Mouse stick: click the view to capture the mouse';
     this.ui.toast(hint, 4200);
+    this.warmup.check('flight', this.camera);
   }
 
   pause() {
@@ -517,6 +531,10 @@ class App {
       });
       if (this.state !== 'loading' && !TEST) this.ui.toast('Loading the wingmen...');
       await w.load();
+      // their programs before they show (js/env/warmup.js): their materials are not the jet's
+      // (the cockpit's interior patches only the player's)
+      w.setEnabled(false);
+      await this.warmup.prepare('wingmen', this.camera);
       this.wingmen = w;
       w.setEnabled(!!this.settings.wingmen);
       w.reset(this.fdm.state);
@@ -555,7 +573,8 @@ class App {
       while (this.acc >= H && n < MAX_STEPS) { this._step(f); this.acc -= H; n++; }
       if (n >= MAX_STEPS) this.acc = 0;   // a very long frame: drop the rest instead of spiralling
     }
-    this._render(dt, f, flying ? this.acc / H : 1);
+    // (a quality change in the menu: the backdrop holds its picture while the new programs finish)
+    this._render(dt, f, flying ? this.acc / H : 1, !this.warmup.holding);
   }
 
   /** Test / bench inputs over the pilot's: the scripted pilot first, then window.__sim.setInput. */
@@ -671,6 +690,7 @@ class App {
       this._prevCam = null;
       this.settings.camera = cam;
       this._saveSettings();
+      this.warmup.check(`camera ${cam}`, this.camera);
       ui.toast(cam === 'tower' ? `Tower: ${this._towerToast()}` : VIEW_LABELS[cam]);
     }
     if (f.fullscreen) {
@@ -734,8 +754,10 @@ class App {
     this.terrain.update(cam);
     this._updateModules(cam, dt, true);
     // HDR frame, clouds, bloom, glare and tone mapping (js/env/Post.js), or straight to the canvas
+    this.warmup.beforeDraw(cam);
     if (this.post) this.post.render(this.scene, cam);
     else this.renderer.render(this.scene, cam);
+    this.warmup.afterDraw(this);
 
     // helmet display / info strip
     const mode = this.cams.mode;

@@ -243,6 +243,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `depth=reversed` | reversed depth buffer instead of the logarithmic one (where `EXT_clip_control` exists) |
 | `clouds=clear` / `few` / `scattered` / `broken` / `cirrus` | weather for this session (the menu's Weather row otherwise) |
 | `post=0` | no HDR post-processing: straight to the canvas with three's AgX (a fallback; no clouds, bloom or glare) |
+| `warmup=0` | no shader warm-up behind the loading screen (`js/env/warmup.js`): each program is built when first drawn, a stop of 0.1-0.8 s each on Windows |
 | `test=1` | the automation API `window.__sim` (see Tests); the render loop starts paused |
 | `bench=1` | the 60 s benchmark flight (see Fly); `seconds=N` for another length |
 | `buildings=0` | no 3D buildings (the menu's option turns them off too) |
@@ -326,6 +327,12 @@ Without the data it draws nothing. Formats, layouts and rebuild: `tools/world/RO
   is drawn on the modelled oleo: up to the static point in proportion (the oleo's 5 cm share),
   beyond it one to one, so the struts are fully out in the air and compress with
   `state.wheels` on touchdown and over bumps.
+* Start-up: once the data and the jet are loaded, every shader program is built behind the
+  loading screen (its *Shaders* row; in parallel where the browser has
+  `KHR_parallel_shader_compile`) and a few frames are drawn there, so the menu, the first seconds
+  of a flight, the first switch to each camera, dusk and the trees, roads and buildings streaming
+  in do not stop for a compile. A program made later is logged (`app.warmup.late`). See
+  `js/env/README.md`, Shader warm-up.
 * The Environment owns the renderer's tone mapping and exposure, the shadow maps, the fog and
   `scene.environment` (which the aircraft's materials need); `main.js` only creates the renderer
   (logarithmic depth, see below), the camera (far plane 650 km) and the scene.
@@ -349,6 +356,7 @@ python3 sim/tests/frame_diff.py DIR [--threshold 4]                    (frame-to
 node --import ./sim/tests/node-three.mjs sim/tests/aircraft_fx.test.mjs  (lights, burner, vapour models)
 node --import ./sim/tests/node-three.mjs sim/tests/cockpit_parts.test.mjs (the rebuilt cockpit parts against the glb and the helmet's coaming line)
 node sim/tests/aircraft_scenes.mjs [--port 8150] [--only park_,ab_] [--shots chase,side]   (the jet's looks)
+node sim/tests/shader_warmup.mjs [--port 8400] [--out DIR] [--size 480x270] [--phases menu,flight,cameras,...|shots]   (programs made after the loading screen)
 ```
 
 Both browser tests start `serve.py` on their port and open the app in headless Chromium
@@ -360,6 +368,9 @@ failed request.
 **`tests/e2e.mjs`** (the real data and modules; a few minutes) checks, with the numbers in its
 log and in `report.json`:
 
+0. Start-up: the shader warm-up ran behind the loading screen, and no shader program is made
+   when the menu draws, in the first 5 s of a flight started from it, nor on the first switch to
+   each camera.
 1. Tel Nof runway 36 at noon: every wheel on the runway with the tyre pressed in by its modelled
    deflection (no sinking or floating), the flight model's struts and the modelled oleos at
    their static compression, the stance pitch (1.45 deg plus the runway's slope), nose wheel on
@@ -381,6 +392,12 @@ landing, `09`/`10` Jerusalem at sunset (chase, cockpit).
 
 **`tests/smoke.mjs`** checks the shell with the stand-in modules (`?stubs=1`) and, when the data
 is there, for real: menu, a manual take-off, the tower view, two airborne start points.
+
+**`tests/shader_warmup.mjs`** lists, phase by phase (the menu, a flight, each camera, the burner,
+the gear, vapour, the wingmen, five times of day, the three qualities, streaming over Tel Aviv by
+day and by night), the shader programs made after the loading screen, with the GL calls, the
+large texture uploads and the slowest frame (`shader_warmup.json`); `--phases shots` takes the
+noon and 21:30 views to compare two versions pixel by pixel.
 
 **`tests/lighting_shots.mjs`** takes the screenshots of the light, sky and clouds work
 (`js/env/README.md`): the same places at six times of day, dusk and night, the weather presets
