@@ -8,8 +8,9 @@
 //   thin bright arcs round the sun, as through every cleaned canopy (the texture carries each
 //   scratch's direction, detail.js makeGlassTexture), fading with the angle from the sun;
 // * from inside, the inner surface reflects the cockpit (Fresnel): the lit PCD, ray-traced off the
-//   glass onto the display's rectangle and its live canvas at the display's physical luminance
-//   (lost in the daylight; at night the reflections pilots know), and a faint veil from the
+//   glass onto the display's rectangle and its live canvas at the display's luminance (lost in
+//   the daylight; at night the reflections pilots know: faint, as the LCD sends little light that
+//   steeply, and soft, out of focus for an eye on the world outside), and a faint veil from the
 //   sunlit interior.
 //
 // Radiometry: the pass computes the radiance it adds, in scene units (linear; the sun's irradiance
@@ -140,14 +141,18 @@ void main() {
   vec2 uv = vec2( dot( H, uPcdU ), dot( H, uPcdV ) );
   float hit = step( den, -1e-3 ) * step( 0.0, t ) * step( 0.0, uv.x ) * step( uv.x, 1.0 ) * step( 0.0, uv.y ) * step( uv.y, 1.0 );
   // the mip level from the reflected footprint (the curved glass squeezes the picture: aliasing
-  // otherwise), a little softer than sharp (the acrylic is not optically flat)
+  // otherwise), and never sharp: the acrylic is not optically flat, and with the eye focused on
+  // the world outside, the display's mirror image (~1.2 m away) is ~0.8 dioptre out of focus, a
+  // blur about as wide as its lettering (~0.2 deg with a night pupil, ~1/200 of its width): a
+  // soft glow in the pages' colours, no readable figures
   vec2 dx = dFdx( uv ) * uPcdSize, dy = dFdy( uv ) * uPcdSize;
-  float lod = clamp( 0.5 * log2( max( dot( dx, dx ), dot( dy, dy ) ) ) + 1.0, 1.5, 8.0 );
+  float lod = clamp( 0.5 * log2( max( dot( dx, dx ), dot( dy, dy ) ) ) + 1.0, log2( uPcdSize.x / 200.0 ), 8.0 );
   // (the canvas is stored as plain RGBA8, PCD.js: decoded from sRGB here)
   vec3 pcd = sRGBTransferEOTF( textureLod( uPcd, clamp( uv, 0.0, 1.0 ), lod ) ).rgb;
-  // both surfaces of the acrylic reflect (x2); an LCD is dimmer off its axis (the light that
-  // reaches the canopy leaves it steeply)
-  col += pcd * ( 2.0 * uPcdGain * F * inner * hit * sqrt( clamp( - den, 0.0, 1.0 ) ) );
+  // both surfaces of the acrylic reflect (x2); an LCD is much dimmer off its axis (~10 % of its
+  // brightness at 70 deg), and the light that reaches the canopy leaves it steeply
+  float offAxis = clamp( - den, 0.0, 1.0 );
+  col += pcd * ( 2.0 * uPcdGain * F * inner * hit * offAxis * offAxis );
 
   #ifdef TONE_MAPPING
     // drawn on the canvas over tone-mapped pixels: the tone curve's increment over a typical
