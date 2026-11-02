@@ -499,7 +499,8 @@ const COMPOSITE_FRAG = /* glsl */`
   out vec4 outColor;
   ${DEPTH_FN}
   void main() {
-    vec3 s = texture(tScene, vUv).rgb;
+    vec4 sc = texture(tScene, vUv);
+    vec3 s = sc.rgb;
     ivec2 fp = ivec2(gl_FragCoord.xy);
     float dz = texelFetch(tDepth, fp, 0).r;
     float z0 = log(viewZ(dz));
@@ -521,7 +522,10 @@ const COMPOSITE_FRAG = /* glsl */`
       }
     }
     vec4 c = acc / wsum;
-    outColor = vec4(s * c.a + c.rgb, 1.0);
+    // the scene's alpha says what the pixel holds (js/env/emitters.js: a display's 0, a light's
+    // mark); carried through, a light's mark fading with the cloud in front of it
+    float sa = sc.a < -0.5 ? -64.0 + (sc.a + 64.0) * c.a : sc.a;
+    outColor = vec4(s * c.a + c.rgb, sa);
     // the scene's depth, for the transparent things Post.js draws next
     gl_FragDepth = dz;
   }`;

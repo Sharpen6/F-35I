@@ -34,6 +34,7 @@
 // with three's AgX tone mapping, as a fallback).
 
 import * as THREE from 'three';
+import { EMITTER_DECODE_GLSL } from './emitters.js';
 
 /** Per quality: MSAA samples, bloom levels (first level at half resolution), lens ghosts. */
 export const POST_TIERS = {
@@ -164,10 +165,12 @@ const OUTPUT_FRAG = /* glsl */`
   uniform vec4 uGlare;          // scattered fractions and widths (rad) of the core and the veil
   uniform vec4 uLook;           // contrast (power about the pivot), saturation, pivot, toe lift
   uniform float uNightVision;   // 0 photopic .. 1 fully scotopic (dark-adapted eye)
+  uniform float uEmitters;      // 0 by day .. 1 once the lights are on (env.lightsOn): the lights' path
   uniform vec2 uVignetteGrain;  // strengths (0: off)
   uniform float uTime;
   in vec2 vUv;
   out vec4 outColor;
+${EMITTER_DECODE_GLSL}
 
   // ---- AgX (Troy Sobotka; the three.js / Blender 4 fit), with an ASC CDL look in its log space
   const mat3 LINEAR_SRGB_TO_LINEAR_REC2020 = mat3(
@@ -208,6 +211,13 @@ const OUTPUT_FRAG = /* glsl */`
     c = pow(max(vec3(0.0), c), vec3(2.2));
     c = LINEAR_REC2020_TO_LINEAR_SRGB * c;
     return clamp(c, 0.0, 1.0);
+  }
+  // a light's tone curve: AgX's own curve (look included) on its brightest channel, the others in
+  // proportion. AgX itself bleaches any bright saturated colour (a red light at 3 on the display
+  // comes out pink, at 64 white); a light seen at night keeps its hue (README "Lights at night")
+  vec3 agxHue(vec3 c) {
+    float m = max(c.r, max(c.g, c.b));
+    return m > 1e-6 ? c * (agx(vec3(m)).g / m) : vec3(0.0);
   }
   vec3 srgb(vec3 c) {
     return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
@@ -258,6 +268,11 @@ const OUTPUT_FRAG = /* glsl */`
       }
     }
 
+    // what the pixel holds (js/env/emitters.js): a surface (alpha >= 0.5), a cockpit display (~0)
+    // or a light (alpha <= -64, its share of the pixel em)
+    float sa = texture(tScene, vUv).a;
+    float em = emitterWeight(sa) * uEmitters;
+
     // night vision: with a dark-adapted eye the rods take over. Their sensitivity peaks in the
     // blue-green (507 nm): blues hold their brightness, reds go dark (the Purkinje shift), colours
     // fade and a cool cast remains. Never all the way to grey (a cap of 60 %: the cones still see
@@ -268,12 +283,13 @@ const OUTPUT_FRAG = /* glsl */`
       float k = 0.6 * uNightVision * smoothstep(0.6, 0.02, dot(c, vec3(0.2126, 0.7152, 0.0722)));
       // self-lit cockpit displays (the PCD, switch LEDs, the kneeboard: js/aircraft/pcd/interior.js
       // DISPLAY_ALPHA) write alpha 0 into the scene target and keep their colours: they are bright
-      // enough for the cones, and a greyed display reads as a fault
-      k *= step(0.5, texture(tScene, vUv).a);
+      // enough for the cones, and a greyed display reads as a fault. A light (an emitter's mark) is
+      // seen by the cones too, its halo by the rods: by its share of the pixel
+      k *= step(0.5, abs(sa)) * (1.0 - em);
       c = mix(c, scot * vec3(0.62, 0.78, 1.0), k);
     }
 
-    c = agx(c);
+    c = em > 0.0 ? mix(agx(c), agxHue(c), em) : agx(c);
 
     if (uVignetteGrain.x > 0.0) {
       vec2 q = vUv - 0.5;
@@ -415,7 +431,7 @@ export class Post {
       uExposure: { value: 1 }, uBloom: { value: 0 }, uSun: { value: new THREE.Vector4() },
       uSunColor: { value: new THREE.Color() }, uRadPerUv: { value: new THREE.Vector2(1, 1) },
       uGhosts: { value: 0 }, uGlare: { value: new THREE.Vector4() }, uLook: { value: new THREE.Vector4(1, 1, 0.5, 0) },
-      uNightVision: { value: 0 },
+      uNightVision: { value: 0 }, uEmitters: { value: 0 },
       uVignetteGrain: { value: new THREE.Vector2() }, uTime: { value: 0 },
     });
     this._time = 0;
@@ -627,6 +643,8 @@ export class Post {
     out.uLook.value.set(L.contrast, L.saturation, L.pivot, L.toe ?? 0);
     out.uGlare.value.set(L.glareCore[0], L.glareCore[1], L.glareVeil[0], L.glareVeil[1]);
     out.uNightVision.value = o.nightVision ? (env.nightVision ?? 0) : 0;
+    // the lights' own tone curve from sunset (env.lightsOn): by day the frame is AgX's throughout
+    out.uEmitters.value = env.lightsOn ?? 0;
     out.uVignetteGrain.value.set(o.vignette ? 0.35 : 0, o.grain ? 0.06 : 0);
     out.uTime.value = this._time;
     this._pass(this._outMat, null);
