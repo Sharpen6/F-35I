@@ -20,7 +20,8 @@
 //                a short light march with a multiple scattering approximation, a two-lobe phase
 //                function and the "powder" darkening of the sunlit creases; by the sky from above
 //                and the ground from below, each dimmed by the cloud between (the base is darker
-//                than the top); at night also by the cities' glow from below. The sun's colour is
+//                than the top); at night also by the cities' light from below (lightPollution.js:
+//                orange-grey bases over Gush Dan, dark ones over the desert). The sun's colour is
 //                taken at the cloud's height, so clouds stay lit after sunset on the ground. Then the
 //                cirrus sheet (2D, streaked along the wind) above. Aerial perspective to the cloud.
 //   3. resolve   the march starts each ray at a different offset every frame (interleaved gradient
@@ -44,6 +45,7 @@
 
 import * as THREE from 'three';
 import { ATMOSPHERE_PARS } from './atmosphereGLSL.js';
+import { LP_GLSL } from './lightPollution.js';
 import { thresholdFor, shadowAt, fieldAt } from './cloudField.js';
 
 /**
@@ -79,10 +81,6 @@ const WIND = [5.5, 0, 1.5];          // m/s: a summer day's westerly sea breeze 
 // cloud shadows: the sun's light under a cumulus is exp(-SHADOW_DEPTH) of the clear value. Not the
 // cloud's optical depth (~50): most of the light gets through diffusely (~15 % under a 1 km cumulus)
 const SHADOW_DEPTH = 1.8;
-// The cities' light on the cloud bases at night (the terrain's city lights: Tel Aviv - Jaffa the
-// brightest, then Jerusalem; the same centres as terrainShaders.js cityLights), sodium-orange
-const CITY_GLOW = [1.0, 0.6, 0.3];
-const CITY_GLOW_LEVEL = 1.6e-3;      // upward radiance under a city at night (as tuned at exposure 40)
 
 const FULLSCREEN_VERT = /* glsl */`
   out vec2 vUv;
@@ -180,9 +178,8 @@ const MARCH_FRAG = /* glsl */`
   uniform vec4 uStep;             // shortest step (m), growth with distance, detail distance (m), -
   uniform vec4 uLight;            // direction to the sun (or the moon), irradiance above the atmosphere
   uniform vec3 uLightTint;
-  uniform vec3 uAmbSky;           // mean sky radiance on the clouds (scene units)
+  uniform vec3 uAmbSky;           // mean sky radiance on the clouds (scene units; not the moon itself)
   uniform vec3 uAmbGround;        // radiance of the ground below
-  uniform vec3 uCityGlow;         // upward radiance under the brightest city at night
   uniform vec4 uShape;            // shape period, detail period (m), extinction (1/m), detail (0/1)
   uniform vec4 uCirrus;           // altitude (m), field threshold, opacity (0: none), scale (m)
   uniform vec2 uWindXZ;           // drift of the 3D noise (m)
@@ -190,6 +187,7 @@ const MARCH_FRAG = /* glsl */`
   layout(location = 0) out vec4 outColor;   // in-scattered light, transmittance
   layout(location = 1) out vec4 outDist;    // distance to the cloud (km, light weighted), 0: none
   ${ATMOSPHERE_PARS}
+  ${LP_GLSL}
   ${DEPTH_FN}
 
   float hg(float c, float g) {
@@ -261,12 +259,6 @@ const MARCH_FRAG = /* glsl */`
   // interleaved gradient noise (Jimenez 2014), a new offset each frame: with the temporal filter
   // the ray starts cover a step evenly over 16 frames
   float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
-  // the cities' glow on the cloud bases (Tel Aviv - Jaffa, Jerusalem, and the rest of the coast)
-  vec3 cityGlow(vec2 xz) {
-    float tlv = exp(-length(xz - vec2(-22900.0, -31600.0)) / 14000.0);
-    float jlm = exp(-length(xz - vec2(17900.0, 3500.0)) / 9000.0);
-    return uCityGlow * (0.12 + 0.9 * tlv + 0.5 * jlm);
-  }
 
   // Light scattered towards the eye by a unit of cloud at optical depth tau from the sun:
   //   single scattering   phase (a strong forward lobe: the silver lining, and a weak backward
@@ -323,7 +315,7 @@ const MARCH_FRAG = /* glsl */`
         float t = t0;
         float dt = min(uStep.x + t * uStep.y + t * t / 250000.0, dtSpan);
         t += dt * jit;
-        vec3 sunE = vec3(-1.0);
+        vec3 sunE = vec3(-1.0), city = vec3(0.0);
         float sigma0 = uShape.z;
         bool coarse = true, wasLong = false;
         int emptyRun = 0;
@@ -353,8 +345,10 @@ const MARCH_FRAG = /* glsl */`
             vec3 up = normalize(vec3(rel.x, rel.y + rc, rel.z));
             float lu = dot(up, uLight.xyz);
             if (sunE.x < 0.0) {
-              // the light at the cloud's height (still lit when the sun has set on the ground)
+              // the light at the cloud's height (still lit when the sun has set on the ground), and
+              // at night the cities' light under the cloud's base here (lightPollution.js)
               sunE = uLight.w * uLightTint * atmoTransmittance(Rg + h, lu);
+              if (uLPBase.y > 0.0) city = lpCloudBase(p.xz);
             }
             // optical depth towards the light: steps of 70 m doubling (to ~2 km)
             float tau = 0.0, ls = 70.0, lt = 0.0;
@@ -367,8 +361,11 @@ const MARCH_FRAG = /* glsl */`
             }
             float powder = mix(1.0, 1.0 - 0.5 * exp(-2.0 * tau - dens * 4.0), 0.5 - 0.5 * cosT);
             vec3 S = sunScatter(sunE, tau, cosT, powder);
-            // sky light from above, the ground's (and the cities') from below
-            S += uAmbSky * aoS + (uAmbGround + cityGlow(p.xz)) * aoG * 0.8;
+            // sky light from above, the ground's from below; the cities' light lights the base
+            // and fades faster into the cloud, down to the ~15 % a thick cumulus lets through
+            // diffusely (orange-grey bases; seen from above, a dim glow in the tops)
+            float aoC = 0.15 + 0.85 * clamp((aoG - 0.35) / 0.65, 0.0, 1.0);
+            S += uAmbSky * aoS + uAmbGround * aoG * 0.8 + city * aoC * 0.8;
             float sigma = dens * sigma0;
             float sT = exp(-sigma * dt);
             L += T * S * (1.0 - sT);
@@ -616,7 +613,7 @@ export class Clouds {
       uDepthParams: { value: new THREE.Vector4() }, uMarch: { value: new THREE.Vector4() },
       uStep: { value: new THREE.Vector4() },
       uLight: { value: new THREE.Vector4() }, uLightTint: { value: new THREE.Color(1, 1, 1) },
-      uAmbSky: { value: new THREE.Color() }, uAmbGround: { value: new THREE.Color() }, uCityGlow: { value: new THREE.Color() },
+      uAmbSky: { value: new THREE.Color() }, uAmbGround: { value: new THREE.Color() },
       uShape: { value: new THREE.Vector4(2200, 800, 0.05, 0) }, uCirrus: { value: new THREE.Vector4() },
       uWindXZ: { value: new THREE.Vector2() },
     });
@@ -811,12 +808,11 @@ export class Clouds {
       M.uLight.value.set(env.sunDirection.x, env.sunDirection.y, env.sunDirection.z, U.uSunIlluminance.value);
       M.uLightTint.value.setRGB(1, 1, 1);
     }
-    M.uAmbSky.value.copy(U.uAmbient.value).multiplyScalar(1 / Math.PI);
+    // the sky's light without the moon's direct light (uAmbient has it for the terrain; the
+    // clouds have the moon as their light: counted twice, the moonless side of a cloud glowed);
+    // the cities' light under the bases comes from the shared uLP* uniforms (Environment)
+    M.uAmbSky.value.copy(env.skyAmbient || U.uAmbient.value).multiplyScalar(1 / Math.PI);
     M.uAmbGround.value.copy(U.uGroundRadiance.value);
-    // the cities' light under the clouds: on with the street lights (uNight, which also carries
-    // the gain that keeps the lights as they were tuned while the eye adapts further)
-    const glow = CITY_GLOW_LEVEL * (U.uNight?.value || 0);
-    M.uCityGlow.value.setRGB(CITY_GLOW[0] * glow, CITY_GLOW[1] * glow, CITY_GLOW[2] * glow);
     M.uShape.value.set(2200, 800, this.layer ? this.layer.density : 0.05, T.detail);
     M.uWindXZ.value.set(this.wind[0] * 0.3, this.wind[1] * 0.3);
     if (this.cirrus) M.uCirrus.value.set(this.cirrus.alt, this.cirrus.threshold, this.cirrus.opacity, 9000);
