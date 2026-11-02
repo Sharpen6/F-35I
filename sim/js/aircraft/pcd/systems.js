@@ -19,6 +19,7 @@ const KT = 0.514444;
 const FT = 0.3048;
 const DEG = Math.PI / 180;
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const NONE = [];
 const lag = (x, target, dt, tau) => x + (target - x) * (1 - Math.exp(-dt / Math.max(1e-3, tau)));
 
 /**
@@ -41,24 +42,35 @@ export const BINGO_LB = 1800;          // the flight model's BINGO FUEL warning:
 export const JOKER_LB = 3500;
 const EMPTY_LB = 29300;                // F-35A empty weight (13,290 kg)
 
-/** Split a total (lb) over the tanks: the last to empty fill first. */
+/** The tanks by the order they fill in (the last to empty first), with each group's capacity. */
+const FILL_GROUPS = [...new Set(TANKS.map((t) => t.order))].sort((a, b) => b - a)
+  .map((o) => { const tanks = TANKS.filter((t) => t.order === o); return { tanks, cap: tanks.reduce((a, t) => a + t.max, 0) }; });
+
+/** Split a total (lb) over the tanks: the last to empty fill first (no allocation: every frame). */
 function splitFuel(totalLb, out) {
   let rest = clamp(totalLb, 0, FUEL_MAX_LB);
-  const orders = [...new Set(TANKS.map((t) => t.order))].sort((a, b) => b - a);   // feed tank first
-  for (const o of orders) {
-    const group = TANKS.filter((t) => t.order === o);
-    const cap = group.reduce((a, t) => a + t.max, 0);
-    const put = Math.min(rest, cap);
-    for (const t of group) out[t.id] = put * t.max / cap;
+  for (const g of FILL_GROUPS) {
+    const put = Math.min(rest, g.cap);
+    for (const t of g.tanks) out[t.id] = put * t.max / g.cap;
     rest -= put;
   }
   return out;
 }
 
-/** ICAWS message: {text, level: 'W' (warning, red) | 'C' (caution, yellow) | 'A' (advisory, green)}. */
-const W = (text) => ({ text, level: 'W' });
-const C = (text) => ({ text, level: 'C' });
-const A = (text) => ({ text, level: 'A' });
+/**
+ * ICAWS message: {text, level: 'W' (warning, red) | 'C' (caution, yellow) | 'A' (advisory, green)},
+ * one object per message, made once (the list is rebuilt every frame).
+ */
+const MESSAGES = { W: new Map(), C: new Map(), A: new Map() };
+const msg = (level, text) => {
+  const byText = MESSAGES[level];
+  let m = byText.get(text);
+  if (!m) byText.set(text, (m = { text, level }));
+  return m;
+};
+const W = (text) => msg('W', text);
+const C = (text) => msg('C', text);
+const A = (text) => msg('A', text);
 
 export class Systems {
   constructor() {
@@ -138,27 +150,28 @@ export class Systems {
     // ---- ICAWS: warnings (red), cautions (yellow), advisories (green)
     const list = this.icaws;
     list.length = 0;
-    const wn = Array.isArray(st.warnings) ? st.warnings : [];
-    const has = (w) => wn.includes(w);
+    const wn = Array.isArray(st.warnings) ? st.warnings : NONE;
     if (st.crashed) list.push(W('CRASH'));
-    if (has('PULL UP')) list.push(W('PULL UP'));
-    if (has('ENGINE') || !running) list.push(W('ENGINE FAIL'));
-    if (has('GEAR')) list.push(W('L/G NOT DOWN'));
-    if (has('OVER-G')) list.push(W('OVER G'));
-    if (has('AOA')) list.push(W('AOA HIGH'));
-    if (has('OVERSPEED')) list.push(C('OVERSPEED'));
+    if (wn.includes('PULL UP')) list.push(W('PULL UP'));
+    if (wn.includes('ENGINE') || !running) list.push(W('ENGINE FAIL'));
+    if (wn.includes('GEAR')) list.push(W('L/G NOT DOWN'));
+    if (wn.includes('OVER-G')) list.push(W('OVER G'));
+    if (wn.includes('AOA')) list.push(W('AOA HIGH'));
+    if (wn.includes('OVERSPEED')) list.push(C('OVERSPEED'));
     const canopy = st.controls ? st.controls.canopy || 0 : 0;
     if (canopy > 0.01 || lev.canopy) list.push(canopy > 0.01 && (thr > 0.5 || (F.gs || 0) > 5) ? W('CANOPY') : C('CANOPY UNLKD'));
-    if (has('BINGO FUEL')) list.push(C('FUEL BINGO'));
+    if (wn.includes('BINGO FUEL')) list.push(C('FUEL BINGO'));
     else if (fu.totalLb < JOKER_LB) list.push(A('FUEL JOKER'));
-    if (has('PARKING BRAKE')) list.push(C('PARK BRK ON'));
+    if (wn.includes('PARKING BRAKE')) list.push(C('PARK BRK ON'));
     else if (lev.parkingBrake) list.push(A('PARK BRK ON'));
     const gear = st.gear ?? 1;
     if (gear > 0.01 && gear < 0.99) list.push(A('L/G TRANSIT'));
     if ((st.controls?.speedbrake || 0) > 0.05) list.push(A('SPD BRK OUT'));
     if (ground && lev.nwsEnable !== false && F.gs < 60) list.push(A('NWS ENGAGED'));
     if ((st.controls?.tailhook || 0) > 0.05) list.push(A('HOOK DOWN'));
-    this.master = list.some((m) => m.level === 'W') ? 'W' : list.some((m) => m.level === 'C') ? 'C' : null;
+    let master = null;
+    for (const m of list) { if (m.level === 'W') { master = 'W'; break; } if (m.level === 'C') master = 'C'; }
+    this.master = master;
     return this;
   }
 }

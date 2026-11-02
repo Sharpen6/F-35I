@@ -248,7 +248,10 @@ export function drawTSD(ctx, r, d, maps) {
       ctx.rotate(-hdg);
       ctx.scale(ppm * k, ppm * k);
       ctx.translate(-(ox - mp.x0) / k, -(oz - mp.z0) / k);
+      // minified up to ~10:1 at the long ranges: 'high' filters with mipmaps (the default 'low'
+      // samples bilinearly, and the imagery sparkled as the map turned and moved)
       ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(mp.img, 0, 0);
       ctx.restore();
     }

@@ -30,6 +30,7 @@ export const PCD_QUALITY = {
 };
 
 const _f = new THREE.Vector3();
+const NO_WINGMEN = [];
 
 function hhmm(h) {
   h = ((h % 24) + 24) % 24;
@@ -208,10 +209,15 @@ export class PCD {
     d.clock = clockFromSolar(src.hours ?? 12, src.dayOfYear ?? 172);
     d.flash = (this.time * 1.6) % 1 < 0.6;
     d.thrustKn = Math.max(0, (st.engine && st.engine.thrust) || 0) / 1000;
-    d.wingmen = (src.wingmen || []).map((w) => {
+    // the wingmen's symbols (objects kept from redraw to redraw: no garbage)
+    const ws = src.wingmen || NO_WINGMEN, out = d.wingmen;
+    out.length = ws.length;
+    for (let i = 0; i < ws.length; i++) {
+      const w = ws[i];
       _f.set(0, 0, -1).applyQuaternion(w.quaternion);
-      return { x: w.position.x, z: w.position.z, hdg: Math.atan2(_f.x, -_f.z), altFt: w.position.y / FT };
-    });
+      const o = out[i] || (out[i] = { x: 0, z: 0, hdg: 0, altFt: 0 });
+      o.x = w.position.x; o.z = w.position.z; o.hdg = Math.atan2(_f.x, -_f.z); o.altFt = w.position.y / FT;
+    }
     const t0 = performance.now();
     const ctx = this.ctx;
     ctx.setTransform(this.canvas.width / REF_W, 0, 0, this.canvas.height / REF_H, 0, 0);
