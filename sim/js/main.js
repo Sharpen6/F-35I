@@ -357,7 +357,7 @@ class App {
     this.post?.setQuality(q);
     for (const m of this.modules) m.setQuality?.(q);
     // new variants (defines that follow the quality) built before the menu's backdrop draws again
-    this.warmup.check(`quality ${q}`, this.camera, { hold: this.state === 'menu' });
+    this.warmup.check(`quality ${q}`, this.camera, { hold: this.state !== 'flying' });
     this._saveSettings();
     if (!quiet) this.ui.syncMenu(this.settings, this.spawn);
   }

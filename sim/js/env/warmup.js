@@ -15,7 +15,8 @@
 //    mapping, linear output), so a compile with no target bound binds a 1 x 1 float target. A
 //    compile against the main scene builds its lit materials for both states of the sun's shadow
 //    (by day with the shadow map, at night without); the unlit ones keep the program they are
-//    first drawn with, whatever the lights do later, so they are built once. The modules' own
+//    first drawn with, whatever the lights do later, so they are built once (and made to keep the
+//    compiled one: three would build them again at their first draw, see _keep). The modules' own
 //    precompiles (terrain, buildings, vegetation, the PMREM generator) go through it unchanged;
 //    the ones made before the start-up pass are made again in it (the environment map and the
 //    sun's state are set by then: standard materials have other programs without them).
@@ -42,7 +43,8 @@
 // environment update, the modules that build their materials over a few frames (the vegetation,
 // the cockpit's interior) given their frames, compileAll, finish, then a few real frames drawn
 // behind the loading screen (the menu's view, the cockpit, the chase view, by day and by night):
-// the first uploads of the textures, and whatever variant the passes did not foresee.
+// the first uploads of the textures, the driver's per-draw state, and whatever variant the passes
+// did not foresee; then a wait (a fence, polled once a frame) until the GPU has done them.
 //
 // URL: ?warmup=0 turns it off (three builds each program when first drawn, as before).
 
@@ -124,7 +126,8 @@ export class ShaderWarmup {
     this.busy = false;               // the start-up pass is running
     this.holding = false;            // check(..., {hold}) is finishing programs: the app may skip drawing
     this.late = [];                  // programs made after the start-up pass: { label, programs: [names], ms }
-    this.stats = { programs: 0, ms: 0, compileMs: 0, finishMs: 0, framesMs: 0, frames: 0, frameMade: [], parallel: false, settled: [] };
+    this.stats = { programs: 0, ms: 0, totalMs: 0, compileMs: 0, finishMs: 0, framesMs: 0, frames: 0, gpuMs: 0, gpuIdle: true, uploads: 0, uploadMB: 0, uploaded: [],
+      frameMade: [], added: [], parallel: false, settled: [] };
     this._raw = null;                // renderer.compile as three has it
     this._inner = 0;                 // > 0 inside our own passes (the hook passes them on as they are)
     this._early = [];                // the modules' compiles before the start-up pass, made again in it
@@ -212,7 +215,10 @@ export class ShaderWarmup {
       if (bind) r.setRenderTarget(want);
       const T = scene || root;
       if (this.scene && T === this.scene && this.lights.length && r.shadowMap.enabled) this._otherShadowState(root, camera, scene);
-      return this._raw(root, camera, scene);
+      const mats = this._raw(root, camera, scene);
+      this._keep(mats);
+      this.see(root);
+      return mats;
     } finally {
       if (bind) r.setRenderTarget(prev, face, mip);
       this._inner--;
@@ -220,15 +226,36 @@ export class ShaderWarmup {
     }
   }
 
-  /** The lit materials under root once more with the sun's shadow switched the other way. */
+  /**
+   * The number of lights and shadows is part of every program's key, but three builds an unlit
+   * material's program only once more, at its first draw (with the lights of that moment), and
+   * keeps it after that whatever the lights do. Compiled here, it keeps the compiled program from
+   * the start, as if it had been drawn once: a street lamp built by day and first drawn at dusk,
+   * when the sun no longer casts, would have been a new program then.
+   */
+  _keep(mats) {
+    if (!mats) return;
+    const props = this.renderer.properties;
+    for (const m of mats) {
+      if (needsLights(m)) continue;
+      const p = props.get(m);
+      if (p.__version === undefined && p.currentProgram) p.__version = m.version;
+    }
+  }
+
+  /**
+   * The lit materials under root once more with the sun's shadow switched the other way (and the
+   * unlit ones three builds again at every draw: transparent and double-sided, drawn in two passes).
+   */
   _otherShadowState(root, camera, scene) {
     const off = this._off;
     off.length = 0;
-    // three skips an object without a material: the unlit ones are left out for this compile
+    const want = (m) => needsLights(m) || (m.transparent && m.side === THREE.DoubleSide && !m.forceSinglePass);
+    // three skips an object without a material: the others are left out for this compile
     root.traverse((o) => {
       const m = o.material;
       if (!m || !drawable(o)) return;
-      if (Array.isArray(m) ? !m.some(needsLights) : !needsLights(m)) { off.push(o, m); o.material = null; }
+      if (Array.isArray(m) ? !m.some(want) : !want(m)) { off.push(o, m); o.material = null; }
     });
     for (const l of this.lights) l.castShadow = !l.castShadow;
     try {
@@ -251,13 +278,14 @@ export class ShaderWarmup {
     const S = this.scene, r = this.renderer;
     if (!this._raw || !S || !this.lights.length || !r.shadowMap.enabled) return;
     const shared = [], custom = [], keys = new Set();
+    const vsm = r.shadowMap.type === THREE.VSMShadowMap;
     root.traverse((o) => {
       if (!o.castShadow || !(o.isMesh || o.isLine || o.isPoints)) return;
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       const kind = kindOf(o);
       for (const m of mats) {
         if (!m) continue;
-        const side = m.shadowSide != null ? m.shadowSide : SHADOW_SIDE[m.side];
+        const side = m.shadowSide != null ? m.shadowSide : vsm ? m.side : SHADOW_SIDE[m.side];
         const alpha = m.alphaToCoverage === true || m.alphaTest > 0;
         const combo = `${side}|${texChannel(m.map)}|${texChannel(m.alphaMap)}|${alpha ? 1 : 0}|${m.displacementMap ? texChannel(m.displacementMap) : -1}`;
         const cd = o.customDepthMaterial;
@@ -375,7 +403,6 @@ export class ShaderWarmup {
     for (const c of this._early.splice(0)) {
       try { this.compile(c.root, c.camera, { scene: c.scene }); } catch (e) { console.warn('warm-up: precompile', e); }
     }
-    this.see(S);
     this.restoreLights(camera);
   }
 
@@ -393,7 +420,7 @@ export class ShaderWarmup {
     return m;
   }
 
-  /** Marks root's (object kind, material, version) as compiled. */
+  /** Marks root's (object kind, material, version) as compiled (every compile does: check() looks for the rest). */
   see(root) {
     root.traverse((o) => {
       if (!drawable(o) || !o.material) return;
@@ -430,21 +457,7 @@ export class ShaderWarmup {
   check(label, camera, { hold = false } = {}) {
     if (!this.done || !this.scene || !this._raw) return 0;
     const t0 = performance.now(), mark = this.nextId();
-    const fresh = [];
-    this.scene.traverse((o) => { if (drawable(o) && o.material && this._unseen(o)) fresh.push(o); });
-    if (fresh.length) {
-      const g = new THREE.Group();
-      g.children = fresh.map((o) => proxyOf(o, o.material));
-      this.compile(g, camera, { scene: this.scene });
-      this.compileDepth(g, camera);
-      g.children = [];
-      for (const o of fresh) {
-        const k = kindOf(o);
-        for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m) this._mark(m, k);
-      }
-      this.restoreLights(camera);
-    }
-    const made = this.programsSince(mark);
+    const made = this.compileUnseen(camera);
     if (made.length) {
       const ms = performance.now() - t0;
       this.late.push({ label, programs: made, ms: +ms.toFixed(1) });
@@ -453,6 +466,28 @@ export class ShaderWarmup {
       this.finish(mark).finally(() => { if (hold) this.holding = false; });
     }
     return made.length;
+  }
+
+  /** Compiles (with their depth programs) the scene's objects whose material or kind was not compiled yet; returns the names of the programs made. */
+  compileUnseen(camera) {
+    const mark = this.nextId();
+    const fresh = [];
+    this.scene.traverse((o) => { if (drawable(o) && o.material && this._unseen(o)) fresh.push(o); });
+    if (!fresh.length) return [];
+    const g = new THREE.Group();
+    g.children = fresh.map((o) => proxyOf(o, o.material));
+    try {
+      this.compile(g, camera, { scene: this.scene });
+      this.compileDepth(g, camera);
+    } finally {
+      g.children = [];
+      for (const o of fresh) {
+        const k = kindOf(o);
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m) this._mark(m, k);
+      }
+      this.restoreLights(camera);
+    }
+    return this.programsSince(mark);
   }
 
   /** check(), then waits until the programs it made are finished. */
@@ -493,6 +528,54 @@ export class ShaderWarmup {
     return N;
   }
 
+  /**
+   * Uploads the textures of root's materials that are not on the GPU yet, as their first draw would
+   * (renderer.initTexture), a few per frame: a big upload is a stall of its own, and the views
+   * drawn at start-up do not show everything (the cockpit by night, the gear bays ...).
+   */
+  async uploadTextures(root, sliceMs = 12) {
+    const list = this._pendingTextures(root);
+    let t = performance.now();
+    for (const tex of list) {
+      const img = tex.image;
+      try { this.renderer.initTexture(tex); } catch (e) { continue; }
+      const w = img.width || 0, h = img.height || 0, d = img.depth || 1;
+      this.stats.uploads++;
+      this.stats.uploadMB += (w * h * d * 4) / 1048576;
+      if (this.stats.uploaded.length < 64) this.stats.uploaded.push(`${tex.name || tex.constructor.name} ${w}x${h}${d > 1 ? `x${d}` : ''}`);
+      if (performance.now() - t > sliceMs) { await nextFrame(); t = performance.now(); }
+    }
+    return list.length;
+  }
+
+  _pendingTextures(root) {
+    const out = [], seen = new Set(), props = this.renderer.properties;
+    const add = (t) => {
+      if (!t || !t.isTexture || seen.has(t)) return;
+      seen.add(t);
+      // (render targets' textures and videos are not uploaded; version 0: no image yet)
+      if (t.isRenderTargetTexture || t.isVideoTexture || t.isExternalTexture || !(t.version > 0)) return;
+      if (!t.image || t.image.complete === false || props.get(t).__version === t.version) return;
+      out.push(t);
+    };
+    root.traverse((o) => {
+      if (!o.material) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (!m) continue;
+        for (const k in m) { const v = m[k]; if (v && v.isTexture) add(v); }
+        const u = m.uniforms;
+        if (u) {
+          for (const k in u) {
+            const v = u[k] && u[k].value;
+            if (Array.isArray(v)) for (const x of v) add(x);
+            else add(v);
+          }
+        }
+      }
+    });
+    return out;
+  }
+
   /** Every drawn frame, before the scene is drawn: see the top of the file. */
   beforeDraw(camera) {
     if (!this.scene || !this._raw || !this.lights.length) return;
@@ -519,9 +602,10 @@ export class ShaderWarmup {
   info() {
     const s = this.stats;
     return {
-      enabled: this.enabled, done: this.done, parallel: s.parallel, programs: s.programs, ms: Math.round(s.ms),
+      enabled: this.enabled, done: this.done, parallel: s.parallel, programs: s.programs, ms: Math.round(s.ms), totalMs: Math.round(s.totalMs),
       compileMs: Math.round(s.compileMs), finishMs: Math.round(s.finishMs), framesMs: Math.round(s.framesMs), frames: s.frames,
-      frameMade: s.frameMade.slice(), settled: s.settled.slice(), late: this.late.map((l) => ({ ...l, programs: l.programs.slice() })),
+      gpuMs: Math.round(s.gpuMs), gpuIdle: s.gpuIdle, uploads: s.uploads, uploadMB: +s.uploadMB.toFixed(1), uploaded: s.uploaded.slice(),
+      frameMade: s.frameMade.slice(), added: s.added.slice(), settled: s.settled.slice(), late: this.late.map((l) => ({ ...l, programs: l.programs.slice() })),
     };
   }
 
@@ -571,27 +655,46 @@ export async function warmUpApp(app, { progress = null } = {}) {
     say(0.12, `${total} programs`);
     await w.finish(mark, (f, n, N) => say(0.12 + 0.68 * f, `${n} / ${N}`));
     w.stats.ms = performance.now() - t1;
-    // 4. real frames behind the loading screen
+    // the textures of what the views below do not show
+    say(0.8, 'textures');
+    await w.uploadTextures(w.scene);
+    // 4. real frames behind the loading screen, and the GPU's work on them
     say(0.82, 'first frames');
     const t2 = performance.now();
     w._next = w.nextId();
-    await drawViews(app, w, (f) => say(0.82 + 0.18 * f, 'first frames'));
+    await drawViews(app, w, (f) => say(0.82 + 0.14 * f, 'first frames'));
     w.stats.framesMs = performance.now() - t2;
+    say(0.96, 'GPU');
+    const t3 = performance.now();
+    w.stats.gpuIdle = await gpuDone(app.renderer, GPU_WAIT_MS);
+    w.stats.gpuMs = performance.now() - t3;
     w.stats.programs = app.renderer.info.programs.filter((p) => p.id >= mark).length;
+  } catch (e) {
+    console.warn('warm-up:', e);
+  }
+  // what came into the scene during the pass (an object a module added late, the wingmen if they
+  // loaded meanwhile): built and finished before the menu shows
+  try {
+    const m2 = w.nextId();
+    w.stats.added = w.compileUnseen(cam);
+    if (w.stats.added.length) await w.finish(m2);
   } catch (e) {
     console.warn('warm-up:', e);
   } finally {
     w.busy = false;
     w.done = true;
     w._next = w.nextId();
-    w.see(w.scene);
     w.restoreLights(cam);
   }
   say(1, 'ready');
   const s = w.stats;
-  console.info(`warm-up: ${s.programs} programs in ${((performance.now() - t0) / 1000).toFixed(1)} s ` +
-    `(compile calls ${s.compileMs.toFixed(0)} ms, finishing ${s.finishMs.toFixed(0)} ms, ${s.frames} frames ${s.framesMs.toFixed(0)} ms` +
-    `${s.parallel ? ', in parallel' : ''})${s.frameMade.length ? `; made by the frames: ${s.frameMade.join(', ')}` : ''}`);
+  s.totalMs = performance.now() - t0;
+  console.info(`warm-up: ${s.programs} programs in ${(s.totalMs / 1000).toFixed(1)} s ` +
+    `(compile calls ${s.compileMs.toFixed(0)} ms, finishing ${s.finishMs.toFixed(0)} ms, ${s.uploads} textures uploaded ` +
+    `(${s.uploadMB.toFixed(1)} MB), ${s.frames} frames ${s.framesMs.toFixed(0)} ms, ` +
+    `GPU ${s.gpuMs.toFixed(0)} ms${s.gpuIdle ? '' : ' (still busy)'}${s.parallel ? ', in parallel' : ''})` +
+    `${s.frameMade.length ? `; made by the frames: ${s.frameMade.join(', ')}` : ''}` +
+    `${s.added.length ? `; added during the pass: ${s.added.join(', ')}` : ''}${s.settled.length ? `; not settled: ${s.settled.join(', ')}` : ''}`);
 }
 
 /** Update-only frames until the modules that build their materials over frames are done (or maxMs). */
@@ -613,30 +716,55 @@ async function settle(app, maxMs) {
 }
 
 /**
- * A few frames drawn behind the loading screen: the menu's view, the cockpit and the chase view,
- * then the same by the other light (by night if the start is by day, at noon if it is by night:
- * street lamps, building windows, the moon's or no shadow), then the time put back.
+ * A few frames drawn behind the loading screen, one per view: the menu's view, the cockpit and the
+ * chase view, the same two by the other light (by night if the start is by day, at noon if it is
+ * by night: street lamps, building windows, the moon's or no shadow), then the menu's view again
+ * at the time put back. They upload the textures the views show and make the driver's own
+ * per-draw state; the work they queue is waited for (without blocking the page) before the menu.
  */
 async function drawViews(app, w, say) {
   const hours = app.settings.time;
   const sun = app.env.sunLight;
   const day = sun ? !!sun.castShadow : true;
-  const views = [[null, 'orbit'], [null, 'cockpit'], [null, 'chase'], [day ? 0.5 : 12, 'chase'], [day ? 0.5 : 12, 'cockpit']];
-  const f = app.input.update(0);
+  const other = day ? 0.5 : 12;
   const mode = app.cams.mode;
+  const views = [[null, 'orbit'], [null, 'cockpit'], [null, 'chase'], [other, 'chase'], [other, 'cockpit'], [hours, mode]];
+  const f = app.input.update(0);
   let k = 0;
   for (const [h, view] of views) {
     if (h != null && app.settings.time !== h) app.setTimeOfDay(h, true);
     app.cams.setMode(view);
     app.cams.snap?.();
-    for (let i = 0; i < 2; i++) {
-      app._render(1 / 60, f, 1, true);
-      w.afterDraw(app);
-      w.stats.frames++;
-      await nextFrame();
-    }
+    app._render(1 / 60, f, 1, true);
+    w.afterDraw(app);
+    w.stats.frames++;
     say(++k / views.length);
+    await nextFrame();
   }
-  if (app.settings.time !== hours) app.setTimeOfDay(hours, true);
-  app.cams.setMode(mode);
+}
+
+/** At most this long for the GPU to work through the frames drawn behind the loading screen. */
+const GPU_WAIT_MS = 15000;
+
+/**
+ * Waits until the GPU has done the work queued so far (a fence, polled once a frame: the page
+ * keeps drawing), or maxMs. True if it has.
+ */
+async function gpuDone(renderer, maxMs) {
+  const gl = renderer.getContext();
+  if (typeof gl.fenceSync !== 'function') return true;
+  const s = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+  if (!s) return true;
+  gl.flush();
+  const t0 = performance.now();
+  try {
+    for (;;) {
+      await nextFrame();
+      const st = gl.clientWaitSync(s, 0, 0);
+      if (st === gl.ALREADY_SIGNALED || st === gl.CONDITION_SATISFIED) return true;
+      if (st === gl.WAIT_FAILED || performance.now() - t0 > maxMs) return false;
+    }
+  } finally {
+    gl.deleteSync(s);
+  }
 }
