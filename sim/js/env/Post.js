@@ -464,9 +464,9 @@ export class Post {
       tScene: { value: null }, tBloom: { value: null }, tSunVis: { value: null },
       uExposure: { value: 1 }, uBloom: { value: 0 }, uSun: { value: new THREE.Vector4() },
       uSunColor: { value: new THREE.Color() }, uRadPerUv: { value: new THREE.Vector2(1, 1) },
-      uGhosts: { value: 0 }, uGhost: { value: GHOSTS.map(() => new THREE.Vector4()) },
+      uGhost: { value: GHOSTS.map(() => new THREE.Vector4()) },
       uGhostTint: { value: GHOSTS.map((g) => new THREE.Vector3(...g.tint)) },
-      uGlare: { value: new THREE.Vector4() }, uLook: { value: new THREE.Vector4(1, 1, 0.5, 0) },
+      uGhosts: { value: 0 }, uGlare: { value: new THREE.Vector4() }, uLook: { value: new THREE.Vector4(1, 1, 0.5, 0) },
       uNightVision: { value: 0 },
       uVignetteGrain: { value: new THREE.Vector2() }, uTime: { value: 0 },
     });
