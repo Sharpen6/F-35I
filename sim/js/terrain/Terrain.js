@@ -351,6 +351,8 @@ export class Terrain {
     };
     this.sunOcclusion = 1;          // terrain shadow on the aircraft (sunVisibilityAt at the jet), smoothed
     this._sunVisInit = false;
+    this._sunLightBase = 1;         // the sun light's intensity as Environment wrote it
+    this._sunLightOut = NaN;        // and as this module left it (see _shadeSunLight)
     this._lightDir = new THREE.Vector3();
     // 3D trees drawn by another module within this range: no painted crowns there
     this._treeCover = new THREE.Vector2(0, 1);
@@ -676,12 +678,13 @@ export class Terrain {
    * aircraft (and the wingmen: standard three.js materials; the terrain, roads, buildings and
    * trees take their sunlight from the atmosphere uniforms and are not affected) is dimmed when
    * the hills hide it from the point it is aimed at (the shadow target, i.e. the jet). Its own
-   * direction is used, so a moonlit night works the same. Environment sets the light's intensity
-   * to 1 every frame. The sky light stays. Smoothed over ~0.15 s.
+   * direction is used, so a moonlit night works the same. The sky light stays. Smoothed over
+   * ~0.15 s. Environment writes the light's intensity (1) every drawn frame; the factor scales
+   * the value it wrote last, so it never compounds, even on a frame it did not write.
    */
   _shadeSunLight(f) {
     const L = this.env?.sunLight;
-    // only on drawn frames: Environment.update (which resets the intensity) runs only on those
+    // only on drawn frames: Environment.update runs only on those
     if (!L || !this.loaded || f?.draw === false) return;
     const p = L.target.position;
     const d = this._lightDir.subVectors(L.position, p);
@@ -689,7 +692,9 @@ export class Terrain {
     const k = 1 - Math.exp(-Math.max(0, f?.dt ?? 1 / 60) / 0.15);
     this.sunOcclusion = this._sunVisInit ? this.sunOcclusion + (v - this.sunOcclusion) * k : v;
     this._sunVisInit = true;
-    L.intensity *= this.sunOcclusion;
+    if (L.intensity !== this._sunLightOut) this._sunLightBase = L.intensity;   // a new value from Environment
+    L.intensity = this._sunLightBase * this.sunOcclusion;
+    this._sunLightOut = L.intensity;
     this.stats.sunVisibility = Math.round(this.sunOcclusion * 1000) / 1000;
   }
 
