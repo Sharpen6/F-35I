@@ -11,7 +11,7 @@ export const CONTROLS = [
       ['<kbd>Page Up</kbd> / <kbd>Page Down</kbd>', 'full afterburner / idle'],
       ['<kbd>Y</kbd>', 'auto-throttle on / off: with the gear down in the air it flies the approach AoA (13 deg) with the throttle; any throttle input takes over (on at the 10 km final start)'],
       ['<kbd>B</kbd> (hold)', 'wheel brakes (with <kbd>Ctrl</kbd> held too: throttle back and brakes)'],
-      ['<kbd>Shift</kbd>+<kbd>B</kbd>', 'parking brake on / off (set at the start)'],
+      ['<kbd>Shift</kbd>+<kbd>B</kbd>', 'parking brake on / off (set at the start); it locks the wheels: a take-off or landing on it bursts the tyres'],
       ['<kbd>G</kbd>', 'landing gear up / down'],
       ['<kbd>S</kbd>', 'speed brake'],
       ['<kbd>A</kbd>', 'high-AoA mode on / off: the AoA limit is 50 deg instead of 25 (HI AOA on the helmet display)'],
@@ -71,8 +71,8 @@ export const CONTROLS = [
     rows: [
       ['take-off', 'MIL or afterburner, release the parking brake (Shift+B); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (G) once climbing, then centre the stick: the jet holds the climb (a pull held on keeps the nose coming up)'],
       ['fly-by-wire', 'the stick commands g (pitch rate when slow) and roll rate; let go and the jet holds its flight path and bank; the FCS limits AoA to 25 deg and g to +9 / -3'],
-      ['landing', 'gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (Y) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft); idle and brakes (B) after touchdown'],
-      ['helmet display', 'speed (KIAS) left, altitude (ft) right with radar altitude below 5,000 ft, magnetic heading on top; the circle with wings is where the jet is going, the W is where the nose points; dive rungs are dashed with minus numbers'],
+      ['landing', 'gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (Y) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft): the auto-throttle adds no power below 50 ft and closes the throttle from 10 ft (APC RETARD), the flare is yours; idle and brakes (B) after touchdown'],
+      ['helmet display', 'speed (KIAS) left, altitude (ft) right with radar altitude below 5,000 ft, magnetic heading on top; the circle with wings is where the jet is going (above about 15 deg AoA it would be on the cockpit displays: it stops at the glare shield, crossed out), the W is where the nose points; dive rungs are dashed with minus numbers'],
     ],
   },
 ];

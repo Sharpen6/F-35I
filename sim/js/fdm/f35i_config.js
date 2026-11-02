@@ -242,7 +242,8 @@ export const F35I_CONFIG = {
     // High-AoA roll / yaw coordination (fcs.js).  In slow flight the velocity-vector roll is limited by
     // the yaw rate the rudders can build, not by the schedule above (which would allow ~57 deg/s at
     // 25 deg AoA and 125 kt): full rudder adds ~11 deg/s^2 of yaw acceleration there, so the roll
-    // builds up to ~25-35 deg/s and 90 deg of bank takes ~2.8 s (~2.2 s at 150 kt, ~1.9 s at 180 kt).
+    // builds up to ~25-35 deg/s and 90 deg of bank takes ~3 s from 125 kt (the speed sags to ~111 kt
+    // meanwhile; ~2.2 s at 150 kt, ~1.9 s at 180 kt).
     // Sideslip limit and its linear gain close to the limit, the share of the rudder authority the
     // roll command plans with (the rest is left to the sideslip loop), and the floor of the cap.
     rollBetaMax: 6 * D, rollBetaGain: 3.0, rollYawShare: 0.7, rollCoordMin: 8 * D,
@@ -253,14 +254,17 @@ export const F35I_CONFIG = {
   },
 
   // ------------------------------------------------------------------------------ auto-throttle
-  // Approach power compensator (T key; on at the telnof_final spawn): with the gear down in the air
+  // Approach power compensator (Y key; on at approach spawns): with the gear down in the air
   // it flies the on-speed AoA with the engine while the FCS holds the flight path. On the back side
   // of the drag curve (the approach) a fixed throttle runs away in speed: from the trimmed 140 kt
   // the jet was at 300 kt on the runway 100 s later. Throttle per rad of AoA error (0.08 per deg),
   // its integral, damping on the acceleration along the path (per m/s^2, filtered over vdotTau s),
   // the range (idle to MIL, never the afterburner) and the slew rate (per s).  Close to the runway
-  // (main-wheel height): no added power below noAddAgl (50 ft), RETARD to idle over retardTime from
-  // retardAgl (30 ft; airliner auto-throttles retard at ~27 ft), so the flare bleeds the speed.
+  // (main-wheel height): no added power below noAddAgl (50 ft), so a flare is not fought with
+  // power (it used to float 7 s and land 620 m long at full approach speed), and RETARD to idle
+  // over retardTime from retardAgl (10 ft).  An airliner's retard comes at ~27 ft, but its flare
+  // is not limited by a tail: here the 14 deg tail-strike pitch limit caps the flare, and a retard
+  // from 30 ft landed firm (2.6-2.8 m/s against 1.5-2.1 from 10 ft; fdm.test "final").
   apc: { alpha: 13 * D, kp: 4.6, ki: 1.2, kd: 0.03, vdotTau: 0.4, min: 0.03, max: 0.75, rate: 0.3,
     noAddAgl: 50 * 0.3048, retardAgl: 10 * 0.3048, retardTime: 2.0 },
 

@@ -17,7 +17,7 @@ visual.setControls(fdm.state.controls);
 ```
 
 Tests: run `node --import ./sim/tests/node-three.mjs sim/tests/fdm.test.mjs` from the repo root. The
-`--only takeoff,landing` option runs a subset. The suite has 106 checks and takes a few seconds. Each check
+`--only takeoff,landing` option runs a subset. The suite has 125 checks and takes a few seconds. Each check
 prints its value, its band and the reason for the band. The exit code is 1 if any check fails.
 
 | file | contents |
@@ -173,9 +173,16 @@ which is not public.
   * With nose-wheel steering off, the nose wheel casters.
 * **Parking brake.** With the parking brake set, or a pedal brake of 0.5 or more on a stopped wheel,
   the wheel is anchored by a stiff spring and damper. Idle thrust then moves the jet about 1 cm.
-  The anchor lets go when the tyre friction is exceeded (the brakes hold MIL only just, not the
-  afterburner); a parking brake left on then keeps braking like full pedal brakes, so a take-off
-  against it is long (565 m instead of 356 m in full afterburner) and shows `PARKING BRAKE`.
+  The parking brake locks the main wheels (no anti-skid). It holds the jet at half throttle
+  (85 kN: 0.12 m in 15 s) but not at MIL: the thrust, high above the wheels, moves load onto the
+  unbraked nose wheel until the mains slide (0.8 × ~110 kN < 122 kN). A locked wheel that slides
+  grips `skidMu` (0.75) of the surface friction and wears through its tread: `burstSkid` (100 m)
+  of skid at speed (counted in full above 15 m/s, not below 3 m/s) bursts the tyre. A burst tyre
+  runs on its rim, 0.12 m lower, with 0.3 rolling resistance and 0.45 grip, until the next spawn;
+  `TYRE BURST` shows. A full-afterburner take-off on the parking brake bursts the tyres about 110 m
+  into the roll (72 KIAS) and lifts off on the rims after 468 m (357 m without); a landing on it
+  bursts them about 100 m after touchdown and the jet stops on its rims. (It used to brake like
+  full pedals with anti-skid: a take-off skidded 600 m and a landing stopped in 785 m, no damage.)
 * **Nose-wheel steering.** It follows the pedals when `nwsEnable` is on and the nose wheel has weight
   on it. The rate is 60°/s. Full lock is 60° while taxiing; at speed the angle is limited to a 0.35 g
   side load: atan(wheelbase·3.4/v²), which is about 1.2° at 60 kt.
@@ -187,7 +194,8 @@ which is not public.
   little earlier, from about 4.2 m/s, through the strut overload (7 static loads). A 3° path flown
   onto the runway without a flare is 3.6-4.0 m/s: hard, not a crash.
 * **Bounces.** Contacts within 2 s of leaving the ground belong to the same landing: `lastTouchdown`
-  keeps the first contact and counts `bounces`; `sink` and `closing` keep the worst.
+  keeps the first contact and counts `bounces`; `sink` and `closing` keep the worst. In the air the
+  FCS holds the attitude the jet touched down with (see "Ground and takeoff").
 
 ## Fly-by-wire (`fcs.js`, `config.fcs`)
 
@@ -245,11 +253,23 @@ and yaw are inverted together as a 2×2 system.
   throttle in use, so engaging it does not jump.
 * It gives way on the ground, with the gear moving, in the 50° AoA mode, below 30 m/s and with the
   engine out; `state.apc` says when it flies. At touchdown it retards to idle until `input.apc` is
-  cleared (the input layer does that, with the lever following the engine meanwhile).
+  cleared (the input layer does that, with the lever following the engine meanwhile, and no toast).
+* **Flare.** Near the runway (main-wheel height) it adds no power below `noAddAgl` (50 ft): the
+  pilot's flare raises the AoA, and the AoA loop used to answer with power (0.26 -> 0.49), so the
+  jet floated and landed 678 m past the threshold, faster than on the approach. From `retardAgl`
+  (10 ft) it closes the throttle to idle over 2 s: RETARD (`state.apcRetard`, `APC RETARD` on the
+  HMD). A climb back above 50 ft (a balloon, a go-around flown on it) cancels the retard. On the
+  auto-throttle with the test pilot's flare from 46 ft: no throttle rise below 50 ft, retard at
+  9.6 ft, touchdown 333 m past the threshold at 132 KIAS (8 kt below the approach speed), 2.1 m/s.
+  The retard height is lower than an airliner's (~27 ft) because the flare here is capped by the
+  14° tail-strike pitch limit: a retard from 30 ft landed at 2.6-2.8 m/s.
 * Hands off from the 10 km final (140 KIAS, 45 % fuel) it holds 13.0° within 0.01° and 140.4-140.7
-  KIAS down to the runway, touching down 243 m past the threshold at 3.6 m/s (no flare: hard, not a
-  crash). From 160 or 125 KIAS it settles on-speed within 40 s; a turn on the approach moves the
-  speed by about 1 kt.
+  KIAS down to the runway, touching down 243 m past the threshold at 3.65 m/s (nobody flares: hard,
+  not a crash). From 160 or 125 KIAS it settles on-speed within 40 s; a turn on the approach moves
+  the speed by about 1 kt.
+* **Approach spawns.** A spawn in the air with the gear down on a descending path starts with
+  `mass.fuelApproach` (45 %) and the auto-throttle on (`mass.apcApproach`) unless it says otherwise
+  (`fuel`, `apc`), so the gameplay does not depend on fields in the shared spawns.json.
 * Bank compensation 1/cos φ holds the height in turns up to 70° bank, which is 2.9 g. Beyond 70° it
   eases to 0 at knife edge, and cos φ applies inverted.
 * Rolling into a turn adds a 0.35 s lead on the bank rate, because the load factor lags the C\*
@@ -267,8 +287,14 @@ and yaw are inverted together as a 2×2 system.
 * **High-AoA coordination.** A stability-axis roll needs the yaw rate p_s·sin α, and the sideslip
   grows as β̇ = p sin α - r cos α + a_y/V while the yaw lags (gravity adds g sin φ/V as the bank
   grows). Where the rudders cannot build that yaw rate quickly (slow flight, 20-30° α) the command is
-  capped to what the yaw axis already does plus a bounded sideslip build-up (6°, 3/s). Full stick at
-  120 kt and 25° α: 90° of bank in 3.1 s, peak 38°/s, sideslip ≤ 6° (before: 3.4 s, 33°/s).
+  capped to what the yaw axis already does plus the yaw-rate deficit the sideslip room can absorb
+  while the rudders catch up: a braking curve sqrt(2·A·room·cos α), A the yaw acceleration from 70 %
+  of the rudder authority (`rollYawShare`), room the sideslip left to 6°. (A linear 3/s gain on the
+  room let the roll run ahead and stall: 36 -> 15 -> 28°/s, a 63 % fall-back.) Full stick at 125
+  KIAS and 25° α: 30° of bank in 1.3 s, 90° in 3.05 s (the speed sags to 111 KIAS), peak 35°/s,
+  never falling back more than 10 %, sideslip ≤ 5.9°. This is the physical limit: full rudder gives
+  ~11°/s² of yaw acceleration there, so the ~50°/s the roll schedule allows is out of reach (~2.2 s
+  to 90° at 150 kt, ~1.9 s at 180 kt).
 * **Allocation.** Roll and yaw are inverted together; when one surface saturates the other axis is
   solved again for the deflection the saturated one really has. (The joint solution counted on the
   rudders' rolling moment at 10x their travel, and the ailerons wound down to nothing.)
@@ -291,6 +317,15 @@ and yaw are inverted together as a 2×2 system.
 * **After lift-off.** The attitude mode is kept while the stick stays aft. It hands over to the air
   laws when the stick is released, after 10 s, when the gear moves up, or above 230 KCAS. Lift-off
   comes at about 160 KIAS.
+* **Take-off roll or bounce.** Only a real take-off roll enters the take-off law: at least
+  `takeoffRollTime` (3 s) on the wheels and `takeoffRollGain` (5 m/s) faster at lift-off than at
+  the slowest point of the ground contact (a landing roll only slows down). A bounce used to enter
+  it with the stick aft and command the 12° rotation attitude scaled by the stick: a quarter pull
+  at an 11° touchdown asked for ~6° and pushed the nose down (-3°/s) into the next contact. Now a
+  bounce holds the attitude it touched down with (at least the one it left the runway with, at most
+  the 14° tail-strike limit) for up to `bounceHoldTime` (4 s), or until the stick is pushed: the
+  commanded pitch rate is never nose-down, and the main-gear slap-down (q about -16°/s off a hard
+  touchdown) is stopped within 0.4 s.
 * **Stick ratchet.** A pull still held at the hand-over set an attitude; the same stick asks the C\*
   law for g (full aft: the AoA limit). The air law only sees the stick beyond what was held, the
   reference follows the stick down as it is released and fades out over `ratchetTau` (3 s), so the
@@ -372,8 +407,10 @@ All the DESIGN.md fields are present.
 
 * `crashed`, `crashReason`.
 * `warnings` can contain `GEAR`, `PULL UP`, `AOA`, `OVER-G`, `OVERSPEED`, `ENGINE`, `BINGO FUEL`,
-  `PARKING BRAKE` (set, throttle above 0.5, on the ground) and `HARD LANDING` (6 s after a touchdown
-  above 3.05 m/s).
+  `PARKING BRAKE` (set with the throttle above 0.5 on the ground, or with the gear down in the air:
+  a landing on it bursts the tyres), `TYRE BURST` and `HARD LANDING` (6 s after a touchdown above
+  3.05 m/s).
+* `tyreBurst` (any tyre); `wheels[i].burst`.
 
 **Extras, for the HMD and the tests**
 
@@ -383,7 +420,8 @@ All the DESIGN.md fields are present.
 * `lastTouchdown`: `{time, sink, closing, ias, gs, pitch, alpha, wheel, bounces, hard}` of the last
   landing (its first contact; `sink`/`closing` the worst of its bounces).
 * `highAoA`: the 50° AoA mode is selected (`input.highAoA`).
-* `apc`: the auto-throttle is flying the throttle (`input.apc`, the gear down in the air).
+* `apc`: the auto-throttle is flying the throttle (`input.apc`, the gear down in the air);
+  `apcRetard`: it is closing the throttle in the flare (RETARD).
 * `trimThrottle`.
 
 ## Interface notes (additions to DESIGN.md, all backward compatible)
@@ -391,7 +429,8 @@ All the DESIGN.md fields are present.
 **`reset(spawn)`**
 
 * Accepts the spawns.json entries. It also uses `throttle`, `gear` (bool or 0..1), `fuel` (fraction),
-  `fuelKg`, `flight_path_deg` and `apc` (start on the auto-throttle: the 10 km final).
+  `fuelKg`, `flight_path_deg` and `apc` (start on the auto-throttle). An approach spawn (in the air,
+  gear down, descending) defaults to `mass.fuelApproach` and the auto-throttle on.
 * It returns `{throttle, gearDown, apc}`, the values it set up (`apc` only in the air with the gear
   down). The input layer can set its levers to them.
 * **On the ground.** The wheels are put on `heightAt(x, z)` and the struts are settled on the parking
@@ -431,10 +470,15 @@ All the DESIGN.md fields are present.
 | takeoff max A/B (pull at 140 KIAS) | lift-off 161 KIAS after a 357 m roll, 12.1° | T/W 1.06, ~380 m |
 | takeoff MIL, half aft stick | lift-off 162 KIAS, 10.3° (before: 265 KIAS) | a partial pull rotates too |
 | full aft stick through gear up (+2 s) | pitch rate ≤ 6.6°/s in the 1.5 s after the hand-over (before: 23°/s); let go 1 s after gear up: max pitch 13.8°, AoA 11.2° (before: 29° / 21.5°); 0.35 aft held on: +20.6° of pitch in 6 s | a smooth hand-over to C\*, which then answers the stick |
-| max A/B with the parking brake left on | 565 m roll (1.58 × 357 m); warning on the ground only (before: 0.98 ×, warning in the air) | the brake drags once the wheels slide |
-| full stick at 25° AoA, ~111 KIAS | 90° of bank in 3.05 s, peak 37°/s, β ≤ 6.2° (before: 3.38 s, 33°/s) | coordinated within the rudder authority |
+| parking brake at 50 % throttle, 15 s | 0.12 m | locked wheels hold part power |
+| max A/B take-off on the parking brake | tyres burst 108 m into the roll (72 KIAS), lift-off on the rims after 468 m (357 m without), no crash; `PARKING BRAKE` with power on the ground and with the gear down in the air (before: 600 m skid, no damage) | a locked-wheel skid at speed bursts the tyres |
+| landing on the parking brake, 140 KIAS | tyres burst 101 m after touchdown, stopped on the rims after 960 m, no crash (before: stopped in 785 m, no damage) | the same |
+| full stick at 25° AoA, 125 KIAS | 30° of bank in 1.28 s, 90° in 3.05 s, peak 35°/s, fall-back 9.5 % (before: 63 %), β ≤ 5.9° | yaw-limited, no hesitation |
+| keyboard stick (arrow keys through `Input.keyRamp`) | a 0.4 s roll press at 350 KCAS: 9° of bank, 1 s: 120°; a 0.4 s pull at 450 KCAS: 2.5 g, 1.5 s: 8.8 g (before: 18° / 4.9 g) | a tap is a correction, a held key reaches the limits |
 | hands-off final, 140 KCAS / 13° AoA, gear down, 45 % fuel | path within 0.02° of -3° for 10 s (before: 0.23°); +1.9 kt in 20 s | no 1 g bias in the hold |
-| the same on the auto-throttle, to the runway | 13.0° AoA within 0.01°, 140.4-140.7 KIAS; touchdown 243 m past the threshold, 3.6 m/s, then idle | a stable on-speed approach (fixed throttle: 300 kt in 100 s) |
+| the same on the auto-throttle, to the runway | 13.0° AoA within 0.01°, 140.4-140.7 KIAS; touchdown 243 m past the threshold, 3.65 m/s (no flare), then idle | a stable on-speed approach (fixed throttle: 300 kt in 100 s) |
+| the auto-throttle with the test pilot's flare | no throttle rise below 50 ft, RETARD at 9.6 ft; touchdown 333 m past the threshold at 132 KIAS (approach 140), 2.07 m/s (before: 678 m, 1.4 kt faster than the approach) | no float; the flare bleeds the speed |
+| bounce off a 3.5 m/s touchdown with 0.25 aft stick | pitch-rate command never nose-down (before: -3°/s toward 6°); the slap-down stopped in 0.40 s | the take-off law only after a take-off roll |
 | 3° path into the runway without a flare, 146 KCAS | 3.8 m/s first contact, 1 bounce, logged hard, no crash (before: logged 0.54 m/s) | 3.05 m/s hard .. 4.6 m/s collapse |
 | climb, 300 KCAS, MIL, 1.6-3 km | 76.5 m/s (15,000 ft/min) | excess-power estimate 11,000-20,000 ft/min |
 | hands-off level, 350 KCAS, 5,000 m, 60 s | 0.3 m drift | < 30 m |
@@ -460,14 +504,14 @@ All the DESIGN.md fields are present.
 | top speed, acceleration | `engine.milThrust`/`maxThrust`, `milLapse`/`abLapse`/`abMach`, `engine.inlet.loss` (Mach 1.6 cap), `aero.CD0` |
 | turn performance, energy bleed | `aero.K`, `kHighCL` |
 | takeoff and landing speeds | `aero.CL` (table), `aero.flaps.dCL`, `schedules.flapsFullCas`/`flapsUpCas` |
-| rotation | `fcs.takeoffPitch` (12°), `rotateStick` (0.6: raw stick for the full attitude), `rotationRate` (8°/s), `kTheta`, `kiGround`; `aero.Cm_de` (authority); `mass.cg` (nose-wheel share); `takeoffModeTime`/`takeoffModeMaxCas`, `ratchetTau` (the hand-over to C\*) |
-| stick feel | `fcs.cstarUp`/`cstarDown` (g per stick), `cstarUpPA`/`cstarDownPA` (gear down), `stickShapePitch`/`stickShapeRoll` (centre softness), `rollRateMax`, `tauP`/`tauQ`/`tauR`, `pitchJerkShare` (crisp vs damped at low speed) |
+| rotation | `fcs.takeoffPitch` (12°), `rotateStick` (0.6: raw stick for the full attitude), `rotationRate` (8°/s), `kTheta`, `kiGround`; `aero.Cm_de` (authority); `mass.cg` (nose-wheel share); `takeoffModeTime`/`takeoffModeMaxCas`, `ratchetTau` (the hand-over to C\*); `takeoffRollTime`/`takeoffRollGain` (take-off roll vs bounce), `bounceHoldTime` |
+| stick feel | `fcs.cstarUp`/`cstarDown` (g per stick), `cstarUpPA`/`cstarDownPA` (gear down), `stickShapePitch`/`stickShapeRoll` (centre softness), `rollRateMax`, `tauP`/`tauQ`/`tauR`, `pitchJerkShare` (crisp vs damped at low speed); slow-flight roll `rollBetaMax`, `rollYawShare`, `rollCoordMin`; the keyboard ramp is `KEY_*` in `js/input/Input.js` |
 | limits | `fcs.nMax`/`nMin`, `alphaMax`/`alphaMaxHigh`/`alphaMin`, `pitchRateMax`; `limits.overstressG` (crash) |
 | hands-off holds | `fcs.kGamma`/`kiGamma`, `bankCompKnee`/`bankCompLead`/`bankCompRate`, `kPhi`, `bankSnap` |
 | stability feel (FCS off) | `aero.staticMargin`, `Cnbeta`, `Clbeta`, damping derivatives |
-| gear | `gear.main`/`nose` (static compression, stroke, damping), `brakeMu`, `steering.maxAngle`/`lateralAccel`, `retractTime`, `touchdownHardSink`/`touchdownCrashSink`, `bounceTime` |
+| gear | `gear.main`/`nose` (static compression, stroke, damping), `brakeMu`, `steering.maxAngle`/`lateralAccel`, `retractTime`, `touchdownHardSink`/`touchdownCrashSink`, `bounceTime`; parking-brake skid and tyres `skidMu`, `burstSkid`, `burstSpeed`, `burstDrop`, `rimRolling`, `rimMu` |
 | engine response | `engine.spoolUp`/`spoolDown`, `abLightDelay`/`abRateUp`; fuel `tsfcDry`/`tsfcAb` |
-| auto-throttle | `apc.alpha` (on-speed AoA), `kp`/`ki`/`kd` (gains), `vdotTau`, `min`/`max` (throttle range), `rate` (slew) |
+| auto-throttle | `apc.alpha` (on-speed AoA), `kp`/`ki`/`kd` (gains), `vdotTau`, `min`/`max` (throttle range), `rate` (slew), `noAddAgl`/`retardAgl`/`retardTime` (flare); `mass.fuelApproach`/`apcApproach` (approach spawns) |
 | physics rate | `substepHz` (240; keep ≥ 200) |
 
 ## Known limitations

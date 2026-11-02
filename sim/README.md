@@ -76,7 +76,7 @@ The same list is in the sim (F1 or the Controls help button).
 | `Page Up` / `Page Down` | full afterburner / idle |
 | `Y` | auto-throttle on / off: with the gear down in the air it flies the approach AoA (13 deg) with the throttle; any throttle input takes over (on at the 10 km final start) |
 | `B` (hold) | wheel brakes (with `Ctrl` held too: throttle back and brakes) |
-| `Shift`+`B` | parking brake on / off (set at the start) |
+| `Shift`+`B` | parking brake on / off (set at the start); it locks the wheels: a take-off or landing on it bursts the tyres |
 | `G` | landing gear up / down |
 | `S` | speed brake |
 | `A` | high-AoA mode on / off: the AoA limit is 50 deg instead of 25 (HI AOA on the helmet display) |
@@ -149,7 +149,7 @@ shortcuts for itself in a window (`Ctrl`+`W` / `T` / `N`, `Ctrl`+`Tab`, `Ctrl`+`
 | --- | --- |
 | take-off | MIL or afterburner, release the parking brake (`Shift`+`B`); at 150 kt pull back and hold the nose about 10 deg up (on the ground the stick sets the pitch attitude), lift-off at about 160 kt; gear up (`G`) once climbing, then centre the stick: the jet holds the climb (a pull held on keeps the nose coming up) |
 | fly-by-wire | the stick commands g (pitch rate when slow) and roll rate; let go and the jet holds its flight path and bank; the FCS limits AoA to 25 deg and g to +9 / -3 |
-| landing | gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (`Y`) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft); idle and brakes (`B`) after touchdown |
+| landing | gear down, about 140 kt and 13 deg AoA on a 3 deg path: keep the flight path marker in the middle of the bracket beside it (high in the bracket: fast, low: slow) with the throttle, or let the auto-throttle (`Y`) do it; flare gently from about 30 ft (the radar altitude shows beside the marker below 100 ft): the auto-throttle adds no power below 50 ft and closes the throttle from 10 ft (`APC RETARD`), the flare is yours; idle and brakes (`B`) after touchdown |
 | crash | the cause is shown (hard landing, gear up, water, terrain, over-g ...); `R` starts again. A firm touchdown without a flare shows HARD LANDING; above about 15 ft/s (4.6 m/s) the gear collapses |
 
 ## Cameras
@@ -174,11 +174,14 @@ cockpit: airspeed (KIAS) in the box on the left, altitude (ft) on the right with
 altitude below 5,000 ft and the vertical speed, a heading tape on top, the flight-path marker
 (where the jet is going), the waterline (where the nose points), a pitch ladder every 5 deg
 around the flight path (dashed with minus numbers below the horizon, stopping at the glare
-shield), Mach, g (and the peak g), AoA (HI AOA in the 50 deg mode), thrust (MIL and burner; APC
-while the auto-throttle flies it), fuel, gear, parking brake, brakes and speed brake, and the
-warnings of the flight model under the heading tape (PULL UP, OVER G, AOA LIMIT, GEAR, OVERSPEED,
-ENGINE, HARD LANDING, BINGO FUEL, PARKING BRAKE). The heading is magnetic, as on the real display
-and the runway numbers (the map grid heading plus the grid convergence, minus the WMM2025
+shield as seen from the eye, wherever the head is; above about 15 deg AoA the flight path marker
+stops just above it, crossed out), Mach, g (and the peak g), AoA (HI AOA in the 50 deg mode),
+thrust (MIL and burner; APC while the auto-throttle flies it, APC RETARD as it closes the throttle
+in the flare; LVR and an arrow while a HOTAS lever has not picked the throttle up), fuel, gear,
+parking brake, brakes and speed brake, and the warnings of the flight model under the heading
+tape (PULL UP, OVER G, AOA LIMIT, GEAR, OVERSPEED, ENGINE, TYRE BURST, HARD LANDING, BINGO FUEL,
+PARKING BRAKE); messages (toasts) show just below the warnings. The heading is magnetic, as on
+the real display and the runway numbers (the map grid heading plus the grid convergence, minus the WMM2025
 variation of about 5 deg E): lined up on Tel Nof 36 it reads 358. With the gear down in the air an
 AoA bracket stands beside the flight path marker (the marker in its middle: on-speed, 13 deg AoA;
 high: fast; low: slow), a dashed line marks the -3 deg glide path, and below 100 ft the radar
