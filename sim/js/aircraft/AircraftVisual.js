@@ -31,6 +31,7 @@ import { Afterburner } from './Afterburner.js';
 
 const RIG_CONTROLS = ['stick_pitch', 'stick_roll', 'pedals', 'throttle', 'flaps', 'speedbrake', 'gear', 'nws',
   'roll_distance', 'weapon_bays', 'canopy', 'refuel_door', 'gun_door', 'tailhook'];
+const STRUTS = ['nose', 'left', 'right'];
 
 /** A Vector3 that also reads as an array (p[0], p[1], p[2]) for code written against the json. */
 export class InfoPoint extends THREE.Vector3 {}
@@ -98,6 +99,8 @@ export class AircraftVisual {
     this._engine = null;                       // the throttle lagged like the spool (lagThrottle)
     this._gear = 1;
     this._onGround = false;
+    this._ctl = {};                            // setControls: rig values and strut compressions, reused
+    this._comp = {};
     if (scene) scene.add(this.object3d);
   }
 
@@ -146,27 +149,35 @@ export class AircraftVisual {
 
   setControls(c) {
     if (!c || !this.loaded) return;
-    const v = {};
+    // reused every frame (no garbage): RigPlayer.set copies the values, and a key not given this
+    // time holds its last value, as the rig would keep it anyway
+    const v = this._ctl;
     for (const k of RIG_CONTROLS) if (Number.isFinite(c[k])) v[k] = c[k];
     // struts: compression from fully extended -> rig strut_<x> (from the modelled parked pose)
-    const comp = {};
+    const comp = this._comp;
+    // weight on wheels (a strut compressed): the lights choose the taxi beam on the ground
+    let wow = false;
     if (Array.isArray(c.wheels)) {
       for (const w of c.wheels) {
         if (!w) continue;
-        if (Number.isFinite(w.compression)) comp[w.name] = w.compression;
+        if (Number.isFinite(w.compression)) {
+          comp[w.name] = w.compression;
+          if (w.compression > 0.002) wow = true;
+        }
         // nose-wheel angle (rad) when no nws command is given
         if (w.name === 'nose' && Number.isFinite(w.steer) && !Number.isFinite(c.nws)) {
           v.nws = Math.max(-1, Math.min(1, w.steer / this.rig.info.noseSteer.max));
         }
       }
     }
-    if (c.strut) for (const k of ['nose', 'left', 'right']) if (Number.isFinite(c.strut[k])) comp[k] = c.strut[k];
-    // weight on wheels (a strut compressed): the lights choose the taxi beam on the ground
-    if (Array.isArray(c.wheels) || c.strut) {
-      let wow = false;
-      for (const k in comp) if (comp[k] > 0.002) wow = true;
-      this._onGround = wow;
+    if (c.strut) {
+      for (const k of STRUTS) {
+        if (!Number.isFinite(c.strut[k])) continue;
+        comp[k] = c.strut[k];
+        if (c.strut[k] > 0.002) wow = true;
+      }
     }
+    if (Array.isArray(c.wheels) || c.strut) this._onGround = wow;
     for (const g of this.rig.info.gearContacts) {
       if (g.name in comp && g.control) {
         const x = Math.min(g.travel, Math.max(0, comp[g.name])) - g.staticCompression;
