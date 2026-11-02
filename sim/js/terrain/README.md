@@ -227,7 +227,8 @@ extinction at the camera altitude, so standard three.js materials fade like the 
   al. 2006): over the white salt and aragonite floor of the shallows the water is milky
   turquoise, offshore dark blue-green, and from a distance or at grazing angles the reflection
   of the pale sky and the walls makes it blue-grey to steel. The depth follows the distance to
-  the shore (25 m, R8, computed from the heights at load). Refractive index 1.39: F0 0.027.
+  the shore (25 m, R8, computed from the heights at load): a shelf (1.2-7 % by a noise) and,
+  past 600 m out, the drop to the deep basin. Refractive index 1.39: F0 0.027.
 * **Wind** (`windAt(hour)`): the basin's daily cycle (Metzger et al. 2018; Shafir & Alpert 2011):
   calm nights with a weak northerly drainage wind, the calmest hour after sunrise (0.5 m/s at
   07:30: a mirror with glassy patches), a lake breeze from late morning, a southerly valley wind

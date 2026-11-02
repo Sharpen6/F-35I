@@ -233,7 +233,10 @@ void main() {
   float dShore = texture(uLakeData, (vWorldXZ - uLakeBox.xy) * uLakeBox.zw).r;
   dShore = dShore * dShore * 1600.0;
   float shelf = mix(0.012, 0.07, atmoValueNoise(lp / 900.0 + 3.1));
-  float depth = 0.08 + dShore * shelf;
+  // the shelf near the shore, then the drop to the deep basin (100-300 m deep a few hundred metres
+  // out): on its own the gentlest shelf ended 19 m deep at LAKE_MAX_D, and the floor showed through
+  // as pale shoals in the middle of the lake; past 600 m it now falls away (as before within 600 m)
+  float depth = 0.08 + dShore * shelf + max(dShore - 600.0, 0.0) * 0.25;
   vec3 tr = exp(-2.0 * K_ATT * depth);
   float floorA = 0.85 + 0.3 * (atmoValueNoise(lp / 37.0) - 0.5);
   vec3 Rw = R_DEEP * (1.0 - tr) + R_FLOOR * floorA * tr;
