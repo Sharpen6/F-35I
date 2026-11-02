@@ -266,6 +266,10 @@ const OUTPUT_FRAG = /* glsl */`
     if (uNightVision > 0.0) {
       float scot = dot(c, vec3(0.04, 0.45, 0.52));     // rod sensitivity in linear sRGB, roughly
       float k = 0.6 * uNightVision * smoothstep(0.6, 0.02, dot(c, vec3(0.2126, 0.7152, 0.0722)));
+      // self-lit cockpit displays (the PCD, switch LEDs, the kneeboard: js/aircraft/pcd/interior.js
+      // DISPLAY_ALPHA) write alpha 0 into the scene target and keep their colours: they are bright
+      // enough for the cones, and a greyed display reads as a fault
+      k *= step(0.5, texture(tScene, vUv).a);
       c = mix(c, scot * vec3(0.62, 0.78, 1.0), k);
     }
 
