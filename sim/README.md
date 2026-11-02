@@ -155,6 +155,21 @@ looks around. Bindings are kept per controller in the browser's local storage.
   on.
 * **Tower**: the nearest airfield's tower, a long lens following the jet.
 
+<!-- cockpit track (gfx-cockpit): the cockpit graphics module; details in js/aircraft/pcd/README.md -->
+## Cockpit
+
+The player's cockpit is a graphics module (`js/aircraft/Cockpit.js`, `js/aircraft/pcd/`): a live
+panoramic cockpit display (status bar, TSD moving map, FUEL, ENG, ICAWS, EFI, redrawn 4-10 times
+a second from the flight model, its brightness following the exposure); the tub repainted dark
+grey satin with grain, smudges and ambient occlusion, the skin's inner faces painted, the
+display's glow at night; a pass on the canopy glass (dust and scratches catching the sun, the
+display reflected at night). The side-stick and the pedals follow the pilot's inputs. The cockpit
+camera turns the head about the neck, vibrates on the runway, at the touchdown and in the buffet,
+and zooms with the wheel (20-80 deg). `?cockpit=0` shows the glb's cockpit as exported,
+`?shake=0` stops the vibration; `quality` sets the display's resolution and rate and the canopy
+pass. All procedural, no new data (the moving map shows the terrain imagery credited below).
+Design, overridden materials and costs: `js/aircraft/pcd/README.md`.
+
 ## Helmet display
 
 Green symbology as in the F-35's helmet, drawn crisp at the screen's resolution. In the
