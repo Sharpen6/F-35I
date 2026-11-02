@@ -31,6 +31,8 @@
 //      the flare (x1.5 at least), the burner
 //      with night vision on (an orange body, yellow-white diamonds, a red-orange tail; not pink),
 //      the tail light in the blue hour (a point as at night, not a ball).
+//   7. the landscape at night (tests/landscape_checks.mjs): Ashdod's crane lights red, Ein Bokek's
+//      hotels lit as the city's windows, every point light's material on the night rule's contract.
 // Fails on any console error, page error, failed request or failed check. Screenshots and
 // report.json go to /home/claude/simdata/shots/e2e/ (or --out).
 
@@ -40,6 +42,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NIGHT_PROBE } from './night_probe.mjs';
+import { landscapeNightChecks } from './landscape_checks.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -602,6 +605,11 @@ async function main() {
     // outwards (the ball's sprite cut it off, a drop of ~40 in luma after steps of ~20: a kink of ~15)
     check('blue hour: the tail light a point as at night (white core <= 6 px, a soft skirt)', tail && tail.core <= 6 && tail.kink <= 8,
       tail ? `white core ${tail.core} px, half width ${tail.width} px, kink in its skirt ${tail.kink} (steepest step under luma 100: ${tail.step})` : 'not found');
+
+    // =============================================================== 7. the landscape at night
+    // (tests/landscape_checks.mjs; landscape track): the shore's lights on the night rule
+    log('--- the landscape at night: Ashdod\'s cranes, Ein Bokek\'s hotels');
+    await landscapeNightChecks({ S, check, shot, log });
 
     const timing = await S(() => window.__sim.timing());
     const mem = await S(() => window.__sim.gpuMemory());

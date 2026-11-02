@@ -344,7 +344,8 @@ taxiways get concrete at the holding positions and the aprons darker parking sta
   water on their exposed side, concrete crests and quays, cranes with red obstruction lights at
   night. And the Dead Sea's south basin, outside the core whose buildings `Buildings.js` draws:
   the hotels of Ein Bokek and Hamei Zohar, Neve Zohar and the Dead Sea Works at Sdom as blocks
-  (balcony rows and windows, lit at night). Within 20 / 32 / 45 km (low / medium / high), one
+  (balcony rows and windows, lit at night as the city's windows). Within 20 / 32 / 45 km (low /
+  medium / high), the basin's blocks within 45 km on every tier (they show without a fade), one
   draw call per 8 km area, and one each for its white water and its night lights where it has
   them.
 

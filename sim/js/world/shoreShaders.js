@@ -7,8 +7,10 @@
 // sides (blended over the terrain's water, which is drawn first).
 //
 // Light and haze are the terrain's (atmoSunIrradianceAt with the cumulus shadows, uAmbient, the
-// ground bounce, atmoAerial), and every vertex is lowered with the earth's curvature like the
-// terrain's, so a breakwater and the sea around it fade alike and stay together far away.
+// ground bounce, basinAerial: atmoAerial, with the Dead Sea basin's haze below sea level as the
+// ground there has it, js/terrain/lakeShaders.js BASIN_HAZE_GLSL), and every vertex is lowered with
+// the earth's curvature like the terrain's, so a breakwater and the sea around it fade alike and
+// stay together far away.
 //
 // The armour stones are 3D cells (about 1.8 m) in the mesh's own coordinates: a stone's tone,
 // the dark gaps between stones and a facet per stone that catches the sun or not. Once a stone
@@ -17,9 +19,14 @@
 // The Dead Sea's blocks (facade kind; vExp carries the style: 1 hotel, 0.5 house, 0 shed): floors
 // of 3.3 m, hotels with a balcony slab and a recessed window band per floor, houses with
 // windows, sheds with vertical cladding ribs; all fade to their mean before they alias. At night
-// a share of the windows is lit (uShore.w: the buildings' share for the hour times the darkness).
+// a share of the windows is lit (uShore.w: the city's share for the hour), each as bright as a
+// city window by the night rule (uWindowL, js/env/README.md "Lights at night"), and where they
+// make most of a pixel's light it carries their mark as a light (js/env/emitters.js), as the
+// city's facades do (buildingShaders.js).
 
 import { ATMOSPHERE_CORE, ATMOSPHERE_PARS } from '../env/atmosphereGLSL.js';
+import { EMITTER_GLSL } from '../env/emitters.js';
+import { BASIN_HAZE_GLSL } from '../terrain/lakeShaders.js';
 
 // surface kinds (aCol.a * 255), Shore.js
 export const KIND = { rubble: 0, crest: 1, deck: 2, wall: 3, steel: 4, panel: 5, dark: 6, facade: 7, roof: 8 };
@@ -92,8 +99,11 @@ export const SHORE_FRAG = /* glsl */ `
 #endif
 ${ATMOSPHERE_PARS}
 ${SAFE_H}
+${BASIN_HAZE_GLSL}
+${EMITTER_GLSL}
 
-uniform vec4 uShore;          // albedo gain (the terrain's), fine detail on (1) / off (0), sea state (0 calm .. 1), share of windows lit (0 by day)
+uniform vec4 uShore;          // albedo gain (the terrain's), fine detail on (1) / off (0), sea state (0 calm .. 1), share of windows lit for the hour
+uniform float uWindowL;       // a lit window's radiance (Buildings.js WINDOW_CD by the night rule; 0 by day)
 
 varying vec3 vRel;
 varying float vH;
@@ -287,13 +297,14 @@ void main() {
       alb *= 1.0 - 0.1 * rib * (1.0 - smoothstep(0.03, 0.08, pxH));
     }
     alb *= 0.92 + 0.16 * hash13(vec3(floor(vLoc.xz / 37.0), 3.3));
-    // lit windows at night: the buildings' window radiance (0.014), uShore.w of them lit (the
-    // buildings' share for the hour times the darkness), warm or cool white; far off their mean
-    if (uShore.w > 0.0 && glass > 0.0) {
+    // lit windows at night, as the city's: a lit window's radiance by the night rule (uWindowL,
+    // 0 by day), uShore.w of them lit (the city's share for the hour), warm or cool white; far off
+    // their mean
+    if (uWindowL > 0.0 && glass > 0.0) {
       float hw = hash13(vec3(wi, fl, floor(vLoc.x * 0.01 + vLoc.z * 0.013)));
       float on = mix(uShore.w, step(hw, uShore.w), kW);
       vec3 tint = mix(vec3(1.0, 0.72, 0.42), vec3(0.85, 0.9, 1.0), mix(0.25, step(0.75, fract(hw * 13.7)), kW));
-      emit = 0.014 * tint * on * glass;
+      emit = uWindowL * tint * on * glass;
     }
     f0 = 0.02 + 0.03 * glass;
     rough = mix(0.8, 0.2, glass);
@@ -328,8 +339,13 @@ void main() {
   radiance = mix(radiance, foamR, clamp(foam, 0.0, 1.0) * 0.9);
   radiance += emit;
 
-  vec3 color = atmoAerial(radiance, V, dist, atmoSafeH(vH));
-  gl_FragColor = vec4(color, 1.0);
+  // the haze: the basin's below sea level (the ground and the lake round the Dead Sea's blocks
+  // have it), the same as atmoAerial above
+  vec3 color = basinAerial(radiance, V, dist, atmoSafeH(vH));
+  // the lit windows' share of the pixel's light: where they make most of it, the pixel is a light
+  // (js/env/emitters.js: Post.js keeps its hue), as the city's facades; by day a surface
+  float lightShare = smoothstep(0.35, 0.8, max(emit.r, max(emit.g, emit.b)) / max(max(radiance.r, max(radiance.g, radiance.b)), 1e-12));
+  gl_FragColor = vec4(color, lightShare > 0.0 ? emitterAlpha(lightShare) : 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
