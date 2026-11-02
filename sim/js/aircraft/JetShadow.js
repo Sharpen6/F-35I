@@ -172,14 +172,20 @@ void main() {
   #include <colorspace_fragment>
 }`;
 
+// drawJet's traversal (a function made once: on high the map can be redrawn every frame)
+let _swapList = null, _swapMat = null;
+function swapVisit(o) {
+  if (!o.isMesh && !o.isSprite && !o.isPoints && !o.isLine) return;
+  const m = o.material;
+  const cast = o.isMesh && m && !Array.isArray(m) && !m.transparent && m.depthWrite !== false && m.colorWrite !== false && !m.isShaderMaterial;
+  if (cast) { _swapList.push(o, m); o.material = _swapMat; } else { _swapList.push(o, null); o.visible = false; }
+}
+
 /** Renders the jet's opaque meshes with one material into a target (CockpitShadow's swap). */
 function drawJet(renderer, root, target, camera, material, swap, clearAlpha) {
-  root.traverseVisible((o) => {
-    if (!o.isMesh && !o.isSprite && !o.isPoints && !o.isLine) return;
-    const m = o.material;
-    const cast = o.isMesh && m && !Array.isArray(m) && !m.transparent && m.depthWrite !== false && m.colorWrite !== false && !m.isShaderMaterial;
-    if (cast) { swap.push(o, m); o.material = material; } else { swap.push(o, null); o.visible = false; }
-  });
+  _swapList = swap; _swapMat = material;
+  root.traverseVisible(swapVisit);
+  _swapList = null; _swapMat = null;
   const prevTarget = renderer.getRenderTarget(), prevAuto = renderer.autoClear, prevShadow = renderer.shadowMap.enabled;
   const prevColor = renderer.getClearColor(_clear), prevAlpha = renderer.getClearAlpha();
   renderer.shadowMap.enabled = false;
@@ -331,6 +337,7 @@ export class JetShadow {
         this.groundU.uAO.value = this.aoTarget.texture;
         this.groundU.uAOScale.value.set(GROUND.aoHeight, Math.log2(n / 256));
         this._aoSigN = -1;
+        this._aoAge = Infinity;                       // a new (empty) map: drawn on the next frame
       }
       this._age = Infinity;
     }
@@ -378,9 +385,9 @@ export class JetShadow {
 
   /** The rig's state as a vector: any change redraws the maps. */
   _signature(out) {
-    const c = this.visual._ctl || {};
+    const c = this.visual._ctl || NO_CTL;
     let n = 0;
-    for (const k of SIG_KEYS) out[n++] = Number.isFinite(c[k]) ? c[k] : 0;
+    for (let i = 0; i < SIG_KEYS.length; i++) { const v = c[SIG_KEYS[i]]; out[n++] = Number.isFinite(v) ? v : 0; }
     out[n++] = this.visual._nozzleOpen || 0;
     return n;
   }
@@ -428,7 +435,7 @@ export class JetShadow {
       if (this._age === Infinity || ((turned || moved) && this._age >= Q.minAge) || this._age > 2) {
         this._render(renderer, sunB);
         this._sunBody.copy(sunB);
-        this._sig.set(sig.subarray(0, n));
+        this._sig.set(sig);                                   // (all 64: no view allocated; n says how many count)
         this._sigN = n;
         this._age = 0;
       }
@@ -440,7 +447,7 @@ export class JetShadow {
     const aoMoved = this._aoSigN < 0 || this._changed(sig, n, this._aoSig, this._aoSigN, 0.01);
     if (aoMoved && this._aoAge > 0.5) {
       this._renderAO(renderer);
-      this._aoSig.set(sig.subarray(0, n));
+      this._aoSig.set(sig);
       this._aoSigN = n;
       this._aoAge = 0;
     }
@@ -463,10 +470,12 @@ export class JetShadow {
     y.normalize();
     const x = _v4.crossVectors(y, z);
     const c = box.getCenter(_vc);
-    let i = 0;
-    for (const px of [box.min.x, box.max.x]) for (const py of [box.min.y, box.max.y]) for (const pz of [box.min.z, box.max.z]) _c[i++].set(px, py, pz).sub(c);
     let ex = 0, ey = 0, ez = 0;
-    for (const p of _c) { ex = Math.max(ex, Math.abs(p.dot(x))); ey = Math.max(ey, Math.abs(p.dot(y))); ez = Math.max(ez, Math.abs(p.dot(z))); }
+    for (let i = 0; i < 8; i++) {
+      // the box's corners about its centre, along the map's axes
+      const p = _c[i].set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).sub(c);
+      ex = Math.max(ex, Math.abs(p.dot(x))); ey = Math.max(ey, Math.abs(p.dot(y))); ez = Math.max(ez, Math.abs(p.dot(z)));
+    }
     const e = Math.max(ex, ey);                    // square texels
     const D = 30;
     cam.left = -e; cam.right = e; cam.bottom = -e; cam.top = e;
@@ -604,6 +613,7 @@ const SIG_KEYS = ['stick_pitch', 'stick_roll', 'pedals', 'flaps', 'speedbrake', 
 const _box = new THREE.Box3();
 const _vc = new THREE.Vector3();
 const _sigTmp = new Float64Array(64);
+const NO_CTL = Object.freeze({});
 
 /** The object and all its parents visible (the e2e and some views hide the jet). */
 function visibleChain(o) {

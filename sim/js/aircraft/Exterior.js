@@ -31,6 +31,9 @@ export class Exterior {
     this.jet = null;
     this.on = false;
     this._noCast = new Set();                // meshes we took out of the scene's shadow map
+    this._noCastVisit = (o) => {             // (made once: the traversal runs every frame)
+      if (o.isMesh && o.castShadow) { o.castShadow = false; this._noCast.add(o); }
+    };
   }
 
   setQuality(q) {
@@ -62,9 +65,7 @@ export class Exterior {
       return;
     }
     // every frame: the environment sets castShadow again when the jet's mesh count changes
-    v.root.traverse((o) => {
-      if (o.isMesh && o.castShadow) { o.castShadow = false; this._noCast.add(o); }
-    });
+    v.root.traverse(this._noCastVisit);
   }
 
   /** For tests and the bench. */
