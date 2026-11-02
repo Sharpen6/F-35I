@@ -14,32 +14,45 @@
 // compressed far below its real ratio to the sky (a core several times brighter than the sky), so
 // a transparent flame would come out as orange + blue sky = a pale, whitish puff, worst when seen
 // along its length. Hiding the sky in proportion keeps the core a saturated orange-yellow, and the
-// faint edges stay nearly transparent. The blue lip is fainter by day too.
+// faint edges stay nearly transparent. The blue lip is fainter by day too. Day and night (uDay) come
+// from the sky's light level (fxshared fxEnv: the sun's elevation), not from the exposure, so the
+// look changes at the same sun elevation whatever exposure meter the Environment uses: the day look
+// down to the sun ~1.5 deg up, the night look from ~3 deg below the horizon.
 //
 // Brightness and the camera's exposure: the flame is a light source of fixed radiance, but the sim's
 // auto exposure (0.9 at noon, up to 40 at night) would turn it into a blown-out white blob at dusk
-// and night. As a camera exposing for the scene but not blind to a bright flame would, the plume and
-// the throat glow are written as display brightness that grows only with the 4th root of the
-// exposure (uExpComp = (exposure / 0.93)^0.25 / exposure), read from the renderer when drawn.
+// and night. As a camera exposing for the scene but not blind to a bright flame would, the flame's
+// display brightness (radiance x exposure) grows only with the 4th root of the exposure (uDisp =
+// (exposure / noon exposure)^0.25), and then goes through a hue-preserving shoulder (uKnee, uCap):
+// the brightest channel rolls off towards uCap and the others keep their ratio to it, so the core
+// seen end-on (the whole plume and the throat glow behind it, summed) lands near a saturated
+// (240, 205, 140) at dusk and night instead of clipping to white in every channel.
 //
-// The throat glow (a disc inside the nozzle, seen from behind through the petals): engine heat
-// (a dull red at idle and an orange at MIL that only the dark shows) plus the burner (white-hot).
+// The throat glow (inside the nozzle, seen from behind through the petals): engine heat (a dull red
+// at idle and an orange at MIL that only the dark shows) plus the burner (a hot yellow-orange). With
+// the burner lit it is part of the plume shader (rays that pass the exit and the throat see it
+// through the flame, before the shoulder); without it, a small additive disc at the throat.
 // The nozzle petals are a morph target driven by AircraftVisual (open at idle and in burner).
+//
+// Fog: three's scene fog (fxshared FOG_PARS_GLSL), as the jet's own materials get it.
 //
 // Frame: everything is built in the BODY frame (+Z aft); `exit` is the nozzle exit centre.
 
 import * as THREE from 'three';
-import { fxExposure } from './fxshared.js';
+import { fxExposure, fxEnv, fogUniforms, FOG_PARS_GLSL } from './fxshared.js';
 
 const PLUME_VERT = /* glsl */`
   #include <common>
+  #include <fog_pars_vertex>
   #include <logdepthbuf_pars_vertex>
   uniform vec3 uScale;         // the mesh's scale: unit cylinder -> metres
   varying vec3 vLocal;
   void main() {
     vLocal = position * uScale;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
     #include <logdepthbuf_vertex>
+    #include <fog_vertex>
   }`;
 
 const PLUME_FRAG = /* glsl */`
@@ -53,14 +66,20 @@ const PLUME_FRAG = /* glsl */`
   uniform float uAb;          // 0..1
   uniform float uTime;
   uniform float uGain;        // brightness (burner fill)
-  uniform float uExpComp;     // exposure compensation (see the header)
-  uniform float uDay;         // 1 against a daylight sky, 0 at night (from the exposure)
-  uniform vec3 uSat;          // radiance each channel saturates at (display, linear)
+  uniform float uDisp;        // display gain: (exposure / noon exposure)^0.25 (see the header)
+  uniform float uInvExp;      // 1 / exposure: display brightness -> scene radiance
+  uniform float uKnee;        // display brightness where the hue-preserving shoulder starts
+  uniform float uCap;         // ... and the brightness it rolls off towards
+  uniform float uDay;         // 1 against a daylight sky, 0 at night (fxEnv light level)
+  uniform vec3 uSat;          // brightness each channel saturates at (display, linear, at noon)
+  uniform vec3 uThroat;       // throat plane z (m, < 0: inside the nozzle), throat radius, exit radius
+  uniform vec3 uGlow;         // throat glow (display, linear, at noon): engine heat + burner
   uniform float uKappa;       // opacity per unit of integrated luminance (night)
   uniform float uKappaDay;    // the same by day (see the header)
   uniform float uSpacing;     // shock-cell spacing (m)
   uniform int uSteps;
   varying vec3 vLocal;
+  ${FOG_PARS_GLSL}
 
   float hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
   float vnoise(vec3 x) {
@@ -110,6 +129,28 @@ const PLUME_FRAG = /* glsl */`
     return col;
   }
 
+  // the throat glow: a soft disc on the throat plane inside the nozzle, seen along rays that pass
+  // the nozzle exit and the throat (the inside of the nozzle in between is a convex frustum)
+  vec3 throatGlow(vec3 ro, vec3 rd) {
+    if (rd.z > -1e-4) return vec3(0.0);
+    float te = -ro.z / rd.z;
+    if (te < 0.0) return vec3(0.0);
+    float tt = (uThroat.x - ro.z) / rd.z;
+    float re = length(ro.xy + rd.xy * te) / uThroat.z;
+    float rt = length(ro.xy + rd.xy * tt) / uThroat.y;
+    if (re > 1.0 || rt > 1.0) return vec3(0.0);
+    return uGlow * exp(-rt * rt * 2.5) * (1.0 - smoothstep(0.85, 1.0, rt));
+  }
+
+  // hue-preserving shoulder on the display brightness: the brightest channel rolls off from uKnee
+  // towards uCap, the others keep their ratio to it (no clipping of all three to white)
+  vec3 shoulder(vec3 d) {
+    float m = max(d.r, max(d.g, d.b));
+    if (m <= uKnee) return d;
+    float w = max(uCap - uKnee, 1e-3);
+    return d * (uKnee + w * (1.0 - exp(-(m - uKnee) / w))) / m;
+  }
+
   void main() {
     #include <logdepthbuf_fragment>
     // ray from the camera through this fragment, clipped to the bounding cylinder
@@ -141,42 +182,71 @@ const PLUME_FRAG = /* glsl */`
     }
     acc *= dt * uGain;
     float alpha = 1.0 - exp(-mix(uKappa, uKappaDay, uDay) * dot(acc, vec3(0.2126, 0.7152, 0.0722)));
-    vec3 col = uSat * (vec3(1.0) - exp(-acc / uSat)) * uExpComp;
+    vec3 flame = uSat * (vec3(1.0) - exp(-acc / uSat));
+    // the throat glow seen through the flame: summed before the shoulder, so the two never add up
+    // to white
+    flame += throatGlow(ro, rd) * (1.0 - alpha);
+    vec3 col = shoulder(flame * uDisp) * uInvExp;
     gl_FragColor = vec4(col, alpha);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    gl_FragColor.rgb = fxFog(gl_FragColor.rgb, alpha);
   }`;
 
 const GLOW_VERT = /* glsl */`
   #include <common>
+  #include <fog_pars_vertex>
   #include <logdepthbuf_pars_vertex>
   varying vec2 vUv;
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
     #include <logdepthbuf_vertex>
+    #include <fog_vertex>
   }`;
 
 const GLOW_FRAG = /* glsl */`
   #include <common>
   #include <logdepthbuf_pars_fragment>
-  uniform vec3 uColour;       // display-referred
-  uniform float uExpComp;
+  uniform vec3 uColour;       // display-referred (at noon)
+  uniform float uDisp;
+  uniform float uInvExp;
   varying vec2 vUv;
+  ${FOG_PARS_GLSL}
   void main() {
     #include <logdepthbuf_fragment>
     float r = length(vUv - 0.5) * 2.0;
     float g = exp(-r * r * 2.5) * (1.0 - smoothstep(0.85, 1.0, r));
-    gl_FragColor = vec4(uColour * g * uExpComp, 1.0);
+    gl_FragColor = vec4(uColour * g * uDisp * uInvExp, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    gl_FragColor.rgb = fxFog(gl_FragColor.rgb, 0.0);
   }`;
 
-/** Exposure compensation: display brightness grows with exposure^0.25 (1 at the noon 0.93). */
-export function flameExposureComp(exposure) {
+/**
+ * Display gain of the flame for the exposure: its display brightness grows with the exposure's 4th
+ * root, 1 at the exposure meter's noon value (fxEnv.noonExposure).
+ */
+export function flameDisplayGain(exposure, noon = fxEnv.noonExposure) {
   const e = Math.max(0.05, exposure || 1);
-  return Math.pow(e / 0.93, 0.25) / e;
+  return Math.pow(e / Math.max(0.05, noon || 0.93), 0.25);
 }
+
+/** Exposure compensation (scene radiance per display brightness): flameDisplayGain / exposure. */
+export function flameExposureComp(exposure, noon = fxEnv.noonExposure) {
+  return flameDisplayGain(exposure, noon) / Math.max(0.05, exposure || 1);
+}
+
+/** The flame's day look (1) against its night look (0) for the sky's light level (log10 lux). */
+export function flameDayLook(logLux) {
+  return THREE.MathUtils.smoothstep(logLux, 1.5, 3.3);
+}
+
+/** Saturation colour of the flame and hue of the burner's throat glow (display, linear, at noon). */
+const FLAME_SAT = [1.0, 0.44, 0.11];
+const BURNER_GLOW = [1.0, 0.42, 0.10];
+const HEAT_GLOW = [1.0, 0.28, 0.06];
 
 export class Afterburner {
   /**
@@ -191,25 +261,36 @@ export class Afterburner {
     this.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis);
     this.maxLen = 5.0;                 // bounding length at full burner (the faint tail at night)
     this.r0 = nozzle.radiusAB || 0.56;
+    this.rMil = nozzle.radius || 0.47;  // exit radius with the petals at the MIL position
     this.rMax = this.r0 * 1.15;
     this.steps = 32;
+    // the hue-preserving shoulder (display brightness, see the header): a lighting setup that wants
+    // more of the core in its bloom raises cap
+    this.shoulder = { knee: 0.75, cap: 1.2 };
     // bounding cylinder (z 0..1, scaled to the plume length), drawn from the inside so the
     // shader runs with the camera in the plume too
     const geo = new THREE.CylinderGeometry(1, 1, 1, 24, 1, false);
     geo.rotateX(Math.PI / 2);          // axis along +Z
     geo.translate(0, 0, 0.5);
-    // (the plume starts 2 cm behind the exit plane: no z-fight with the petal tips)
+    // (the plume starts 2 cm behind the exit plane: no z-fight with the petal tips; the throat glow
+    // sits 2 cm downstream of the throat, in the plume's frame 0.02 m further)
+    const throatZ = nozzle.throat ? (nozzle.throat[2] - nozzle.exit[2]) : -0.4;
+    const throatR = nozzle.throatRadius || 0.4;
     this.uniforms = {
+      ...fogUniforms(),
       uCamLocal: { value: new THREE.Vector3() },
       uLen: { value: 4.0 }, uCore: { value: 3.0 }, uR0: { value: this.r0 }, uRmax: { value: this.rMax },
       uAb: { value: 0 }, uTime: { value: 0 }, uGain: { value: 1.0 }, uScale: { value: new THREE.Vector3(1, 1, 1) },
-      uSat: { value: new THREE.Vector3(1.0, 0.56, 0.20) }, uKappa: { value: 0.35 }, uKappaDay: { value: 2.0 },
-      uSpacing: { value: 0.8 }, uSteps: { value: this.steps }, uExpComp: { value: 1 }, uDay: { value: 1 },
+      uSat: { value: new THREE.Vector3().fromArray(FLAME_SAT) }, uKappa: { value: 0.35 }, uKappaDay: { value: 2.0 },
+      uSpacing: { value: 0.8 }, uSteps: { value: this.steps }, uDay: { value: 1 },
+      uDisp: { value: 1 }, uInvExp: { value: 1 }, uKnee: { value: this.shoulder.knee }, uCap: { value: this.shoulder.cap },
+      uThroat: { value: new THREE.Vector3(throatZ, throatR * 1.05, this.r0) },
+      uGlow: { value: new THREE.Vector3() },
     };
     // premultiplied "over": the tone-mapped flame colour + the background * (1 - opacity)
     this.plumeMat = new THREE.ShaderMaterial({
       name: 'F35_AB_Plume', uniforms: this.uniforms, vertexShader: PLUME_VERT, fragmentShader: PLUME_FRAG,
-      transparent: true, depthWrite: false, side: THREE.BackSide, toneMapped: true,
+      transparent: true, depthWrite: false, side: THREE.BackSide, toneMapped: true, fog: true,
       blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
       blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
       blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
@@ -220,20 +301,24 @@ export class Afterburner {
     this.plume.castShadow = false;
     this.plume.receiveShadow = false;
     this.plume.visible = false;
+    // brightness from the exposure the frame is drawn with, the day look from the light level
     this.plume.onBeforeRender = (renderer) => {
-      const e = fxExposure.get(renderer);
-      this.uniforms.uExpComp.value = flameExposureComp(e);
-      this.uniforms.uDay.value = 1 - THREE.MathUtils.smoothstep(e, 2, 8);
+      const u = this.uniforms;
+      const e = Math.max(0.05, fxExposure.get(renderer));
+      u.uDisp.value = flameDisplayGain(e);
+      u.uInvExp.value = 1 / e;
+      u.uKnee.value = this.shoulder.knee;
+      u.uCap.value = Math.max(this.shoulder.cap, this.shoulder.knee + 0.01);
+      u.uDay.value = flameDayLook(fxEnv.logLux);
     };
     this.group.add(this.plume);
-    // throat glow, a little inside the exit, facing aft
-    const throatZ = nozzle.throat ? (nozzle.throat[2] - nozzle.exit[2]) : -0.4;
-    this.glowUniforms = { uColour: { value: new THREE.Color(0, 0, 0) }, uExpComp: { value: 1 } };
+    // throat glow without the burner (engine heat), a little inside the exit, facing aft
+    this.glowUniforms = { ...fogUniforms(), uColour: { value: new THREE.Color(0, 0, 0) }, uDisp: { value: 1 }, uInvExp: { value: 1 } };
     this.glow = new THREE.Mesh(
-      new THREE.CircleGeometry((nozzle.throatRadius || 0.4) * 1.05, 32),
+      new THREE.CircleGeometry(throatR * 1.05, 32),
       new THREE.ShaderMaterial({
         name: 'F35_Nozzle_Glow', uniforms: this.glowUniforms, vertexShader: GLOW_VERT, fragmentShader: GLOW_FRAG,
-        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: true,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: true, fog: true,
       }));
     this.glow.name = 'Nozzle_Glow';
     this.glow.position.set(0, 0, throatZ + 0.02);
@@ -241,11 +326,14 @@ export class Afterburner {
     this.glow.castShadow = false;
     this.glow.receiveShadow = false;
     this.glow.onBeforeRender = (renderer) => {
-      this.glowUniforms.uExpComp.value = flameExposureComp(fxExposure.get(renderer));
+      const e = Math.max(0.05, fxExposure.get(renderer));
+      this.glowUniforms.uDisp.value = flameDisplayGain(e);
+      this.glowUniforms.uInvExp.value = 1 / e;
     };
     this.group.add(this.glow);
     this.ab = 0;
     this.throttle = 0;
+    this.open = 0;
     this.time = 0;
     this._inv = new THREE.Matrix4();
     this._cam = new THREE.Vector3();
@@ -257,10 +345,14 @@ export class Afterburner {
     this.uniforms.uSteps.value = this.steps;
   }
 
-  /** ab 0..1 (afterburner), throttle 0..1 (0.75 MIL), for the throat glow. */
-  set(ab, throttle) {
+  /**
+   * ab 0..1 (afterburner); throttle 0..1 (0.75 MIL; AircraftVisual lags it like the engine's spool)
+   * for the throat glow; open 0..1, the petals' AB_Open weight (the exit the glow is seen through).
+   */
+  set(ab, throttle, open) {
     this.ab = Math.min(1, Math.max(0, ab || 0));
     if (Number.isFinite(throttle)) this.throttle = throttle;
+    if (Number.isFinite(open)) this.open = Math.min(1, Math.max(0, open));
   }
 
   update(dt, camera) {
@@ -269,34 +361,39 @@ export class Afterburner {
     const on = ab > 0.005;
     this.plume.visible = on;
     const u = this.uniforms;
-    if (on) {
-      // visible core 1.4 m at light-off to 3.2 m at full burner; the bounding volume a little longer
-      const core = 1.4 + 1.8 * Math.pow(ab, 0.8);
-      const len = Math.min(this.maxLen, core * 1.3);
-      this.plume.scale.set(this.rMax, this.rMax, len);
-      u.uScale.value.copy(this.plume.scale);
-      u.uLen.value = len;
-      u.uCore.value = core;
-      u.uAb.value = ab;
-      u.uTime.value = this.time % 1000;
-      u.uGain.value = 0.35 + 0.65 * Math.pow(ab, 0.7);
-      u.uSpacing.value = 0.72 + 0.12 * ab;              // shock cells stretch a little with pressure ratio
-      if (camera) {
-        // camera in the plume frame (unscaled: the group's frame, metres)
-        this.group.updateWorldMatrix(true, false);
-        this._inv.copy(this.group.matrixWorld).invert();
-        camera.getWorldPosition(this._cam);
-        u.uCamLocal.value.copy(this._cam).applyMatrix4(this._inv);
-      }
-    }
-    // throat glow (display-referred): engine heat that only the dark shows, plus the burner
+    // throat glow (display, at noon): engine heat that only the dark shows (faint by day), plus the
+    // burner's hot yellow-orange
     const thr = Math.min(1, Math.max(0, this.throttle));
-    const heat = 0.012 + 0.10 * Math.pow(Math.min(thr, 0.75) / 0.75, 2);
-    const c = this.glowUniforms.uColour.value;
-    c.setRGB(1.0, 0.28, 0.06).multiplyScalar(heat);
-    if (on) {
-      const k = 0.55 * Math.pow(ab, 0.7);
-      c.r += 1.0 * k; c.g += 0.55 * k; c.b += 0.20 * k;
+    const heat = (0.012 + 0.10 * Math.pow(Math.min(thr, 0.75) / 0.75, 2)) * (0.15 + 0.85 * fxEnv.darkness);
+    const k = on ? 0.55 * Math.pow(ab, 0.7) : 0;
+    const gr = HEAT_GLOW[0] * heat + BURNER_GLOW[0] * k;
+    const gg = HEAT_GLOW[1] * heat + BURNER_GLOW[1] * k;
+    const gb = HEAT_GLOW[2] * heat + BURNER_GLOW[2] * k;
+    // with the burner lit the plume shader draws the glow (behind the flame, under the shoulder)
+    this.glow.visible = !on;
+    if (!on) { this.glowUniforms.uColour.value.setRGB(gr, gg, gb); return; }
+    u.uGlow.value.set(gr, gg, gb);
+    u.uThroat.value.z = this.rMil + (this.r0 - this.rMil) * Math.max(this.open, ab);
+    // visible core 1.4 m at light-off to 3.2 m at full burner; the bounding volume a little longer
+    const core = 1.4 + 1.8 * Math.pow(ab, 0.8);
+    const len = Math.min(this.maxLen, core * 1.3);
+    this.plume.scale.set(this.rMax, this.rMax, len);
+    u.uScale.value.copy(this.plume.scale);
+    u.uLen.value = len;
+    u.uCore.value = core;
+    u.uAb.value = ab;
+    u.uTime.value = this.time % 1000;
+    u.uGain.value = 0.35 + 0.65 * Math.pow(ab, 0.7);
+    u.uSpacing.value = 0.72 + 0.12 * ab;              // shock cells stretch a little with pressure ratio
+    if (camera) {
+      // camera in the plume frame (unscaled: the group's frame, metres)
+      this.group.updateWorldMatrix(true, false);
+      this._inv.copy(this.group.matrixWorld).invert();
+      camera.getWorldPosition(this._cam);
+      u.uCamLocal.value.copy(this._cam).applyMatrix4(this._inv);
     }
   }
+
+  /** The meshes with shader programs of their own (AircraftFX compiles them before first use). */
+  effectMeshes() { return [this.plume, this.glow]; }
 }
