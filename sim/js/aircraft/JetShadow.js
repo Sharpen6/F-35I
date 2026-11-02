@@ -31,7 +31,8 @@ import * as THREE from 'three';
  * the cockpit's map, pcd/shadow.js), the shortest time between redraws (s), the shortest time
  * between redraws for moving parts (s: the control surfaces and the nozzle move a little all the
  * time), the filter radius (texels), the occlusion map's size, ground grid cells per side, the
- * ground pass's taps.
+ * ground pass's taps (8 on every tier: one program, so a quality change in flight builds none;
+ * the pass covers only the ground under the jet and its shadow).
  *
  * Why the redraw rules: each redraw is a depth pass of the whole jet (~190 draws, ~320k
  * triangles); redrawn for every 1e-3 of the lagged throttle and the stick, the map was drawn
@@ -40,7 +41,7 @@ import * as THREE from 'three';
  */
 export const JET_SHADOW_QUALITY = {
   low: { size: 0 },
-  medium: { size: 1024, turn: 0.0018, minAge: 0.05, partAge: 0.05, kernel: 1.4, ao: 128, grid: 16, taps: 4 },
+  medium: { size: 1024, turn: 0.0018, minAge: 0.05, partAge: 0.05, kernel: 1.4, ao: 128, grid: 16, taps: 8 },
   high: { size: 2048, turn: 0.0017, minAge: 0, partAge: 0.05, kernel: 1.6, ao: 256, grid: 24, taps: 8 },
 };
 
@@ -250,6 +251,9 @@ export class JetShadow {
     this.active = false;
     this.lastCalls = 0;
     this._swap = [];
+    // the 1x1 depth texture bound while there is no map: the skin's own (exteriorUniforms), reused
+    const ph = this.U.uF35Shadow.value;
+    this._ph = ph && ph.isDepthTexture && ph.image && ph.image.width === 1 ? ph : null;
     this._age = Infinity;
     this._aoAge = Infinity;
     this._sunBody = new THREE.Vector3();
@@ -274,6 +278,8 @@ export class JetShadow {
     // the ground plane in the body frame: the lowest tyre bottom (fully extended)
     const gc = (visual.info && visual.info.gearContacts) || [];
     this.groundY = gc.length ? Math.min(...gc.map((g) => g.pos.y)) - 0.02 : this.box.min.y;
+    // made with the gear up (a menu in the air) the box would leave the lowered gear out of the map
+    this.box.min.y = Math.min(this.box.min.y, this.groundY - 0.05);
     this.radius = Math.hypot(Math.max(-this.box.min.x, this.box.max.x), Math.max(-this.box.min.z, this.box.max.z));
 
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 60);
@@ -361,8 +367,8 @@ export class JetShadow {
       }
       this._age = Infinity;
     }
-    if (this.groundMaterial.defines.TAPS !== (this.q.taps || 4)) {
-      this.groundMaterial.defines.TAPS = this.q.taps || 4;
+    if (this.groundMaterial.defines.TAPS !== (this.q.taps || 8)) {
+      this.groundMaterial.defines.TAPS = this.q.taps || 8;
       this.groundMaterial.needsUpdate = true;
     }
     if (this.q.grid && this.q.grid !== this._gridN) this._buildGround(this.q.grid);
@@ -633,11 +639,16 @@ export class JetShadow {
     this.U.uF35ShadowP.value.x = 0;
   }
 
+  /** The depth texture bound while there is no map: one for the jet's life (not one per quality change). */
   _placeholder() {
-    const t = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
-    t.compareFunction = THREE.LessEqualCompare;
-    t.needsUpdate = true;
-    return t;
+    if (!this._ph) {
+      const t = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
+      t.compareFunction = THREE.LessEqualCompare;
+      t.name = 'JetShadowPlaceholder';
+      t.needsUpdate = true;
+      this._ph = t;
+    }
+    return this._ph;
   }
 }
 
