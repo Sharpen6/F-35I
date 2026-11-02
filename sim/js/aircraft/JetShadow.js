@@ -141,10 +141,11 @@ float skyOcclusion(vec3 vp) {
       float contact = a0.r * (1.0 - smoothstep(0.02, 0.35, h0));
       float mid = a2.r * (1.0 - smoothstep(0.3, 3.0, h2));
       float wide = a4.r * (1.0 - smoothstep(0.6, 6.0, h4));
-      // (the sky seen under the fuselage's middle is ~10 % of the open sky's; kept lighter, as
-      // the bright ground around lights the shade too)
-      ao = 1.0 - (1.0 - 0.75 * contact) * (1.0 - 0.35 * mid) * (1.0 - 0.35 * wide);
-      ao = min(ao, 0.62) * uGround.y;
+      // (the sky seen under the fuselage's middle is ~10 % of the open sky's, but the horizon
+      // band is the bright part of it and the sunlit ground around lights the jet's underside,
+      // which lights the shade: about half the open shadow's light under the fuselage)
+      ao = 1.0 - (1.0 - 0.6 * contact) * (1.0 - 0.3 * mid) * (1.0 - 0.3 * wide);
+      ao = min(ao, 0.5) * uGround.y;
     }
   }
   return ao;

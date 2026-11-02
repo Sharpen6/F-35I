@@ -31,7 +31,7 @@ import * as THREE from 'three';
 /** Coating constants (uniforms; Exterior.js and tests may change them at run time). */
 export const SKIN = {
   lobe: 0.35,          // weight of the sharper lobe in the coat's specular
-  lobeRough: 0.26,     // its roughness
+  lobeRough: 0.3,      // its roughness
   glitter: 0.6,        // flake sparkle (BRDF value of a lit flake cell, 1/sr)
   tone: 0.07,          // albedo shift of a panel at tone +-1 (replaced panels 0.65..1)
   mottle: 0.03,        // body-space mottle, albedo

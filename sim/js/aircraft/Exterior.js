@@ -83,6 +83,16 @@ export class Exterior {
   /** GPU memory of the module's targets (bytes). */
   gpuBytes() { return this.jet ? this.jet.bytes() : 0; }
 
+  /**
+   * The render targets the scene does not reach (the GPU memory estimate, test/stats.js): the
+   * underside map. (The jet map's depth texture is reached through the ground pass's uniforms and
+   * counted there, at the estimate's generic 16 B a texel: 64 MB on high for a real 16 + 4 MB.)
+   */
+  targets() {
+    const j = this.jet;
+    return j && j.aoTarget ? [j.aoTarget] : [];
+  }
+
   dispose() {
     const v = this.ctx.visual;
     if (v && v.root) this._casting(v, true);

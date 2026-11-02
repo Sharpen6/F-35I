@@ -293,6 +293,19 @@ async function main() {
     const vC = await rigCheck('canopy open');
     check('canopy opens on the ground', vC.rig.canopy > 0.95, `canopy ${f2(vC.rig.canopy, 3)}`);
 
+    // ---- the exterior (js/aircraft/Exterior.js, exterior track): the jet's own shadow map and its
+    //      ground pass on, the jet out of the scene's shadow map (one shadow, not two), the panel
+    //      tones of both skin atlases built (skinTones.js in a worker)
+    const ex = await S(() => (window.__sim.app.exterior ? window.__sim.app.exterior.stats() : null));
+    if (ex && ex.enabled && ex.shadow && ex.size > 0) {
+      check('exterior: the jet\'s own shadow map and ground pass on, the jet out of the scene\'s map',
+        ex.on && ex.redraws > 0 && ex.aoRedraws > 0 && ex.ground && ex.noCast > 50,
+        `map ${ex.size} (${f2(ex.texel * 1000, 1)} mm), ${ex.redraws} redraws, ${ex.calls} draws, ${ex.noCast} meshes out of the scene's map`);
+      const tA = ex.tones.F35_Skin_A, tB = ex.tones.F35_Skin_B;
+      check('exterior: panel tones of both skins built', !!(tA && tA.ready && tB && tB.ready && tA.regions > 20),
+        `A ${tA ? tA.regions : '-'} panels, B ${tB ? tB.regions : '-'}`);
+    }
+
     // ---- the cockpit (js/aircraft/Cockpit.js): the interior analysis, the live display redrawn only
     //      where it can be seen, the cockpit's own sun shadow, the stick and throttle moving the way
     //      the pilot's inputs go
