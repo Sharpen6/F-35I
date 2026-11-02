@@ -31,6 +31,7 @@ import { Clouds } from './env/Clouds.js';      // lighting: cumulus and cirrus, 
 import { AircraftFX } from './aircraft/AircraftFX.js';     // graphics module: vapour, tyre smoke, landing-light pool
 import { Roads } from './world/Roads.js';                 // roads, railways, airfield surfaces and lights (roads track)
 import { Cockpit } from './aircraft/Cockpit.js';      // cockpit track: live PCD, interior, canopy glass
+import { DisplayLevels } from './env/displayLevels.js';   // lighting fix: the jet's displays at a picture level
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -273,6 +274,7 @@ class App {
     if (!STUBS) this.addModule(new Clouds(ctx));          // lighting: clouds (?clouds=, menu Weather), drawn by Post
     this.addModule(new AircraftFX(ctx));      // aircraft: vapour, contrail, tyre smoke, landing-light pool, burner quality
     this.addModule(new Roads(ctx));                      // js/world/Roads.js (owns js/world/AirportLights.js)
+    if (!STUBS) this.addModule(new DisplayLevels(ctx));   // lighting fix: PCD, tablet, LEDs = level / exposure (steps aside for app.cockpit)
   }
 
   /**

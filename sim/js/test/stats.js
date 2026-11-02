@@ -34,10 +34,26 @@ function rtBytes(rt) {
   const w = rt.width || 0, h = rt.height || 0, d = rt.depth || 1;
   const n = rt.textures ? rt.textures.length : 1;
   const t = rt.texture || (rt.textures && rt.textures[0]);
-  const color = t ? w * h * d * texelBytes(t) * n : 0;
+  const faces = rt.isWebGLCubeRenderTarget ? 6 : 1;
+  const color = t ? w * h * d * texelBytes(t) * n * faces : 0;
   const depth = rt.depthBuffer ? w * h * 4 : 0;
   const mip = t && t.generateMipmaps ? 4 / 3 : 1;
-  return (color * mip + depth) * Math.max(1, rt.samples || 1);
+  // MSAA (lighting fix): three draws into multisampled colour and depth renderbuffers and resolves
+  // into the single-sample texture (and depth texture or renderbuffer): all of them are allocated
+  const s = rt.samples || 0;
+  return s > 0 ? (color + depth) * s + color * mip + depth : color * mip + depth;
+}
+
+/**
+ * The render targets of the app's modules that the scene does not reach (the HDR chain, the
+ * clouds, the sky LUTs: lighting fix): every module with a targets() method.
+ */
+export function moduleTargets(app) {
+  const list = [];
+  for (const m of [app.env, app.post, ...(app.modules || [])]) {
+    if (m && typeof m.targets === 'function') list.push(...m.targets());
+  }
+  return list;
 }
 
 /**
@@ -91,8 +107,13 @@ export function estimateGpuMemory(renderer, scene, extraTargets = []) {
   for (const rt of extraTargets) addRT(rt);
   const c = renderer.domElement;
   const ctx = renderer.getContext();
-  const samples = (ctx.getContextAttributes && ctx.getContextAttributes().antialias) ? 4 : 1;
-  const framebuffer = c.width * c.height * 8 * samples + c.width * c.height * 4;
+  // the canvas (lighting fix: from the context's real attributes; with the HDR chain it has no
+  // MSAA and no depth): the drawing buffer and the browser's front buffer (RGBA8), plus a
+  // multisampled colour buffer with antialias, plus depth (and stencil) if the context has them
+  const attr = (ctx.getContextAttributes && ctx.getContextAttributes()) || {};
+  const aa = attr.antialias ? 4 : 0;
+  const ds = attr.depth || attr.stencil ? 4 : 0;
+  const framebuffer = c.width * c.height * (8 + 4 * aa + ds * (aa || 1));
   const total = geometry + textures + targets + framebuffer;
   const mb = (b) => +(b / 1048576).toFixed(1);
   return { totalMB: mb(total), geometryMB: mb(geometry), texturesMB: mb(textures), targetsMB: mb(targets), framebufferMB: mb(framebuffer),

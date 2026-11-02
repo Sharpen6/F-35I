@@ -26,7 +26,12 @@ export function makeAtmosphereParams(visibilityKm = 60) {
     mieScattering: mieExt * 0.9, // single scattering albedo of haze ~0.9
     mieH: 1200,
     mieG: 0.8,
-    ozoneAbsorption: [0.650e-6, 1.881e-6, 0.085e-6],
+    // ozone (Chappuis band, peak ~600 nm): the usual values are the cross-sections at exactly 680,
+    // 550 and 440 nm; an sRGB red channel spans 580-700 nm, where ozone absorbs ~2x more than at
+    // 680 nm. With 0.65e-6 the twilight sky (light that crossed the ozone layer edge-on) came out
+    // lavender; with the band's mean it is the deep blue of civil twilight. Daytime: no change
+    // (< 1 %); the setting sun is ~9 % less red.
+    ozoneAbsorption: [1.3e-6, 1.881e-6, 0.085e-6],
     ozoneCenter: 25000,
     ozoneWidth: 15000,
     groundAlbedo: 0.2,           // mean of the region (bright loess and limestone, fields, towns); the local value is in Environment

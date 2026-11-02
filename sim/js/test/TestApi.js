@@ -14,7 +14,7 @@
 
 import * as THREE from 'three';
 import { TestPilot, findRunway, runwayFrame } from './TestPilot.js';
-import { estimateGpuMemory, renderInfo, gpuName } from './stats.js';
+import { estimateGpuMemory, moduleTargets, renderInfo, gpuName } from './stats.js';
 
 const _v = new THREE.Vector3();
 const _px = new Uint8Array(4);
@@ -267,7 +267,7 @@ export function installTestApi(app, { H, KT, DEG }) {
         pixelRatio: app.renderer.getPixelRatio(), size: [app.renderer.domElement.width, app.renderer.domElement.height],
       };
     },
-    gpuMemory() { return estimateGpuMemory(app.renderer, app.scene); },
+    gpuMemory() { return estimateGpuMemory(app.renderer, app.scene, moduleTargets(app)); },
   };
   // keep the fields main.js set (ready / error) and the getters
   Object.defineProperties(window.__sim, Object.getOwnPropertyDescriptors(api));

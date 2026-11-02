@@ -2,11 +2,14 @@
 // several times of day, through the automation API window.__sim (index.html?test=1).
 //
 //   node sim/tests/lighting_shots.mjs [--port 8148] [--out DIR] [--size 960x540] [--quality high]
-//        [--set times|quick|clouds|night|all] [--only name1,name2] [--params "clouds=few&post=1"]
+//        [--set times|quick|clouds|night|twilight|flicker|all] [--only name1,name2]
+//        [--params "clouds=few&post=1"] [--frames 10]
 //        [--resume]   (skip the shots already in --out: to finish a run whose browser was killed)
 //
 // Every shot: start a spawn at a time of day, fly a few seconds hands off, place the camera, let the
-// exposure and the terrain tiles settle, draw one frame, screenshot. A log line per shot gives the
+// exposure and the terrain tiles settle, draw --frames frames (the clouds' temporal filter fills
+// up), screenshot (pair: the next frame too, NAME_b.png, to measure what changes from one frame to
+// the next: tests/frame_diff.py). A log line per shot gives the
 // draw calls, triangles, the frame time (SwiftShader: not the real cost) and the exposure; at the end
 // renderInfo() and gpuMemory() go to report.json beside the pictures.
 
@@ -34,6 +37,7 @@ const SET = arg('set', 'quick');
 const ONLY = arg('only', '') ? arg('only', '').split(',') : null;
 const EXTRA = arg('params', '');
 const RESUME = argv.includes('--resume');
+const FRAMES = +arg('frames', 10);
 const BASE = `http://127.0.0.1:${PORT}/`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
@@ -110,7 +114,19 @@ function sets() {
     { name: 'sky_tlv_2200_fullmoon', spawn: 'tlv_3000', time: 22.0, cam: 'chase', year: 2024 },
     { name: 'sky_sea_1930_chase', spawn: 'coast_low', time: 19.5, cam: 'chase' },
   ];
-  s.all = [...s.quick, ...s.times, ...s.night, ...s.sky, ...s.clouds, ...s.shadows];
+  // dusk at Ben Gurion looking west, sun from +0.5 to -15 deg, then night (the moon: first quarter)
+  s.twilight = [19.0, 19.25, 19.4, 19.5, 19.6, 19.75, 20.0, 20.5, 21.5].map((t) => ({ name: `tw_bgn_${hh(t)}`, spawn: 'bengurion_26', time: t, cam: 'chase' }));
+  s.twilight.push({ name: 'tw_tlv_2130_cities', spawn: 'tlv_3000', time: 21.5, cam: { orbit: [0, -18, 40] } });
+  s.twilight.push({ name: 'tw_tlv_2130_clouds', spawn: 'tlv_3000', time: 21.5, cam: 'chase', clouds: 'scattered' });
+  s.twilight.push({ name: 'tw_tlv_2200_fullmoon_cl', spawn: 'tlv_3000', time: 22.0, cam: 'chase', clouds: 'scattered', year: 2024 });
+  s.twilight.push({ name: 'tw_telnof_2130_cockpit', spawn: 'telnof_36', time: 21.5, cam: 'cockpit' });
+  // frame-to-frame change (cloud boil): the same view, two consecutive frames
+  s.flicker = [
+    { name: 'fl_coast_1200_up', spawn: 'coast_low', time: 12, cam: { orbit: [180, -25, 40] }, clouds: 'scattered', pair: true },
+    { name: 'fl_jlm_1200_chase', spawn: 'jerusalem_sunset', time: 12, cam: 'chase', clouds: 'broken', pair: true },
+    { name: 'fl_edge_1200_bkn', spawn: 'jerusalem_sunset', time: 12, cam: 'chase', clouds: 'broken', inside: 1900, back: 650, pair: true },
+  ];
+  s.all = [...s.quick, ...s.times, ...s.night, ...s.sky, ...s.clouds, ...s.shadows, ...s.twilight, ...s.flicker];
   return s;
 }
 
@@ -160,6 +176,9 @@ async function main() {
     const err = await page.evaluate(() => window.__sim.error);
     if (err) throw new Error(`app did not load: ${err}`);
     const S = (fn, a) => page.evaluate(fn, a);
+    // the software renderer's GPU timer reads ~1 s for the clouds, so their budget (Clouds.js
+    // budgetMs) would step high down to medium after two seconds: keep the tier asked for
+    await S(() => { const C = window.__sim.app.clouds; if (C && 'budgetMs' in C) { C.budgetMs = null; C.setQuality(C.quality); } });
     for (const s of list) {
       await S(async ({ spawn, time, climb, year, clouds, inside, back }) => {
         const sim = window.__sim, app = sim.app;
@@ -173,19 +192,29 @@ async function main() {
         const C = app.clouds;
         if (inside && C && C.layer) {
           // the nearest point (on a spiral) where the cumulus is solid for 900 m along the heading,
-          // so the jet is still in it after the 2 s of flight below; back: start that far before it
+          // so the jet is still in it after the 2 s of flight below. back: instead a point with clear
+          // air for the first back - 250 m along the heading (the 2 s of flight, the chase camera)
+          // and the cloud solid from 150 m beyond back (a broken deck covers 62 %: a fixed distance
+          // before a solid point is often inside the next cloud; the field changes slowly, so the
+          // margins are small). The rendered cloud is the field's footprint pushed around by the 3D
+          // noise (up to ~150 m).
           const F = await import('./js/env/cloudField.js');
           const hd = (sp.heading_deg || 0) * Math.PI / 180;
           const fx = Math.sin(hd), fz = -Math.cos(hd);
-          const solid = (x, z) => F.fieldAt((x + C.wind[0]) / C.layer.scale, (z + C.wind[1]) / C.layer.scale) > C.layer.threshold + 0.1;
+          const field = (x, z) => F.fieldAt((x + C.wind[0]) / C.layer.scale, (z + C.wind[1]) / C.layer.scale);
+          const solid = (x, z, d, m = 0.1) => field(x + fx * d, z + fz * d) > C.layer.threshold + m;
+          const clear = (x, z, d) => field(x + fx * d, z + fz * d) < C.layer.threshold - 0.03;
+          const ok = back
+            ? (x, z) => [0, 100, 200, 300, 400].every((d) => d > back - 250 || clear(x, z, d)) && solid(x, z, back + 150, 0.05) && solid(x, z, back + 450, 0.05)
+            : (x, z) => solid(x, z, 0) && solid(x, z, 450) && solid(x, z, 900);
           let best = null;
           for (let r = 0; r < 40000 && !best; r += 150) {
             for (let a = 0; a < 6.283; a += 150 / Math.max(r, 150)) {
               const x = sp.x + r * Math.cos(a), z = sp.z + r * Math.sin(a);
-              if (solid(x, z) && solid(x + fx * 450, z + fz * 450) && solid(x + fx * 900, z + fz * 900)) { best = [x, z]; break; }
+              if (ok(x, z)) { best = [x, z]; break; }
             }
           }
-          if (best) { sp.x = best[0] - fx * (back || 0); sp.z = best[1] - fz * (back || 0); sp.y = inside; }
+          if (best) { sp.x = best[0]; sp.z = best[1]; sp.y = inside; }
         }
         sim.start(spawn, { time, camera: 'chase' });
         Object.assign(sp, keep);
@@ -241,7 +270,7 @@ async function main() {
       // the start-up toast would cover the sky in every picture
       await S(() => { const t = document.getElementById('toast'); if (t) { t.classList.remove('show'); t.style.transition = 'none'; t.style.opacity = '0'; } });
       await sleep(300);
-      await S(() => window.__sim.render());
+      await S((n) => { for (let i = 0; i < n; i++) window.__sim.render(); }, Math.max(1, FRAMES));
       const info = await S(() => {
         const sim = window.__sim, env = sim.app.env;
         return { ri: sim.renderInfo(), t: sim.timing().lastRenderMs, exposure: env.exposure, bias: env.exposureBias,
@@ -251,31 +280,26 @@ async function main() {
       });
       const file = join(OUT, `${s.name}.png`);
       await page.screenshot({ path: file });
+      if (s.pair) {
+        await S(() => window.__sim.render());
+        await page.screenshot({ path: join(OUT, `${s.name}_b.png`) });
+      }
       report.push({ ...s, file, ...info, wallMs: Date.now() - ms0 });
       appendFileSync(lines, JSON.stringify(report[report.length - 1]) + '\n');
       log(`${s.name}: ${info.ri.calls} calls, ${(info.ri.triangles / 1e6).toFixed(2)} M tris, ${info.t} ms, exposure ${(+info.exposure).toFixed(3)}, sun ${(+info.sunEl).toFixed(1)} deg, nv ${(+info.nightVision || 0).toFixed(2)}, albedo ${(+info.albedo || 0).toFixed(3)}, datum ${(+info.datum || 0).toFixed(0)}${info.clouds ? `, clouds ${info.clouds.preset} ${info.clouds.low.join('x')}` : ''}`);
     }
-    const mem = await S(() => window.__sim.gpuMemory());
-    // the post chain's own targets (not in the scene graph): MSAA buffers plus the resolved copies
-    // (half float RGBA: 8 bytes a pixel; the clouds' 3D noise and cover map are 8-bit)
-    const targetsMB = (list) => {
-      let b = 0;
-      for (const rt of list) {
-        const px = rt.width * rt.height * (rt.depth || 1), s = rt.samples || 0;
-        const bpp = rt.texture.type === 1009 ? (rt.texture.format === 1028 ? 1 : 4) : 8;   // UnsignedByte: Red / RGBA
-        const color = px * bpp, depth = rt.depthBuffer ? px * 4 : 0;
-        b += (color + depth) * (s > 0 ? s + 1 : 1);
-      }
-      return +(b / 1048576).toFixed(1);
-    };
-    const tl = await S(() => {
-      const app = window.__sim.app, f = (t) => ({ width: t.width, height: t.height, depth: t.depth, samples: t.samples, depthBuffer: t.depthBuffer, texture: { type: t.texture.type, format: t.texture.format } });
-      return { post: app.post ? app.post.targets().map(f) : [], clouds: app.clouds ? app.clouds.targets().map(f) : [] };
+    // gpuMemory() counts the modules' own targets now (stats.js moduleTargets); the share of the
+    // HDR chain, the clouds and the sky LUTs, for the report
+    const mem = await S(async () => {
+      const sim = window.__sim, app = sim.app;
+      const st = await import('./js/test/stats.js');
+      const THREE = await import('three');
+      const empty = new THREE.Scene();
+      const only = (m) => (m && m.targets ? st.estimateGpuMemory(app.renderer, empty, m.targets()).targetsMB : 0);
+      return { ...sim.gpuMemory(), postMB: only(app.post), cloudsMB: only(app.clouds), envMB: only(app.env) };
     });
-    mem.postMB = targetsMB(tl.post);
-    mem.cloudsMB = targetsMB(tl.clouds);
     const timing = await S(() => window.__sim.timing());
-    log(`GPU memory estimate ${mem.totalMB} MB (textures ${mem.texturesMB}, targets ${mem.targetsMB}, framebuffer ${mem.framebufferMB}, geometry ${mem.geometryMB}) + post ${mem.postMB} MB + clouds ${mem.cloudsMB} MB`);
+    log(`GPU memory estimate ${mem.totalMB} MB (textures ${mem.texturesMB}, targets ${mem.targetsMB} of which post ${mem.postMB}, clouds ${mem.cloudsMB}, sky ${mem.envMB}; framebuffer ${mem.framebufferMB}, geometry ${mem.geometryMB})`);
     // every shot of the run, the earlier sessions' too (the memory and timing are this session's)
     const shots = new Map();
     for (const l of (existsSync(lines) ? readFileSync(lines, 'utf8') : '').split('\n')) {
