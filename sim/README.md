@@ -220,12 +220,12 @@ by `tools/world/roads.py` and `airfields.py`) exactly on the terrain within 3.4 
 km (medium) or 1.5 km (low), with lane markings, kerbs, rails, taxiway lines and holding
 positions, street lights and floodlit aprons at night, fading into the imagery beyond. Bridges
 that span a valley stand on their decks (sides, parapets, piers); far roads thinner than 1.5 px
-are drawn 1.5 px wide at a lower opacity instead of breaking into dots. It owns `js/world/AirportLights.js`: runway edge,
-threshold, centreline and touchdown lights, approach lights with flashers, PAPI, blue taxiway
-lights and floodlight masts, switched by the sun, and the street lamps out to 20 / 14 / 8 km
-(lit cities to the horizon at night), and `js/world/Traffic.js`: the head and tail lights of cars
-driving along the main roads at night. Without the data it draws nothing. Formats, layouts and
-rebuild: `tools/world/ROADS.md`.
+are drawn 1.5 px wide at a lower opacity instead of breaking into dots. It owns
+`js/world/AirportLights.js`: runway edge, threshold, centreline and touchdown lights, approach
+lights with flashers, PAPI, blue taxiway lights and floodlight masts, switched by the sun, and
+the street lamps out to 20 / 14 / 8 km (lit cities to the horizon at night), and
+`js/world/Traffic.js`: the head and tail lights of cars driving along the main roads at night.
+Without the data it draws nothing. Formats, layouts and rebuild: `tools/world/ROADS.md`.
 
 ### How the shell runs
 
