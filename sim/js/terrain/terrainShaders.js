@@ -27,12 +27,16 @@
 //
 // Samplers (three.js counts vertex + fragment together; Direct3D 11 allows 16): L0 program
 // 12 (uHeights, uOverview, uNormalCore, uLc, uDetailArr, uHorizon, uL0Color, uL0Data, the
-// shadow map, 3 atmosphere LUTs), base program 12 (no L0 textures, plus uFarColor and
-// uNormalFar). Four units are left for the lighting track.
+// shadow map, 3 atmosphere LUTs), base program 13 (no L0 textures, plus uFarColor, uNormalFar
+// and the rift strip's uRiftColor). Three units are left for the lighting track. uHeights is
+// read by both stages (one unit), so the pixel stage's count is the program's (Direct3D counts
+// per stage).
 
 import { ATMOSPHERE_PARS, ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
 import { DETAIL_LAYERS, SLOPE_SCALE, GLYPH_GRID } from './detailTextures.js';
 import { HORIZON_GLSL } from './horizonMap.js';
+import { LAKE_GATE, BASIN_HAZE_GLSL } from './lakeShaders.js';
+import { RIFT_NORMAL_GLSL, RIFT_COLOR_GLSL } from './riftGLSL.js';
 
 export const MAX_RWY = 4;
 
@@ -52,6 +56,9 @@ uniform vec3 uCamLo;                // camera x, z remainder (m) in .x / .z; cam
 uniform float uRange0;
 uniform float uMorphStart;
 uniform float uMorphEnd;
+// the rift strip (HeightField.setRift: 50 m, packed at x 4097.., y 2049..) in 25 m units from the
+// far area's north-west corner: first and last sample x, z; x > z.x (no strip): never inside
+uniform vec4 uRiftU;
 
 varying vec3 vRel;                  // camera-relative position as rendered (curved)
 varying vec2 vWorldXZ;              // world x, z (m)
@@ -62,9 +69,10 @@ varying float vLevel;
 float decodeH(uint v) { return float(v) * 0.05 - 500.0; }
 float hCore(ivec2 p) { return decodeH(texelFetch(uHeights, clamp(p, ivec2(0), ivec2(4096)), 0).r); }
 float hFar(ivec2 p) { return decodeH(texelFetch(uHeights, clamp(p, ivec2(0), ivec2(2048)) + ivec2(4097, 0), 0).r); }
+float hRift(ivec2 p) { return decodeH(texelFetch(uHeights, p + ivec2(4097, 2049), 0).r); }
 
-// Height at a position in 25 m units: bilinear on the core grid (exact at samples), the far
-// grid outside the core (same function as HeightField on the CPU).
+// Height at a position in 25 m units: bilinear on the core grid (exact at samples), the rift
+// strip or the far grid outside the core (same function as HeightField on the CPU).
 float heightU(vec2 u) {
   // one return at the end: Direct3D's compiler (ANGLE on Windows) warns about an early return
   float h;
@@ -75,6 +83,14 @@ float heightU(vec2 u) {
     ivec2 p = ivec2(i);
     float h00 = hCore(p), h10 = hCore(p + ivec2(1, 0));
     float h01 = hCore(p + ivec2(0, 1)), h11 = hCore(p + ivec2(1, 1));
+    h = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+  } else if (all(greaterThanEqual(u, uRiftU.xy)) && all(lessThanEqual(u, uRiftU.zw))) {
+    vec2 g = (u - uRiftU.xy) * 0.5;                       // 50 m samples
+    vec2 i = min(floor(g), (uRiftU.zw - uRiftU.xy) * 0.5 - 1.0);
+    vec2 f = g - i;
+    ivec2 p = ivec2(i);
+    float h00 = hRift(p), h10 = hRift(p + ivec2(1, 0));
+    float h01 = hRift(p + ivec2(0, 1)), h11 = hRift(p + ivec2(1, 1));
     h = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
   } else {
     vec2 g = u * 0.125;
@@ -139,9 +155,16 @@ varying float vLevel;
 
 uniform sampler2D uOverview;         // core colour, 25 m / px
 uniform sampler2D uNormalCore;        // normal x / z per core sample (4097^2)
+// the vertex stage's height grid, also read here (the sinkholes' cells): the same uniform, so no
+// texture unit more
+uniform highp usampler2D uHeights;
 #ifndef USE_L0
 uniform sampler2D uFarColor;          // far colour, 200 m / px
-uniform sampler2D uNormalFar;
+uniform sampler2D uNormalFar;         // far normals (2049^2, 200 m), then the rift strip's (50 m) below them
+uniform vec4 uRiftBox;                // the rift strip: x0, z0, x1, z1 (m); x1 < x0: none
+uniform float uNormalFarRows;         // rows of uNormalFar: 2049 + the strip's
+uniform sampler2D uRiftColor;         // the rift strip's colour, 50 m / px (riftGLSL.js)
+uniform vec4 uRiftColorBox;           // uRiftBox when that colour is loaded, else empty
 #endif
 uniform highp usampler2D uLc;         // land cover codes: overview 4096^2, far 2048^2 below it
 uniform highp sampler2DArray uDetailArr;
@@ -156,6 +179,7 @@ uniform vec2 uTreeCover;              // 3D trees within .x m (fade .y m): plain
 uniform float uDebugLod;
 uniform float uDebugHeight;           // 1: output (height, x, z) of the rendered surface (tests)
 uniform float uDebugView;             // 1 classes, 2 row direction, 3 near detail weight, 4 crop state, 5 terrain shadow
+uniform float uLake;                  // 1: the Dead Sea's lake pass draws the basin's water (DeadSea.js)
 
 #ifdef USE_L0
 uniform sampler2D uL0Color;           // 1024 x 1024 for this tile, 6.25 m / px
@@ -169,11 +193,27 @@ uniform int uRwyCount;
 #endif
 
 ${HORIZON_GLSL}
+${BASIN_HAZE_GLSL}
 
 #ifdef NORMAL_UNORM
   #define DECODE_N(v) ((v) * 2.0 - 1.0)
 #else
   #define DECODE_N(v) (v)
+#endif
+
+// the core's height at a point: bilinear on the 25 m grid, as the vertex stage's heightU
+float hCoreAt(vec2 xz) {
+  vec2 c = clamp((xz + 51200.0) / 25.0, vec2(0.0), vec2(4096.0));
+  vec2 i = min(floor(c), vec2(4095.0));
+  vec2 f = c - i;
+  ivec2 p = ivec2(i);
+  float h00 = float(texelFetch(uHeights, p, 0).r), h10 = float(texelFetch(uHeights, p + ivec2(1, 0), 0).r);
+  float h01 = float(texelFetch(uHeights, p + ivec2(0, 1), 0).r), h11 = float(texelFetch(uHeights, p + ivec2(1, 1), 0).r);
+  return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y) * 0.05 - 500.0;
+}
+#ifndef USE_L0
+${RIFT_NORMAL_GLSL}
+${RIFT_COLOR_GLSL}
 #endif
 
 #define DL_MACRO ${f1(L.MACRO.index)}
@@ -344,6 +384,11 @@ float crownRay(vec2 lo, vec2 ray, vec2 cell, vec2 sp, float R, float Rv, float H
   return clamp((1.0 - q) / dq + 0.5, 0.0, 1.0) * present;
 }
 #endif
+
+// an air base's infield around the point (main's runway loop writes them on every tier, the
+// ground materials read them): 0..1, and that runway's direction
+float gInfield = 0.0;
+vec2 gInfDir = vec2(1.0, 0.0);
 
 // Ground materials near the camera. C: imagery colour (raw albedo); Cm: the same at 25 m;
 // wA / wB / wC: class weights; dir: row direction; rnd: the field's random (0..1); h: height
@@ -700,6 +745,14 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec4 wC, vec2 dir, float 
       vec3 c = C * (1.0 + 0.6 * (gt.b - gM.b) + 0.45 * (g16.b - gM.b) + patches);
       c = mixMean(c, REF_DRY_GRASS, REF_SHRUB, sparse, sbM.a * hill * 0.6);
       c *= 1.0 - 0.25 * (wB.w / max(wg, 1e-3)) * (gt.a - gM.a);
+      // an air base's mown infield: the mower's passes, 6 m wide along the runway, a little
+      // lighter and darker in turn, and its wear and dry patches stronger than the meadows'
+      if (gInfield > 0.0) {
+        vec2 pr = vec2(-gInfDir.y, gInfDir.x);
+        float mpx = abs(dot(gDX, pr)) + abs(dot(gDY, pr)) + 1e-4;
+        float mow = (stripes(dot(xz, pr) / 6.0, mpx / 6.0, 0.5) - 0.5) * fadeP(mpx, 6.0);
+        c *= 1.0 + gInfield * (0.12 * mow + 0.8 * patches);
+      }
       col += wg * c;
       sl += wg * (dlSlope(gt, 4.0, 4.0) + dlSlope(sb, 16.0, 16.0) * hill * 0.5);
       shade += wg * dlAt(DL_SHRUB, 16.0, sunH * cotE * 0.6).a * sparse;
@@ -733,8 +786,60 @@ vec3 groundMaterial(vec3 C, vec3 Cm, vec4 wA, vec4 wB, vec4 wC, vec2 dir, float 
       float wph = (abs(dot(g, gDX)) + abs(dot(g, gDY))) / 1.1;
       float band = (stripes(ph, wph, 0.35) - 0.35) * fadeP(wph, 1.0);
       float mud = t.a * smoothstep(-405.0, -420.0, h);
-      c += kSalt * C * (1.0 + 0.9 * (t.b - tM.b) + 0.35 * band - 0.35 * mud);
-      s2 += kSalt * dlSlope(t, 16.0, 16.0);
+      vec3 cs = C * (1.0 + 0.9 * (t.b - tM.b) + 0.35 * band - 0.35 * mud);
+      vec2 ss = dlSlope(t, 16.0, 16.0);
+      // sinkholes: since the 1980s the fresh groundwater that follows the falling lake dissolves
+      // the salt layer under the exposed shore, and thousands of pits 1-50 m across have
+      // collapsed (Ein Gedi, Mineral Beach, Ze'elim), in clusters along lines that follow the
+      // old shorelines: dry ones with dark mud floors and pale salt rims, many holding green-
+      // turquoise brine. At most one pit per 40 m cell (no neighbour search), in clusters a few
+      // hundred metres across (a smooth noise of 320 m cells) and denser along lines every ~4 m
+      // of height; each a little stretched along its own axis, its outline wavy; steep walls
+      // (lit by the sun through the slope), the wall on the sun's side shades the floor; gone
+      // before a pit is down to ~4 pixels across.
+      if (h > -430.0 && h < -393.0 && gPx < 6.5) {
+        vec2 cell = floor(xz / 40.0);
+        vec4 hp = vec4(hash22(cell + 0.37), hash22(cell * 1.7 + 11.3));
+        // whether the cell has a pit is the cell's alone: its centre's height (read from the grid
+        // the mesh is made of) and cluster. A height estimated from the pixel (its own and the
+        // slope) drifts by a decimetre or two across a cell and crossed the lines' threshold
+        // inside some pits, cutting them.
+        vec2 cc = (cell + 0.5) * 40.0;
+        float hc = hCoreAt(cc);
+        float kPit = smoothstep(-427.5, -425.0, hc) * smoothstep(-396.0, -401.0, hc);
+        vec2 cq = cc / 320.0 + 5.1;
+        vec2 ci = floor(cq), cf = fract(cq);
+        cf = cf * cf * (3.0 - 2.0 * cf);
+        float cn = mix(mix(hash12(ci), hash12(ci + vec2(1.0, 0.0)), cf.x),
+                       mix(hash12(ci + vec2(0.0, 1.0)), hash12(ci + vec2(1.0, 1.0)), cf.x), cf.y);
+        float dense = smoothstep(0.5, 0.75, cn);
+        float line = 0.5 + 0.5 * cos(6.2832 * (hc + 0.6 * hp.x) / 4.0);
+        float r = mix(3.0, 13.0, hp.w * hp.w);
+        float on = step(hp.z, kPit * (0.03 + 0.7 * dense) * (0.12 + 0.88 * line * line))
+                 * (1.0 - smoothstep(0.25 * r, 0.5 * r, gPx));
+        if (on > 0.0) {
+          vec2 ax = normalize(hp.yx - 0.5 + 1e-3);                     // the long axis
+          float st = 1.0 + 0.6 * fract(hp.w * 17.3) * (1.0 - hp.w * hp.w);
+          vec2 dv = xz - (cc + (hp.xy - 0.5) * max(38.0 - 2.5 * r * st, 0.0));
+          vec2 de = vec2(dot(dv, ax) / st, dot(dv, vec2(-ax.y, ax.x)));
+          float th = atan(de.y, de.x + 1e-4);
+          float d = length(de) * (1.0 + 0.06 * sin(2.0 * th + 6.2832 * hp.x) + 0.06 * sin(3.0 * th + 6.2832 * hp.y));
+          float aa = max(gPx, 0.05);
+          float pit = 1.0 - smoothstep(r - aa, r + aa, d);            // inside the opening
+          float rim = aaBand(d, r, 1.15 * r, aa);                       // its salt crust
+          float wall = smoothstep(0.62 * r - aa, 0.78 * r + aa, d);     // 0 floor .. 1 wall
+          vec3 brine = mix(vec3(0.05, 0.17, 0.15), vec3(0.1, 0.21, 0.12), fract(hp.x * 5.7));
+          vec3 floorC = fract(hp.z * 7.3 + hp.w * 3.1) < 0.4 ? brine : C * 0.45;
+          cs = mix(cs, cs * 1.1, on * rim);
+          cs = mix(cs, mix(floorC, C * 0.75, wall), on * pit);
+          ss += on * pit * wall * 2.2 * dv / max(length(dv), 1e-3);
+          vec2 dl2 = dv + sunH * cotE * 0.7 * r;
+          float lit = 1.0 - smoothstep(r - aa, r + aa, length(vec2(dot(dl2, ax) / st, dot(dl2, vec2(-ax.y, ax.x)))));
+          shade += wB.z * kSalt * on * pit * (1.0 - wall) * (1.0 - lit);
+        }
+      }
+      c += kSalt * cs;
+      s2 += kSalt * ss;
     }
     if (kSand > 0.0) {
       vec4 t = dl(DL_SAND, 8.0);
@@ -1030,10 +1135,11 @@ void main() {
     // L0 patches lie in the core; at its edge the overview's 200 m mip stands in for the far image
     vec3 col = coreW < 1.0 ? textureLod(uOverview, uvCore, 3.0).rgb : colCore;
   #else
-    vec3 col = texture(uFarColor, uvFar).rgb;
+    vec3 col = farColor(xz, coreW);         // far.jpg, the rift strip's 50 m where it is (outside the core)
   #endif
   vec4 wA, wB;
   lcSample(uvFar, 2048.0, ivec2(0, 4096), vH, wA, wB);
+  float seaFar = wA.x;                      // water within ~200 m (the far grid's cells): the coast's cliffs
   if (coreW > 0.0) {
     vec4 cA, cB;
     lcSample(uvCore, 4096.0, ivec2(0), vH, cA, cB);
@@ -1124,7 +1230,7 @@ void main() {
   #ifdef USE_L0
     vec2 nF = coreW < 1.0 ? DECODE_N(textureLod(uNormalCore, ((xz + 51200.0) / 25.0 + 0.5) / 4097.0, 3.0).rg) : nC;
   #else
-    vec2 nF = DECODE_N(texture(uNormalFar, ((xz + 204800.0) / 200.0 + 0.5) / 2049.0).rg);
+    vec2 nF = farNormalXZ(xz, coreW);
   #endif
   vec2 nxz = mix(nF, nC, coreW);
   vec3 N = normalize(vec3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.01)), nxz.y));
@@ -1138,16 +1244,29 @@ void main() {
     if (uRwyCount > 0 && l0w > 0.0) {
       float dn = dl(DL_MACRO, 32.0).g;
       float grain = dl(DL_URBAN, 16.0).b - 0.5;
+      float infield = 0.0;
       for (int i = 0; i < ${MAX_RWY}; i++) {
         if (i >= uRwyCount) break;
         vec4 rw = runwayShade(xz, uRwyA[i], uRwyB[i], uRwyC[i], px, dn, grain);
         rwPre = rwPre * (1.0 - rw.a) + rw.rgb * rw.a;
         rwCov = rwCov + rw.a - rwCov * rw.a;
+        vec2 dr = xz - uRwyA[i].xy;
+        vec2 st = abs(vec2(dot(dr, uRwyA[i].zw), dot(dr, vec2(-uRwyA[i].w, uRwyA[i].z)))) - uRwyB[i].xy;
+        float inf = 1.0 - smoothstep(300.0, 700.0, length(max(st, 0.0)));
+        if (inf > infield) { infield = inf; gInfDir = uRwyA[i].zw; }
       }
       float k = l0w * smoothstep(9000.0, 5000.0, dist);
       rwPre *= k;
       rwCov *= k;
       wA.x *= 1.0 - rwCov;
+      // the airfield's infield: WorldCover calls most of it built-up (the pavement around it),
+      // which drew it as smooth paving. Where the imagery is soil-coloured rather than grey
+      // pavement it is mown, mostly dry grass and soil.
+      float cMax = max(col.r, max(col.g, col.b));
+      float soil = infield * smoothstep(0.12, 0.25, (cMax - min(col.r, min(col.g, col.b))) / max(cMax, 1e-3)) * wB.y;
+      wB.y -= soil;
+      wA.w += soil;
+      gInfield = infield * l0w;
     }
   #endif
 
@@ -1169,6 +1288,40 @@ void main() {
   float macroK = (1.0 - smoothstep(500.0, 4000.0, dist)) * (1.0 - 0.6 * nearK);
   col *= 1.0 + macro * macroK * uDetailStrength * land;
 
+  // ---- bedded rock on steep faces (the rift's walls, the coast's kurkar cliffs) ----
+  // The imagery sees a cliff from above, foreshortened to a few pixels of the colour of its top:
+  // the rift's walls are limestone and dolomite formations tens of metres thick, a hard cliff
+  // band and a softer, flatter slope of marl and chalk in turn, with beds of a few metres inside
+  // them. On a face they show as bands along the contours, a little wavy: formations ~35-90 m
+  // apart (a 53 m period whose phase wanders with height, so no two are alike; thin regular
+  // lines read as a scan pattern) and beds of ~6 m. Each set fades out before its bands get
+  // thinner than ~2 pixels (fwidth of the height), so they never shimmer. Low on the coastal
+  // plain the faces are kurkar: ochre sandstone with red loam (hamra) between the beds. Those
+  // cliffs are 20-40 m high, but the 25 m heights hold them as a 15-20 m step and a slope behind
+  // it (central differences over 50 m: 10-25 deg), so near the sea (the far land cover's water
+  // within ~200 m) a face counts from ~10 deg: the kurkar ridge is what meets the sea along most
+  // of this coast. The bands are also relief: a cliff band steeper and a slope band flatter than
+  // the face, which the sun picks out (ledge: added to the slope with the ground detail's, below).
+  // (not in built-up land: the heights are a surface model there, steep where towers stand)
+  float rockK = land * (1.0 - wB.y);
+  float steep = smoothstep(0.86, 0.6, N.y) * rockK;
+  float kurkar = smoothstep(0.985, 0.93, N.y) * rockK * smoothstep(2.0, 6.0, vH) * (1.0 - smoothstep(45.0, 70.0, vH))
+               * smoothstep(0.03, 0.15, seaFar);
+  float hPx = max(fwidth(vH), 1e-3);        // outside the branch: derivatives need all four pixels
+  vec2 ledge = vec2(0.0);
+  if (steep + kurkar > 0.0) {
+    float wv = 6.0 * sin(xz.x * 0.0021 + 1.7 * sin(xz.y * 0.0013));
+    // b1: 1 in a cliff band (~40% of a formation), 0 in the slope band; b2: the beds
+    float b1 = smoothstep(-0.25, 0.45, sin(6.2832 * (vH + wv) / 53.0 + 1.2 * sin(6.2832 * vH / 151.0 + 0.7)));
+    float b2 = sin(6.2832 * (vH + 0.3 * wv) / 6.3 + 2.0 * b1);
+    float k1 = 1.0 - smoothstep(5.0, 14.0, hPx), k2 = 1.0 - smoothstep(0.8, 2.0, hPx);
+    col *= 1.0 + steep * (k1 * 0.2 * (0.4 - b1) + k2 * 0.1 * b2);
+    vec3 kc = mix(vec3(0.46, 0.31, 0.16), vec3(0.34, 0.16, 0.08), 0.3 + 0.3 * b2 * k2);
+    col = mix(col, kc, 0.55 * kurkar);
+    // the slope (dh/dx, dh/dz) 1.3 times in a cliff band, 0.8 times in a slope band
+    ledge = -N.xz / max(N.y, 0.05) * steep * (k1 * 0.5 * (b1 - 0.4) + k2 * 0.15 * b2);
+  }
+
   // ---- near ground materials ----
   vec2 dSlope = vec2(0.0);
   float sunVis = 1.0, cavity = 0.0;
@@ -1182,7 +1335,7 @@ void main() {
     cavity *= nearK * land;
   }
   #endif
-  N = normalize(N / max(N.y, 0.05) + vec3(-dSlope.x, 0.0, -dSlope.y));
+  N = normalize(N / max(N.y, 0.05) + vec3(-(dSlope.x + ledge.x), 0.0, -(dSlope.y + ledge.y)));
   N = normalize(N + upP - vec3(0.0, 1.0, 0.0));
 
   // ---- light ----
@@ -1203,11 +1356,22 @@ void main() {
   vec3 radiance = albedo * (sunE * NdL * shadow * sunVis * terrainVis + skyE) / PI;
 
   // ---- water ----
-  float water = smoothstep(0.3, 0.7, wA.x);
+  // The Dead Sea's shore: the land cover's 10 m cells drew the waterline as a staircase of
+  // 10 m steps across the flats. The macro noise (16 m patches, 4 m grain) moves the line
+  // about inside the cells' blend, like the real lobed line of mud and salt; only where the
+  // cells blend (no puddles on dry land, no islands in open water), and only there: the
+  // engineered edges (evaporation ponds at -391 m, the sea's quays and marinas) stay straight.
+  float wx = wA.x;
+  if (vH < -420.0) wx = clamp(wx + 8.0 * (d1.r - dMean.r) * wx * (1.0 - wx), 0.0, 1.0);
+  float water = smoothstep(0.3, 0.7, wx);
   // wet sand along the shore (land side)
-  float wet = smoothstep(0.02, 0.3, wA.x) * (1.0 - water) * step(vH, 3.0);
+  float wet = smoothstep(0.02, 0.3, wx) * (1.0 - water) * step(vH, 3.0);
   radiance *= 1.0 - 0.35 * wet;
-  if (water > 0.0) {
+  // the Dead Sea basin: the lake pass (DeadSea.js, its own program) draws the water over this
+  // pixel weighted by 1 - alpha; here only the land part (lakeShaders.js LAKE_GATE)
+  float lakeW = uLake > 0.5 && vH < ${LAKE_GATE.toFixed(1)} ? water : 0.0;
+  radiance *= 1.0 - lakeW;
+  if (water > 0.0 && lakeW == 0.0) {
     float t = uTime;
     vec2 qA = gQ / 64.0 + t * vec2(0.013, 0.008);
     vec2 qB = gQ / 16.0 + t * vec2(-0.024, 0.016);
@@ -1239,10 +1403,10 @@ void main() {
     vec3 body = albedo * 0.8 * (sunE * max(dot(upP, uSunDir), 0.0) * terrainVis + uAmbient) / PI;
     vec3 wr = body * (1.0 - F) + skyR * F + spec;
     // surf: broken white water in the band where the sea meets the beach (sea level only)
-    float surfBand = smoothstep(0.98, 0.6, wA.x) * step(abs(vH), 3.0);
+    float surfBand = smoothstep(0.98, 0.6, wx) * step(abs(vH), 3.0);
     if (surfBand > 0.0) {
       float crest = tB.b * 0.6 + tA.b * 0.6;
-      float foam = surfBand * smoothstep(0.35, 0.75, crest + 0.5 * (1.0 - wA.x));
+      float foam = surfBand * smoothstep(0.35, 0.75, crest + 0.5 * (1.0 - wx));
       vec3 foamC = vec3(0.8) * (sunE * max(dot(upP, uSunDir), 0.0) * terrainVis + uAmbient) / PI;
       wr = mix(wr, foamC, foam * 0.85);
     }
@@ -1262,7 +1426,7 @@ void main() {
   }
 
   // ---- aerial perspective, and the far edge dissolving into the sky's own haze ----
-  vec3 color = atmoAerial(radiance, V, dist, vH);
+  vec3 color = basinAerial(radiance, V, dist, vH);
   float farFade = smoothstep(204800.0 - 30000.0, 204800.0 - 800.0, edge);
   if (farFade > 0.0) {
     vec2 suv = atmoSkyViewUv(V);
@@ -1300,7 +1464,7 @@ void main() {
     return;
   }
 
-  gl_FragColor = vec4(color, 1.0);
+  gl_FragColor = vec4(color, 1.0 - lakeW);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }

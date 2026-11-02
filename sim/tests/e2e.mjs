@@ -98,18 +98,30 @@ async function main() {
   const server = await startServer();
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
   const problems = [];
+  // Optional data (the app says so with a console.warn and runs without it): a 404 there is a note,
+  // not a failure. data/landscape/: the rift strip and the shore structures (sim/tools/terrain/rift.py,
+  // sim/tools/world/shore.py), built separately from the terrain data.
+  const OPTIONAL_DATA = ['/data/landscape/'];
+  const optional = (url) => OPTIONAL_DATA.some((d) => String(url || '').includes(d));
+  const notes = [];
   const shots = [];
   const frames = [];
   try {
     const page = await browser.newPage({ viewport: { width: W, height: H } });
     const ckWarnings = [];   // (pcd/parts.js warns when a cockpit part is not rebuilt; Cockpit.js when the interior fails)
     page.on('console', (m) => {
-      if (m.type() === 'error') problems.push(`console: ${m.text()}`);
-      else if (m.type() === 'warning' && /^Cockpit: /.test(m.text())) ckWarnings.push(m.text());
+      if (m.type() === 'warning' && /^Cockpit: /.test(m.text())) { ckWarnings.push(m.text()); return; }
+      if (m.type() !== 'error') return;
+      // Chrome's own line for a failed fetch names the URL only in its location
+      if (/^Failed to load resource/.test(m.text()) && optional(m.location()?.url)) notes.push(`console: ${m.text()} ${m.location().url}`);
+      else problems.push(`console: ${m.text()}`);
     });
     page.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
     page.on('requestfailed', (r) => problems.push(`request failed: ${r.url()} ${r.failure()?.errorText || ''}`));
-    page.on('response', (r) => { if (r.status() >= 400) problems.push(`HTTP ${r.status()}: ${r.url()}`); });
+    page.on('response', (r) => {
+      if (r.status() === 404 && optional(r.url())) notes.push(`HTTP 404 (optional data): ${r.url()}`);
+      else if (r.status() >= 400) problems.push(`HTTP ${r.status()}: ${r.url()}`);
+    });
     page.setDefaultTimeout(240000);
     await page.goto(`${BASE}index.html?test=1&quality=${QUALITY}&wingmen=0`);
     await page.waitForFunction(() => window.__sim && (window.__sim.ready || window.__sim.error), null, { timeout: 300000 });
@@ -587,6 +599,7 @@ async function main() {
     // every program made after the loading screen in the whole run (for the record: the checks above fail on theirs)
     const warmup = await S(() => window.__sim.app.warmup?.info?.() || null);
     if (warmup) log(`shader programs made after the loading screen: ${warmup.late.length ? warmup.late.map((l) => `${l.label}: ${l.programs.join(', ')}`).join('; ') : 'none'}`);
+    for (const n of new Set(notes)) log('note:', n);
     check('no console errors, page errors or failed requests', problems.length === 0, problems.slice(0, 5).join(' | '));
     writeFileSync(join(OUT, 'report.json'), JSON.stringify({ when: new Date().toISOString(), size: [W, H], quality: QUALITY, checks, frames, timing, gpuMemory: mem, warmup, problems, shots }, null, 1));
   } finally {

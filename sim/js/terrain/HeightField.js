@@ -3,11 +3,15 @@
 // Core: 16 x 16 tiles of 257 x 257 samples (25 m, shared edges) assembled into one
 // 4097 x 4097 grid. Far: 2049 x 2049 samples at 200 m. Encoding: h = v * 0.05 - 500.
 //
+// Rift strip (optional, sim/tools/terrain/rift.py, data/landscape/rift.bin): 2049 x 2048
+// samples at 50 m over the Dead Sea rift outside the core (Moab, the south basin), the far
+// grid's own surface at its outer edge. Where it is loaded it replaces the far grid.
+//
 // heightAt() reproduces the rendered surface exactly where the terrain mesh is at full
 // resolution (always the case around the camera and the aircraft): the mesh vertices sit on
 // the 25 m samples and every grid cell is split into two triangles along its NW-SE diagonal
 // (from sample (i, j) to (i + 1, j + 1), i = column / east, j = row / south). Outside the core
-// the rendered surface is the bilinear interpolation of the 200 m far grid.
+// the rendered surface is the bilinear interpolation of the 50 m rift strip or the 200 m far grid.
 
 export const CORE_HALF = 51200;
 export const FAR_HALF = 204800;
@@ -32,6 +36,41 @@ export class HeightField {
     this.core = new Uint16Array(CORE_N * CORE_N);
     this.far = new Uint16Array(FAR_N * FAR_N);
     this.minMax = null; // per level: Float32Array [min, max] per node
+    this.minMaxRaw = null; // the same without the far nodes' margin (DeadSea.js: the flat lake)
+    this.rift = null;   // Uint16Array riftInfo.nx * riftInfo.nz (setRift)
+    this.riftInfo = null; // {x0, z0, x1, z1, nx, nz, spacing}
+  }
+
+  /**
+   * The rift strip (rift.json's fields, rift.bin's samples). x0, z0 and the 50 m spacing must
+   * lie on the 25 m grid (the vertex shader addresses it in 25 m units).
+   */
+  setRift(data, meta) {
+    const nx = meta.ncols, nz = meta.nrows, sp = meta.spacing_m;
+    if (data.length !== nx * nz) throw new Error(`rift.bin: ${data.length} samples, expected ${nx} x ${nz}`);
+    if (sp !== 2 * CORE_SPACING || (meta.x0 + FAR_HALF) % CORE_SPACING || (meta.z0 + FAR_HALF) % CORE_SPACING) {
+      throw new Error('rift.json: the strip must be 50 m samples on the 25 m grid');
+    }
+    this.rift = data;
+    this.riftInfo = { x0: meta.x0, z0: meta.z0, x1: meta.x0 + sp * (nx - 1), z1: meta.z0 + sp * (nz - 1), nx, nz, spacing: sp };
+  }
+
+  /** Whether the rift strip holds world x, z. */
+  inRift(x, z) {
+    const r = this.riftInfo;
+    return !!r && x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1;
+  }
+
+  /** Bilinear height on the rift strip (the caller checked inRift). */
+  riftHeightAt(x, z) {
+    const r = this.riftInfo, f = this.rift;
+    const gx = (x - r.x0) / r.spacing, gz = (z - r.z0) / r.spacing;
+    const i = Math.min(Math.floor(gx), r.nx - 2), j = Math.min(Math.floor(gz), r.nz - 2);
+    const fx = gx - i, fz = gz - j;
+    const k = j * r.nx + i;
+    const h00 = decode(f[k]), h10 = decode(f[k + 1]);
+    const h01 = decode(f[k + r.nx]), h11 = decode(f[k + r.nx + 1]);
+    return (h00 + (h10 - h00) * fx) * (1 - fz) + (h01 + (h11 - h01) * fx) * fz;
   }
 
   /** Copies one core tile (Uint16Array of 257 x 257, row-major, row 0 = north). */
@@ -74,7 +113,7 @@ export class HeightField {
       const hc = decode(c[k + CORE_N]);
       return ha + fz * (hc - ha) + fx * (hd - hc);
     }
-    return this.farHeightAt(x, z);
+    return this.inRift(x, z) ? this.riftHeightAt(x, z) : this.farHeightAt(x, z);
   }
 
   /** Bilinear height on the far grid (clamped to the far area). */
@@ -111,8 +150,8 @@ export class HeightField {
       }
     } else {
       const e = 1;
-      dhdx = (this.farHeightAt(x + e, z) - this.farHeightAt(x - e, z)) / (2 * e);
-      dhdz = (this.farHeightAt(x, z + e) - this.farHeightAt(x, z - e)) / (2 * e);
+      dhdx = (this.heightAt(x + e, z) - this.heightAt(x - e, z)) / (2 * e);
+      dhdz = (this.heightAt(x, z + e) - this.heightAt(x, z - e)) / (2 * e);
     }
     const inv = 1 / Math.sqrt(dhdx * dhdx + 1 + dhdz * dhdz);
     if (out && out.set) return out.set(-dhdx * inv, inv, -dhdz * inv);
@@ -127,9 +166,10 @@ export class HeightField {
    * because the core boundary samples (core data) can differ a little from the far grid.
    */
   buildMinMax() {
-    const levels = [];
+    const levels = [], raw = [];
     const n0 = (2 * FAR_HALF) / NODE0_M; // 256
     const l0 = new Float32Array(n0 * n0 * 2);
+    const r0 = new Float32Array(n0 * n0 * 2);
     const coreFirst = (FAR_HALF - CORE_HALF) / NODE0_M; // 96
     const coreNodes = (2 * CORE_HALF) / NODE0_M; // 64
     const sPer = NODE0_M / CORE_SPACING; // 64 core samples per node
@@ -148,6 +188,8 @@ export class HeightField {
             }
           }
           mn = decode(mn); mx = decode(mx);
+          r0[(J * n0 + I) * 2] = mn;
+          r0[(J * n0 + I) * 2 + 1] = mx;
         } else {
           for (let j = J * fPer; j <= J * fPer + fPer; j++) {
             const row = j * FAR_N;
@@ -157,15 +199,38 @@ export class HeightField {
               if (v > mx) mx = v;
             }
           }
-          mn = decode(mn) - 30; mx = decode(mx) + 30;
+          mn = decode(mn); mx = decode(mx);
+          // the rift strip's samples in the node (its cliffs and gorges reach beyond the far
+          // grid's averages)
+          const rr = this.riftInfo;
+          if (rr) {
+            const nx0 = -FAR_HALF + I * NODE0_M, nz0 = -FAR_HALF + J * NODE0_M;
+            const i0 = Math.max(0, Math.floor((nx0 - rr.x0) / rr.spacing));
+            const i1 = Math.min(rr.nx - 1, Math.ceil((nx0 + NODE0_M - rr.x0) / rr.spacing));
+            const j0 = Math.max(0, Math.floor((nz0 - rr.z0) / rr.spacing));
+            const j1 = Math.min(rr.nz - 1, Math.ceil((nz0 + NODE0_M - rr.z0) / rr.spacing));
+            let rmn = Infinity, rmx = -Infinity;
+            for (let j = j0; j <= j1; j++) {
+              const row = j * rr.nx;
+              for (let i = i0; i <= i1; i++) {
+                const v = this.rift[row + i];
+                if (v < rmn) rmn = v;
+                if (v > rmx) rmx = v;
+              }
+            }
+            if (rmx >= rmn) { mn = Math.min(mn, decode(rmn)); mx = Math.max(mx, decode(rmx)); }
+          }
+          r0[(J * n0 + I) * 2] = mn;
+          r0[(J * n0 + I) * 2 + 1] = mx;
+          mn -= 30; mx += 30;
         }
         l0[(J * n0 + I) * 2] = mn;
         l0[(J * n0 + I) * 2 + 1] = mx;
       }
     }
     levels.push(l0);
-    for (let k = 1; k < LEVELS; k++) {
-      const prev = levels[k - 1], np = n0 >> (k - 1), n = n0 >> k;
+    raw.push(r0);
+    const up = (prev, np, n) => {
       const cur = new Float32Array(n * n * 2);
       for (let J = 0; J < n; J++) {
         for (let I = 0; I < n; I++) {
@@ -181,9 +246,14 @@ export class HeightField {
           cur[(J * n + I) * 2 + 1] = mx;
         }
       }
-      levels.push(cur);
+      return cur;
+    };
+    for (let k = 1; k < LEVELS; k++) {
+      levels.push(up(levels[k - 1], n0 >> (k - 1), n0 >> k));
+      raw.push(up(raw[k - 1], n0 >> (k - 1), n0 >> k));
     }
     this.minMax = levels;
+    this.minMaxRaw = raw;
     return levels;
   }
 

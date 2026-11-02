@@ -1,8 +1,9 @@
 // node sim/dev/terrain.bench.mjs [--port 8146] [--root sim] [--size 960x540] [--frames 7] [--rounds 1]
 //   [--out FILE] [--gpu] [--configs 0,5,6] [--views 0,2]
-// Terrain-only frame times: dev/terrain.html (the terrain and the sky, nothing else) at three
+// Terrain-only frame times: dev/terrain.html (the terrain and the sky, nothing else) at four
 // views (fields at 120 m at noon, Rehovot's orchards at 80 m at 08:00, Tel Aviv at night from
-// 400 m), per quality and with each terrain feature switched off in turn, after the maps and
+// 400 m, the Dead Sea from 150 m at 16:00 looking at the Moab wall and its reflection), per
+// quality and with each terrain feature switched off in turn, after the maps and
 // tiles have settled. Each frame is timed with a 1-pixel readback (the GPU finished); a row's
 // number is the median of its --frames frames (in each of --rounds rounds, which visit the rows
 // in turn so that a slow spell of the machine is shared by all of them).
@@ -42,9 +43,14 @@ const VIEWS = [
   { name: 'fields120_noon', q: 'x=-24500&z=4500&agl=120&hdg=35&pitch=-12&t=12' },
   { name: 'orchards80_0800', q: 'x=-22720&z=-8000&agl=80&hdg=60&pitch=-12&t=8' },
   { name: 'tlv400_night', q: 'x=-21500&z=-29500&agl=400&hdg=250&pitch=-15&t=21.5' },
+  // the lake fills the lower half, the Moab wall 7-10 km away stands in its mirror
+  { name: 'deadsea150_1600', q: 'x=45489&z=7661&agl=150&hdg=100&pitch=-4&t=16' },
 ];
 // [label, quality, ground detail, terrain shadows, city lights, horizon map size (default: the
-// quality's)]: the 1024^2 row shows what the 2048^2 maps of high cost per frame
+// quality's), Dead Sea (default: the quality's: the mirror on high, the horizon profile below;
+// 'profile': the profile on high too; 'off': no lake pass, the terrain's own water as before)]:
+// the 1024^2 row shows what the 2048^2 maps of high cost per frame; the lake rows matter only
+// in the Dead Sea view (--configs 0,8,9 --views 3)
 const CONFIGS = [
   ['high', 'high', true, true, 1],
   ['high, no ground detail', 'high', false, true, 1],
@@ -54,6 +60,8 @@ const CONFIGS = [
   ['medium', 'medium', true, true, 1],
   ['low', 'low', true, true, 1],
   ['all terrain features off', 'high', false, false, 0],
+  ['high, Dead Sea profile, no mirror', 'high', true, true, 1, null, 'profile'],
+  ['high, no Dead Sea pass', 'high', true, true, 1, null, 'off'],
 ];
 // --configs 0,5,6 runs only those rows (by index), --views 0,2 only those views
 const pick = (list, name) => {
@@ -143,8 +151,10 @@ async function settle(hz) {
 
 // In the page: a row's switches. The quality is set as such (not with setQuality, which would
 // also recompute the horizon maps); with tiered shaders (this code) the tier's programs are
-// compiled once and then only swapped. Returns true when the shader changed.
-async function apply([q, d, s, c]) {
+// compiled once and then only swapped. The Dead Sea (older code has none): its quality is the
+// row's (the mirror target is made again on the first frame that needs it, a frame the median
+// leaves out). Returns true when the shader changed.
+async function apply([q, d, s, c, , lake]) {
   const t = window.__dev.terrain;
   let changed = false;
   t.quality = q;
@@ -158,6 +168,10 @@ async function apply([q, d, s, c]) {
     }
   }
   t.groundDetail = d; t.shadows = s; t.cityLights = c;
+  if (t.lake) {
+    t.lake.setEnabled(lake !== 'off');
+    t.lake.setQuality(lake === 'profile' ? 'medium' : q);
+  }
   return changed;
 }
 
@@ -201,7 +215,7 @@ async function main() {
           for (const row of rows) {
             // one frame unmeasured after a shader change (programs found, SwiftShader's routines
             // built); the other switches are uniforms
-            if (await page.evaluate(apply, row.slice(1, 5))) await frame();
+            if (await page.evaluate(apply, row.slice(1))) await frame();
             const a = acc.get(row[0]);
             for (let i = 0; i < FRAMES; i++) {
               const c0 = cpuSeconds(pid);

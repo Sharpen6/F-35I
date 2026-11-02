@@ -37,6 +37,7 @@ import { Cockpit } from './aircraft/Cockpit.js';      // cockpit track: live PCD
 import { DisplayLevels } from './env/displayLevels.js';   // lighting fix: the jet's displays at a picture level
 import { Scatter } from './terrain/Scatter.js';           // vegetation (trees, orchards, palms, shrubs)
 import { ShaderWarmup, warmUpApp } from './env/warmup.js';   // start-up: the shader programs before they are needed
+import { Shore } from './world/Shore.js';                 // landscape: breakwaters, quays, piers, port cranes, Ein Bokek's hotels
 
 const params = new URLSearchParams(location.search);
 const STUBS = params.get('stubs') === '1';
@@ -295,6 +296,7 @@ class App {
     if (!STUBS) import('./world/Runways.js').then(({ Runways }) => this.addModule(new Runways(ctx))).catch((e) => console.warn('Runways:', e));   // airfield: runway surfaces over the terrain's paint (?runways=0)
     if (!STUBS) this.addModule(new DisplayLevels(ctx));   // lighting fix: PCD, tablet, LEDs = level / exposure (steps aside for app.cockpit)
     this.addModule(new Scatter(ctx));                      // vegetation: js/terrain/Scatter.js
+    this.addModule(new Shore(ctx));                        // landscape: the coast's breakwaters, quays, cranes, the south basin's hotels (js/world/Shore.js)
   }
 
   /**

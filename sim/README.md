@@ -253,6 +253,7 @@ Browsers start sound only after a click or key press: it begins with *Fly*.
 | `runways=0` | no runway surfaces: the terrain's own uniform runway paint shows (see Roads) |
 | `bshadows=0` / `blights=0` | no ground shadows of the buildings / no obstruction lights |
 | `terrainDetail=0` / `terrainShadows=0` / `cityLights=0` | terrain: near ground materials, hill shadows, city lights off (`js/terrain/README.md`) |
+| `deadSea=0` / `rift=0` / `shore=0` | landscape: no Dead Sea water pass / no 50 m rift strip (Moab, the south basin) / no breakwaters, quays, port cranes and south-basin hotels (see Landscape) |
 
 ## Vegetation
 
@@ -319,6 +320,32 @@ ends with slabs, shoulders, blast pads with chevrons, worn ICAO markings, arrest
 light fixtures and tyre marks at the turn-offs, all filtered by the pixel's footprint; by day the
 edge light fixtures, distance-remaining and arresting gear signs stand beside them. The roads'
 taxiways get concrete at the holding positions and the aprons darker parking stands.
+
+### Landscape: the Dead Sea, the rift, the coast's structures
+
+* **The Dead Sea** has its own water (`js/terrain/DeadSea.js`, `lakeShaders.js`): milky turquoise
+  over the white salt of the shallows, dark blue-green offshore, steel-grey from afar; ripples
+  from the basin's daily wind (a mirror after sunrise, light ripples in the afternoon, a chop
+  after sunset); on high quality a planar reflection of the Judean and Moab walls within 40 km,
+  on medium and low their silhouette from a horizon profile. Details in `js/terrain/README.md`.
+* **The rift strip** (`data/landscape/rift.bin`, `rift.json`, `rift_color.jpg`, 10 MB, built by
+  `tools/terrain/rift.py` from the terrain's own sources): 50 m heights and colour for the rift
+  outside the 25 m core, so the Moab escarpment, Masada, Ein Bokek, Mount Sodom and the
+  evaporation ponds stand as walls and dikes instead of the far grid's 200 m ramp.
+* **Shore structures** (`js/world/Shore.js`, `shoreShaders.js`; `data/landscape/shore.json`,
+  219 kB, OpenStreetMap via Overture, built by `tools/world/shore.py`): the breakwaters, quays,
+  piers and marina pontoons between Herzliya and Ashkelon (the detached breakwaters off the Tel
+  Aviv beaches, the marinas, Jaffa, Ashdod's main breakwater) and Ashdod's 25 container cranes:
+  rubble mounds of rock and concrete armour with a wet band and algae at the waterline and white
+  water on their exposed side, concrete crests and quays, cranes with red obstruction lights at
+  night. And the Dead Sea's south basin, outside the core whose buildings `Buildings.js` draws:
+  the hotels of Ein Bokek and Hamei Zohar, Neve Zohar and the Dead Sea Works at Sdom as blocks
+  (balcony rows and windows, lit at night). Within 20 / 32 / 45 km (low / medium / high), one
+  draw call per 8 km area, and one each for its white water and its night lights where it has
+  them.
+
+Without `data/landscape/` the app runs as before (a console warning; `tests/e2e.mjs` lists the
+404s as notes).
 
 ### How the shell runs
 
@@ -609,6 +636,10 @@ vapour first shows.
 * **Terrain detail** (field rows, crops, orchards, vineyards, greenhouses, terraces, sand,
   salt, the runway digits), the terrain's hill shadows and the city lights are procedural,
   made in the browser from the data above; no other textures or data.
+* **Landscape** (`data/landscape/`): the rift strip from the terrain's sources (Copernicus DEM
+  GLO-30 and the ESA WorldCover 2021 Sentinel-2 composite, credited above, CC BY 4.0); the
+  shore structures © OpenStreetMap contributors, ODbL 1.0, via the Overture Maps Foundation, the
+  crane positions picked in the Sentinel-2 imagery; the cranes, rock and water are procedural.
 * **three.js** r187 (MIT licence), vendored in `vendor/three`.
 * Everything else (sounds, helmet display, effects, the splash picture from this repository's
   renders) is made here. The sky, stars, moon and clouds are procedural (formulas: Hillaire 2020

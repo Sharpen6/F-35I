@@ -221,6 +221,9 @@ function step(dt, now = performance.now(), render = true) {
   terrain.debug.wireframe = $('wire').checked;
   env.update(camera, dt);
   terrain.update(camera);
+  // the terrain's module step, as the app runs it before drawing: the Dead Sea's mirror (or its
+  // horizon profile) and the hills' shadow on the sun light
+  terrain.module.update({ dt, draw: render });
   if (!render) return;
   renderer.render(scene, camera);
   window.__dev.frames++;

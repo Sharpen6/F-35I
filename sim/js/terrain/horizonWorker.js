@@ -2,7 +2,9 @@
 // It reads the height tiles itself (the browser's HTTP cache has them after Terrain.load), so
 // the main thread neither copies 42 MB of heights nor blocks while the maps are computed.
 //
-// in:  {type: 'init', baseUrl}            out: {type: 'ready'} | {type: 'error', message}
+// in:  {type: 'init', baseUrl, riftUrl}   out: {type: 'ready'} | {type: 'error', message}
+//      (riftUrl: the rift strip's folder when Terrain loaded it, so the shadows see the same
+//      50 m walls as the mesh; null = the far grid there)
 //      {type: 'job', id, layers: [job...]} out: {type: 'result', id, maps: [Uint8Array...]}
 
 import { HeightField, TILES } from './HeightField.js';
@@ -16,7 +18,7 @@ async function u16(url) {
   return new Uint16Array(await r.arrayBuffer());
 }
 
-async function init(baseUrl) {
+async function init(baseUrl, riftUrl) {
   const f = new HeightField();
   const jobs = [];
   for (let iz = 0; iz < TILES; iz++) for (let ix = 0; ix < TILES; ix++) jobs.push([ix, iz]);
@@ -29,6 +31,11 @@ async function init(baseUrl) {
   });
   await Promise.all(pool);
   f.setFar(await u16(`${baseUrl}height/far.bin`));
+  if (riftUrl) {
+    const r = await fetch(`${riftUrl}rift.json`);
+    if (!r.ok) throw new Error(`${riftUrl}rift.json: HTTP ${r.status}`);
+    f.setRift(await u16(`${riftUrl}rift.bin`), await r.json());
+  }
   hf = f;
 }
 
@@ -36,7 +43,7 @@ self.onmessage = async (e) => {
   const msg = e.data;
   try {
     if (msg.type === 'init') {
-      await init(msg.baseUrl);
+      await init(msg.baseUrl, msg.riftUrl ?? null);
       self.postMessage({ type: 'ready' });
     } else if (msg.type === 'job') {
       const h = (x, z) => hf.heightAt(x, z);
