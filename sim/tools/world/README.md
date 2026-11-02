@@ -9,6 +9,7 @@ Builders for what stands on the terrain of the flight sim. Each one writes into
 | `overture.py` | reads any theme / type of the [Overture Maps](https://overturemaps.org/) open data release for the core's lon / lat box (GeoParquet on a public S3 bucket, HTTP range requests on row-group bbox statistics) and caches the rows |
 | `buildings.py` | 3D buildings: `sim/data/world/buildings/` (this page) |
 | `geom.py` | polygon helpers (WKB parsing, cleaning, oriented boxes, point in polygon) |
+| `volumes.py` | building volumes for `buildings.py`: parts and their outline, raised volumes onto what holds them up, duplicates |
 | `airbases.py`, `airbases.json` | the buildings of Tel Nof, Hatzor and Palmachim, traced in the imagery (below) |
 | `shots.mjs` | screenshots of the scenes the buildings are judged by (Playwright, `window.__sim`) |
 
@@ -32,32 +33,62 @@ without it only the runways are).
 `buildings/building_part` row inside the core's lon / lat box (102.4 km square, sim/DESIGN.md),
 883,093 buildings in release 2026-10-21.0.
 
-**tiles** (~6 min on 4 cores):
+**tiles** (~14 min on 4 cores):
 
-1. Building parts replace the outline of their building (OpenStreetMap's simple 3D buildings).
-2. Footprints are projected into the sim's frame (`sim/tools/terrain/grid.py`), cleaned (duplicate
+1. Footprints are projected into the sim's frame (`sim/tools/terrain/grid.py`), cleaned (duplicate
    and collinear points, Douglas-Peucker 0.5 m, which keeps right angles) and dropped when
    underground, outside the core, tiny or slivers (< 6 m², thinner than 1.4 m, or walls: thinner
    than 3.2 m and longer than 24 m), on a runway with its overruns and 15 m shoulders
    (airports.json) or in the sea / the Dead Sea (land cover).
-3. Ground: the terrain's heights at the footprint's vertices and inside it, with exactly the
+2. Ground: the terrain's heights at the footprint's vertices and inside it, with exactly the
    interpolation of `HeightField.heightAt` (25 m grid, cells split NW-SE). Floor 0 is the lowest
    ground point (`base`); the walls reach `sink` below it (0.6 m + a quarter of the slope's rise).
-4. Height: the tagged `height` or `num_floors` (2 % of the buildings carry one), else by
+3. Height: the tagged `height` or `num_floors` (2 % of the buildings carry one), else by
    kind, area and context: the mean floors of tagged neighbours (~1 km window, towers left out),
    the building density, named regions (Tel Aviv centre and Gush Dan 4-8 floors, Bnei Brak, Jerusalem, Modiin,
    Ramallah ...), so suburbs come out at 2-4 floors, kibbutzim and moshavim at 1-2, industrial
-   halls at 7-12 m, hangars at 10-15 m, greenhouses at 4-5 m, sheds at about 3 m.
-5. Roof: `roof_shape` when tagged; else pitched (hipped or gabled, 28-36 degrees) for houses
+   halls at 7-12 m, hangars at 10-15 m, greenhouses at 4-5 m, sheds at about 3 m. The rules for
+   big low halls only apply to low buildings: a tagged tower is never an industrial hall, nor a
+   "greenhouse" over 15 m. Stacks are recognised by their shape (40 m or more, no floors, slender:
+   height over 6 diameters, round: 8 or more vertices filling 70-86 % of their box): the
+   chimneys of the Rutenberg (Ashkelon, 250 m), Eshkol (Ashdod) and Reading (Tel Aviv) power
+   stations.
+4. Roof: `roof_shape` when tagged; else pitched (hipped or gabled, 28-36 degrees) for houses
    whose roof looks reddish in the imagery, barrel vaults for hangars, flat otherwise. The roof
    colour is the L0 imagery (6.25 m / px) under the footprint, cleaned of tree green; clay tiles
    on most pitched roofs.
-6. Walls: a style per building (plaster, Jerusalem stone, old stone, curtain-wall glass, office,
-   tower, industrial, house, public, concrete, greenhouse) from the class, the region (the
-   Jerusalem stone law, old Jaffa, the Old City) and the height; flags for an open ground floor on
-   columns (Tel Aviv's pilotis), shop fronts and balconies; colours from palettes per style
-   (the White City's whites and creams, limestone, glass tints); floor height and window bay
-   width for the facade shader.
+5. Walls: a style per building (plaster, Jerusalem stone, old stone, curtain-wall glass, office,
+   tower, industrial, house, public, concrete, greenhouse, stack, hangar) from the class, the
+   region (the Jerusalem stone law, old Jaffa, the Old City) and the height; flags for an open
+   ground floor on columns (Tel Aviv's pilotis), shop fronts and balconies; colours from palettes
+   per style (the White City's whites and creams, limestone, glass tints). Tagged facade colours
+   (a mapper's pick from a short list: pure #0000FF, #FF0000 ...) are tamed: saturation at most
+   0.45, value at most 0.85 (0.93 for greys), then 40 % of the style's base colour mixed in.
+   Floor height and window bay width for the facade shader; the floors count up to the eaves
+   from the lowest ground, so on a slope the windows still reach the top.
+6. `OVERRIDES` (by Overture id) for what the tags get wrong: the Azrieli Spiral (tagged finished
+   at 350 m, under construction until 2028) is drawn as a bare concrete frame of 60 floors
+   (235 m) with its curtain wall nine floors behind; the Dome of the Rock's faience octagon and
+   gilded dome.
+7. Volumes (`volumes.py`). OpenStreetMap's simple 3D buildings draw a building from its parts,
+   and mappers often map only some of them (the crown and a few floors of a tower): the parts
+   stay, every member of the building shares one ground reference, and the outline fills what
+   they leave out: the plan area no part covers, and band by band the floors under a part that
+   nothing holds up (fillers thinner than 3 m are mapping slack, dropped). Then duplicates go:
+   near-identical footprints (OpenStreetMap and Microsoft's ML footprint of one building, doubled
+   mapping; IoU > 0.8) keep the better one, a volume hidden inside another is dropped, and
+   overlapping volumes that remain are flagged so the runtime steps the lesser one's walls in by
+   0.3 m (no coplanar walls fighting in the depth buffer); two tall volumes mostly inside each
+   other are one tower mapped twice and share one facade. Last, bottom up, any raised volume
+   (more than 3 m off the ground) still standing on nothing is lowered onto what is under it, or
+   dropped if it is a small piece high up (a rooftop fragment whose tower is not mapped).
+
+Every build checks itself and stops when a check fails: no raised volume more than 5 m above
+what is under it (`volumes.floating`), no air base structure on a runway strip, taxiway or apron
+(`airbases.intrusions`). It prints the 30 tallest buildings with their styles and the landmarks of
+`EXPECTED_TALL` (found by position, +-12 % of their height from the List of tallest buildings in
+Israel): Azrieli Sarona, Moshe Aviv, the Azrieli round tower, ToHa 2, the Beyond office tower,
+the Spiral's frame and the Rutenberg stacks.
 
 **Air bases** (`airbases.py`, `airbases.json`): the buildings inside Tel Nof, Hatzor and Palmachim
 are in neither OpenStreetMap nor the Microsoft footprints, so they are traced in the L0 imagery
@@ -66,15 +97,19 @@ their surroundings at two scales (medians over 56 m and 131 m), unsaturated, in 
 built-up class, and off the runways (+25 m), taxiways and aprons (+8 m) and existing footprints;
 connected roofs of 110-6,000 m² that fill at least 45 % of their oriented box become buildings of
 3-10 m (1-3 floors), halls of 8-12 m or vaulted hangars of 11-16 m (over 1,800 m²), in sand, cream
-and concrete colours. Each base also gets a control tower (concrete shaft, glass cab; a plausible
-place by the runways, not surveyed). 10 m imagery does not resolve small buildings: this gives the
-bases' built-up pattern, not their exact buildings. `python3 sim/tools/world/airbases.py --plot
-DIR` draws the result over the imagery for review. Tel Nof 385 structures, Hatzor 218,
-Palmachim 158.
+and concrete colours. The boxes are then held clear of the paving exactly: nothing within 75 m of
+a runway centre line (the graded strip, to 60 m past the overruns), within 7.5 m beyond a
+taxiway's shoulders, or on an apron; a box reaching in is cut back from that side, or dropped.
+Halls and hangars are clad in steel sheet without windows (style `hangar`), their doors (leaves
+under the box beam of their track) in the wall facing the nearest apron or taxiway. Each base also
+gets a control tower (concrete shaft, glass cab; a plausible place by the runways, not surveyed).
+10 m imagery does not resolve small buildings: this gives the bases' built-up pattern, not their
+exact buildings. `python3 sim/tools/world/airbases.py --plot DIR` draws the result over the
+imagery for review. Tel Nof 382 structures, Hatzor 208, Palmachim 154.
 
 Output: `index.json` and one `tile_<ix>_<iz>.bin` per terrain L0 tile (6.4 km) with buildings:
-222 tiles, 839,394 buildings (759 of them traced at the air bases), 4.2 million footprint vertices,
-32.0 MB (gzip; 46.5 MB unpacked).
+222 tiles, 835,734 buildings (744 of them traced at the air bases), 4.2 million footprint vertices,
+32.0 MB (gzip; 46.3 MB unpacked).
 
 ### Tile format (`tile_<ix>_<iz>.bin`, gzip, little-endian)
 
@@ -93,18 +128,18 @@ these arrays, each padded to 4 bytes:
 | yaw | u16 | building | angle of the long axis from +x towards +z (pi / 65536) |
 | base | i16 | building | floor 0: the lowest ground under the footprint (0.1 m) |
 | top | u16 | building | apex above floor 0 (0.1 m) |
-| minh | u16 | building | bottom of raised parts (bridges, canopies) above floor 0 (0.1 m) |
+| minh | u16 | building | bottom of raised volumes (bridges, canopies, the parts of a tower) above floor 0 (0.1 m; 0: on the ground) |
 | ring_n | u16 | ring | vertices per ring (outer ring first, then holes) |
 | vx, vz | u16 | vertex | `ox + vx * quantum`; outer rings counter-clockwise on a north-up map, holes clockwise |
 | sink | u8 | building | how far the walls reach below floor 0 (0.1 m) |
 | rise | u8 | building | roof rise (0.2 m) |
 | shape | u8 | building | 0 flat, 1 gabled, 2 hipped, 3 pyramidal, 4 skillion, 5 dome, 6 round (vault) |
-| style | u8 | building | wall style (low 4 bits: 0 plaster, 1 stone, 2 glass, 3 office, 4 industrial, 5 house, 6 greenhouse, 7 concrete, 8 public, 9 tower, 10 old stone) + 16 pilotis, 32 shops, 64 balconies |
-| rstyle | u8 | building | roof style: 0 residential flat, 1 flat, 2 industrial, 3 tiles, 4 metal, 5 greenhouse, 6 dome, 7 concrete, 8 solar |
-| floorh, bay | u8 | building | floor height, window bay (0.05 m) |
+| style | u8 | building | wall style (low 4 bits: 0 plaster, 1 stone, 2 glass, 3 office, 4 industrial, 5 house, 6 greenhouse, 7 concrete, 8 public, 9 tower, 10 old stone, 11 stack, 12 hangar, 13 frame: a tower under construction) + 16 pilotis, 32 shops, 64 balconies, 128 inset (the volume overlaps another: its walls step in by 0.3 m). A hangar reads 16 as "doors on the - side" and 32 as "doors in an end wall (facing along the long axis a), not a long side" |
+| rstyle | u8 | building | roof style: 0 residential flat, 1 flat, 2 industrial, 3 tiles, 4 metal, 5 greenhouse, 6 dome, 7 concrete, 8 solar, 9 gilded |
+| floorh, bay | u8 | building | floor height, window bay (0.05 m); a hangar's floor height is its door height |
 | vs | u8 | building | visibility size, log scale 2 m .. 2000 m (`2 * 1000^(vs / 255)`) |
 | seed | u8 | building | random seed of the facade |
-| floors | u8 | building | floors above ground |
+| floors | u8 | building | floors from floor 0 to the eaves; a stack's height in 2 m steps |
 | nrings | u8 | building | rings of the footprint |
 | wall, roof | u8 x 3 | building | sRGB colours |
 
