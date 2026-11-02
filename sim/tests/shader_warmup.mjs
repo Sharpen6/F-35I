@@ -7,8 +7,10 @@
 //                                    [--root SIM_FOLDER] [--extra 'post=0'] [--frames 4]
 //
 // --phases shots: only the noon and 21:30 views (cmp_*.png) for comparing two versions pixel by
-// pixel (run both with --extra clouds=clear; --root serves the other checkout), each taken once
-// the vegetation is idle and after two settled frames. A server already on --port is used as it is.
+// pixel (run both with --extra clouds=clear; --root serves the other checkout): the menu first
+// until its streaming is idle, as a user sees it before a flight, then each view once the
+// vegetation and the terrain's tiles are idle, after two settled frames. A server already on
+// --port is used as it is.
 //
 // Headless Chromium with SwiftShader (Playwright), index.html?test=1. The page's WebGL2 context is
 // hooked before the app starts (compileShader, linkProgram, the texture uploads, the synchronous
@@ -299,20 +301,27 @@ async function main() {
     if (PHASES.includes('shots')) {
       // the same views for a before / after comparison (run both with --extra clouds=clear): noon, 21:30
       await phase('shots');
+      // update-only frames, as settle() runs them (a drawn frame takes many seconds in SwiftShader),
+      // until the streaming is idle: the vegetation's start-up and cells, the terrain's colour tiles
+      // (a second of them first: the modules ask for what they need in their updates)
+      const idle = (maxMs) => S(async (ms) => {
+        const app = window.__sim.app, T = app.terrain, t0 = performance.now();
+        const done = () => app.modules.every((x) => typeof x.idle !== 'function' || x.idle()) &&
+          !(T && T.stats && T.stats.tilesLoading > 0);
+        for (let n = 0; performance.now() - t0 < ms && (n < 25 || !done()); n++) {
+          app._render(0.016, app.input.update(0), 1, false);
+          app.env.update(app.camera, 0.04);
+          await new Promise((r) => setTimeout(r, 40));
+        }
+      }, maxMs);
+      // the menu first, as a user sees it before a flight (the warm-up streams its surroundings
+      // behind the loading screen, a version without it in the menu's first seconds)
+      await idle(60000);
       for (const [sp, h] of [['telnof_36', 12], ['bengurion_26', 21.5]]) {
         await S(({ sp, h }) => window.__sim.start(sp, { time: h, camera: 'chase' }), { sp, h });
-        // the streaming modules idle first (the vegetation's start-up and cells): a version without
-        // the warm-up starts them later, and what is compared is the settled picture. Update-only
-        // frames, as settle() runs them (a drawn frame takes many seconds in SwiftShader), up to 90 s
-        await S(async () => {
-          const app = window.__sim.app, t0 = performance.now();
-          const idle = () => app.modules.every((x) => typeof x.idle !== 'function' || x.idle());
-          while (!idle() && performance.now() - t0 < 90000) {
-            app._render(0.016, app.input.update(0), 1, false);
-            app.env.update(app.camera, 0.04);
-            await new Promise((r) => setTimeout(r, 40));
-          }
-        });
+        // what is compared is the settled picture: a version without the warm-up starts the
+        // streaming modules later
+        await idle(90000);
         for (const m of ['chase', 'cockpit']) {
           await S((c) => window.__sim.camera(c), m);
           // settle() draws a frame at its end: twice, because a version without the warm-up builds

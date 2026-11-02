@@ -319,7 +319,9 @@ drawing while they compile. `?warmup=0` turns it off.
 5. The textures of the scene's materials not on the GPU yet (`renderer.initTexture`), a few a
    frame; then six real frames behind the loading screen (the menu's view, the cockpit, the chase
    view, the same two by the other light, the menu's view again) for the driver's own per-draw
-   state, and a fence polled once a frame until the GPU has done them.
+   state, and a fence polled once a frame until the GPU has done them. The bounding spheres three
+   works out in those frames after the menu's own are handed back (`firstDrawBounds`): see
+   *Nothing looks different* below.
 
 After start-up, `check(label)` runs when a flight starts, the camera, the time of day or the
 quality changes and when the wingmen load: whatever in the scene was not compiled yet (a new
@@ -366,23 +368,54 @@ A whole `tests/e2e.mjs` run (medium quality: the runway, a take-off, the cameras
 Jerusalem, the Tel Aviv towers by day and by night) made none either: `app.warmup.late` stayed
 empty.
 
-Nothing looks different. `--phases shots` took the noon view at Tel Nof 36 and the 21:30 view at
-Ben Gurion 26, from the chase camera and from the cockpit, with both versions (960 x 540,
-`clouds=clear`; each view once the vegetation was idle, after two settled frames): at noon the
-cockpit view is the same to the pixel and the chase view differs in 0.014 % of its pixels (by
-more than 8 of 255); at 21:30 0.7 % (chase) and 1.4 % (cockpit) differ, all of them at lights
-that change with the clock: the approach lights' sequenced flashers and their glow, blinking
-obstruction lights and moving lights on the horizon. (Taken sooner, the old version's first
-frames still lack what it builds at its first draw: the airfield's surfaces, then the trees.)
+**Nothing looks different.** `--phases shots` takes the noon view at Tel Nof 36 and the 21:30
+view at Ben Gurion 26, from the chase camera and from the cockpit (960 x 540, `clouds=clear`),
+as a user gets there: the menu until its streaming is idle, then each flight until the
+vegetation and the terrain's colour tiles are idle, after two settled frames. Two runs of the
+same version differ in 0.03-0.08 % of their pixels (by more than 8 of 255: lights that flash
+with the clock), and the two versions no more than that: at 21:30 in 0.04-0.06 % (cockpit) and
+0.06-0.08 % (chase); at noon the cockpit view is the same to the pixel, and the chase view
+differs in 0.016 % (the old version's runs among themselves 0.003 %): the outline of one tree's
+crown at the edge of the view (the vegetation's streaming state depends on where the camera has
+been, and the warm-up's views of that start point came first). The draw lists are the same
+(189 draws, 2.83 M triangles, 143 k points at 21:30), but for an opaque building tile or the
+tree impostors a place earlier or later (opaque: the same pixels). The programs differ only
+where no pixel can: the unlit materials the warm-up compiled by day keep the sun's shadow map
+in their key (three keeps an unlit material's first program whatever the lights do, and none of
+these shaders reads it).
+
+The comparison found one difference, fixed: three works out a geometry's bounding sphere the
+first time it draws it and keeps it, and the landing light's pool, whose grid is rewritten in
+place wherever the jet is, was first drawn in the warm-up's night view at the menu's start
+point. Its sphere stayed there, and it was sorted among the transparent draws as if it were
+there too: at night at Ben Gurion its multiplication of the ground came before the airfield's
+lights instead of after them, their glow dimmer (1.4 % of the cockpit view's pixels, 0.7 % of
+the chase view's). The spheres three works out in the warm-up's frames after the menu's own are
+now handed back, to be worked out again where the object is first really drawn
+(`firstDrawBounds`; `info().bounds` counts them). (Without the warm-up the pool's sphere stays
+wherever it was first drawn as well, so a night flight after one elsewhere sorts it the same
+way: for `LandingPool.js`, a sphere set when it rebuilds its grid.)
+
+**Cost.** In flight nothing: the same draws, and the GPU memory estimate within 0.1 MB (916 MB
+at the 21:30 view; the warm-up keeps a 1 x 1 float target and its depth materials). Per frame,
+`beforeDraw` compares a bit mask of the lights that cast shadows, `afterDraw` looks at the
+programs made since the frame before, and `check()` walks the scene only on the events above.
+The textures it uploads behind the loading screen (27 by itself, 319 MB counted at 4 bytes a
+texel, the rest in its frames) are those the old version uploaded in the menu's first frames
+(101 uploads). What it costs is loading time.
 
 SwiftShader has no parallel compile, and the container's 4 CPUs were shared with other jobs: the
-warm-up took 31-65 s there (each first use waits for its compile), and its first frames take
-seconds; that says nothing about the PC. On the PC each of the menu's 59 programs cost ~90 ms
-of main-thread time (5.3 s for its first frame); compiled in parallel by the driver behind the
+warm-up took 31-65 s there (each first use waits for its compile; the page loaded in 5-12 s
+before, in 34-48 s after), and its first frames take seconds; that says nothing about the PC.
+Nor does the menu's first frame there: the wait for the GPU gives up after 15 s with SwiftShader
+still drawing the warm-up's frames, and the menu's first frame then waits for them (72-123 s;
+before, 15-34 s of compiling). On the PC each of the menu's 59 programs cost ~90 ms of
+main-thread time (5.3 s for its first frame); compiled in parallel by the driver behind the
 loading screen, the ~106 programs should add roughly 2-4 s to the loading screen, which keeps
-moving (`app.warmup.info().worstGapMs` is its longest frame, `worstGapBy` per step). The menu,
-the first flight, every camera, dusk and night, a quality change and the streaming then make no
-program. Run `tests/pc_check.py` on the PC to see it: `programs_made` per scene should be empty.
+moving (`app.warmup.info().worstGapMs` is its longest frame, `worstGapBy` per step; `gpuIdle`
+whether the GPU was done in time). The menu, the first flight, every camera, dusk and night, a
+quality change and the streaming then make no program. Run `tests/pc_check.py` on the PC to see
+it: `programs_made` per scene should be empty.
 
 ## Quality tiers
 

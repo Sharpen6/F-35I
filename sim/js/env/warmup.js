@@ -45,7 +45,8 @@
 // the cockpit's interior) given their frames, compileAll, finish, then a few real frames drawn
 // behind the loading screen (the menu's view, the cockpit, the chase view, by day and by night):
 // the first uploads of the textures, the driver's per-draw state, and whatever variant the passes
-// did not foresee; then a wait (a fence, polled once a frame) until the GPU has done them.
+// did not foresee (what three works out at an object's first draw is handed back after them:
+// firstDrawBounds); then a wait (a fence, polled once a frame) until the GPU has done them.
 //
 // URL: ?warmup=0 turns it off (three builds each program when first drawn, as before).
 
@@ -132,7 +133,7 @@ export class ShaderWarmup {
     this.late = [];                  // programs made after the start-up pass: { label, programs: [names], ms }
     this.stats = { programs: 0, ms: 0, totalMs: 0, compileMs: 0, finishMs: 0, framesMs: 0, frames: 0, gpuMs: 0, gpuIdle: true,
       worstGapMs: 0, gapsOver100: 0, worstGapBy: {}, uploads: 0, uploadMB: 0, uploaded: [],
-      frameMade: [], added: [], parallel: false, settled: [] };
+      frameMade: [], added: [], parallel: false, settled: [], bounds: 0 };
     this._raw = null;                // renderer.compile as three has it
     this._inner = 0;                 // > 0 inside our own passes (the hook passes them on as they are)
     this._early = [];                // the modules' compiles before the start-up pass, made again in it
@@ -644,6 +645,7 @@ export class ShaderWarmup {
       enabled: this.enabled, done: this.done, parallel: s.parallel, programs: s.programs, ms: Math.round(s.ms), totalMs: Math.round(s.totalMs),
       compileMs: Math.round(s.compileMs), finishMs: Math.round(s.finishMs), framesMs: Math.round(s.framesMs), frames: s.frames,
       gpuMs: Math.round(s.gpuMs), gpuIdle: s.gpuIdle, worstGapMs: Math.round(s.worstGapMs), gapsOver100: s.gapsOver100, worstGapBy: { ...s.worstGapBy },
+      bounds: s.bounds,
       uploads: s.uploads, uploadMB: +s.uploadMB.toFixed(1), uploaded: s.uploaded.slice(),
       frameMade: s.frameMade.slice(), added: s.added.slice(), settled: s.settled.slice(), late: this.late.map((l) => ({ ...l, programs: l.programs.slice() })),
     };
@@ -818,17 +820,63 @@ async function drawViews(app, w, say) {
   const mode = app.cams.mode;
   const views = [[null, 'orbit'], [null, 'cockpit'], [null, 'chase'], [other, 'chase'], [other, 'cockpit'], [hours, mode]];
   const f = app.input.update(0);
-  let k = 0;
-  for (const [h, view] of views) {
-    if (h != null && app.settings.time !== h) app.setTimeOfDay(h, true);
-    app.cams.setMode(view);
-    app.cams.snap?.();
-    app._render(1 / 60, f, 1, true);
-    w.afterDraw(app);
-    w.stats.frames++;
-    say(++k / views.length);
-    await nextFrame();
+  let k = 0, bounds = null;
+  try {
+    for (const [h, view] of views) {
+      if (h != null && app.settings.time !== h) app.setTimeOfDay(h, true);
+      app.cams.setMode(view);
+      app.cams.snap?.();
+      app._render(1 / 60, f, 1, true);
+      w.afterDraw(app);
+      w.stats.frames++;
+      // (the menu's own view first: what it works out is what the menu's first frame would)
+      if (!bounds) bounds = firstDrawBounds(app.renderer);
+      say(++k / views.length);
+      await nextFrame();
+    }
+  } finally {
+    if (bounds) w.stats.bounds = bounds();
   }
+}
+
+/**
+ * The bounding spheres three works out the first time it draws an object (the geometry's, or an
+ * instanced, batched or skinned mesh's own: for the frustum test and the order of the
+ * transparent draws), while the warm-up's other views are drawn: handed back afterwards (null),
+ * so each is worked out where and when the object is first really drawn, as without the
+ * warm-up. A geometry rewritten in place keeps the sphere of its first draw: the landing light's
+ * pool, first drawn in the warm-up's night view at the menu's start point, was then sorted among
+ * the transparent draws as if it were still there, and at night at another airfield its
+ * multiplication of the ground came before that airfield's lights instead of after them (their
+ * glow dimmer: 1.4 % of the cockpit view's pixels at Ben Gurion). Returns the function that
+ * hands them back (it returns how many).
+ */
+function firstDrawBounds(renderer) {
+  const made = [], undo = [];
+  let depth = 0;
+  for (const C of [THREE.BufferGeometry, THREE.InstancedMesh, THREE.BatchedMesh, THREE.SkinnedMesh]) {
+    const P = C && C.prototype;
+    if (!P || !Object.prototype.hasOwnProperty.call(P, 'computeBoundingSphere')) continue;
+    const raw = P.computeBoundingSphere;
+    P.computeBoundingSphere = function () {
+      const lazy = depth > 0 && this.boundingSphere === null;
+      const out = raw.apply(this, arguments);
+      if (lazy) made.push([this, this.boundingSphere]);
+      return out;
+    };
+    undo.push(() => { P.computeBoundingSphere = raw; });
+  }
+  // (only those three works out while it draws: a module's own, set in its update, stay)
+  const render = renderer.render;
+  const counted = function () { depth++; try { return render.apply(this, arguments); } finally { depth--; } };
+  renderer.render = counted;
+  undo.push(() => { if (renderer.render === counted) renderer.render = render; });
+  return () => {
+    for (const u of undo.reverse()) u();
+    let n = 0;
+    for (const [o, s] of made) if (o.boundingSphere === s) { o.boundingSphere = null; n++; }
+    return n;
+  };
 }
 
 /** At most this long for the GPU to work through the frames drawn behind the loading screen. */
