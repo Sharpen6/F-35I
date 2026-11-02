@@ -55,6 +55,9 @@ export const SCENES = [
   { name: 'telnof36_noon_cockpit', spawn: 'telnof_36', time: 12, camera: 'cockpit', steps: 60, settle: 1500 },
   { name: 'telnof36_0700_chase', spawn: 'telnof_36', time: 7, camera: 'chase', steps: 120, settle: 2500 },
   { name: 'telnof36_0700_cockpit', spawn: 'telnof_36', time: 7, camera: 'cockpit', steps: 60, settle: 1500 },
+  // the PC flight film's frame of the ground beside the runway (capture_v2/0480.jpg): 70 m over
+  // the threshold of 36 at 16:48, looking north along the runway
+  { name: 'telnof70_1648_chase', spawn: { x: -19661, z: -2838, agl: 70, hdg: 358, speed: 110 }, time: 16.8, camera: 'chase', steps: 30, settle: 2500 },
   // low over the fields south-west of Tel Nof, heading north-east, 120 m above the ground
   { name: 'fields120_noon_chase', spawn: { x: -24500, z: 4500, agl: 120, hdg: 35, speed: 150 }, time: 12, camera: 'chase', steps: 90, settle: 3500 },
   { name: 'fields120_noon_cockpit', spawn: { x: -24500, z: 4500, agl: 120, hdg: 35, speed: 150 }, time: 12, camera: 'cockpit', steps: 30, settle: 1500 },
