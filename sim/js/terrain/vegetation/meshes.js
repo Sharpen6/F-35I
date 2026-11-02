@@ -14,9 +14,11 @@
 //                     w: sway weight (0 at the base, 1 at the crown's tips)
 //   uv                fronds and fan leaves: (along, across) for the leaflet pattern
 //
-// Two variants per species (different seeds); detail 1 for the near meshes, 0 for a coarser
-// mesh. The returned info has the bounding radius of the crown in x / z and the radius of
-// the bounding sphere about (0, 0.5, 0), which is what the impostor frames are fitted to.
+// Two variants per species (different seeds); detail 1 for the near meshes and the impostor
+// bake, 0 for the reduced level of detail drawn further out: the same tree (the same random
+// numbers in the same order, so the same clumps in the same places) with coarser clumps, fewer
+// sides and segments, no twigs. The returned info has the bounding radius of the crown in x / z
+// and the radius of the bounding sphere about (0, 0.5, 0), which the impostor frames fit.
 
 import * as THREE from 'three';
 import { SPECIES, srgbToLinear } from './species.js';
@@ -178,24 +180,30 @@ class Builder {
    * normal bends towards the direction from crownC. AO is computed later (finishAO).
    */
   clump(c, radii, level, color, crownC, seed, opts = {}) {
-    const { amp = 0.28, freq = 2.2, bend = 0.5, part = PART_FOLIAGE, swayK = 1 } = opts;
+    // basis: the ellipsoid's axes (a tilted tuft), default x / y / z; under: how much darker the
+    // underside is (needles in their own shade); rim: extra noise towards the flat rim
+    const { amp = 0.28, freq = 2.2, bend = 0.5, part = PART_FOLIAGE, swayK = 1, basis = null, under = 0.05, rim = 0 } = opts;
+    const [ex, ey, ez] = basis || [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
     const { v, f } = icosphere(level);
     const base = this.count;
     const rnd = hash3(seed, 3, 5, 11);
     const shade = 0.85 + 0.3 * rnd;
     for (const d of v) {
       const nz = fbm(d[0] * freq + seed * 0.37, d[1] * freq + seed * 0.11, d[2] * freq - seed * 0.23, seed);
-      const k = 1 + amp * (nz - 0.5) * 2;
-      const p = [c[0] + d[0] * radii[0] * k, c[1] + d[1] * radii[1] * k, c[2] + d[2] * radii[2] * k];
+      const k = 1 + amp * (nz - 0.5) * 2 + rim * (nz - 0.5) * 2 * (1 - d[1] * d[1]);
+      const l = [d[0] * radii[0] * k, d[1] * radii[1] * k, d[2] * radii[2] * k];
+      const p = [c[0] + ex[0] * l[0] + ey[0] * l[1] + ez[0] * l[2], c[1] + ex[1] * l[0] + ey[1] * l[1] + ez[1] * l[2], c[2] + ex[2] * l[0] + ey[2] * l[1] + ez[2] * l[2]];
       // ellipsoid normal, bent towards the crown's own radial direction (and a little up)
-      const en = [d[0] / radii[0], d[1] / radii[1], d[2] / radii[2]];
+      const q = [d[0] / radii[0], d[1] / radii[1], d[2] / radii[2]];
+      const en = [ex[0] * q[0] + ey[0] * q[1] + ez[0] * q[2], ex[1] * q[0] + ey[1] * q[1] + ez[1] * q[2], ex[2] * q[0] + ey[2] * q[1] + ez[2] * q[2]];
       const el = Math.hypot(...en);
       let cr = [p[0] - crownC[0], (p[1] - crownC[1]) * 1.3, p[2] - crownC[2]];
       const cl = Math.hypot(...cr) || 1;
       cr = cr.map((x) => x / cl);
       const n = [en[0] / el * (1 - bend) + cr[0] * bend, en[1] / el * (1 - bend) + cr[1] * bend + 0.12, en[2] / el * (1 - bend) + cr[2] * bend];
-      // tips a little lighter (new growth), underside a little darker
-      const tip = 0.94 + 0.12 * nz + 0.05 * d[1];
+      // tips a little lighter (new growth), the underside darker
+      const up = en[1] / el;
+      const tip = (0.94 + 0.12 * nz) * (1 - under + under * (0.5 + 0.5 * up)) * (1 + 0.05 * up);
       const col = [color[0] * shade * tip, color[1] * shade * tip, color[2] * shade * tip];
       this.vertex(p, n, col, 1, part, rnd, swayK);
     }
@@ -397,32 +405,57 @@ function alongY(path, y) {
   return path[path.length - 1];
 }
 
+/** An orthonormal basis whose y axis is n (for tilted clumps). */
+function basisY(n) {
+  const l = Math.hypot(...n) || 1;
+  const y = n.map((x) => x / l);
+  const a = Math.abs(y[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  let x = [a[1] * y[2] - a[2] * y[1], a[2] * y[0] - a[0] * y[2], a[0] * y[1] - a[1] * y[0]];
+  const xl = Math.hypot(...x) || 1;
+  x = x.map((v) => v / xl);
+  const z = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+  return [x, y, z];
+}
+
 function pine(b, sp, rng, detail) {
   const fol = lin(sp.foliage), wood = lin(sp.wood);
   const lean = 0.03 + rng() * 0.08;
-  const trunkTop = 0.84;
+  const trunkTop = 0.8;
   const path = trunkPath(rng, trunkTop, lean, 5);
   b.tube(path, path.map((p, i) => 0.024 * (1 - 0.65 * i / (path.length - 1))), detail ? 6 : 4, wood, 0.3);
   const top = path[path.length - 1];
-  const crownC = [top[0] * 0.85, 0.7, top[2] * 0.85];
-  const crownR = [0.34, 0.26, 0.34];
-  // Aleppo pine (planted KKL forest): a trunk bare to about half its height, then an
-  // irregular, open crown of flattened tufts at the ends of the branches, roundish to flat on
-  // top, with gaps through which the branches show
-  const n = detail ? 12 + Math.floor(rng() * 3) : 7;
-  for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
-    const y = 0.47 + 0.43 * Math.pow(t, 0.8) + jitter(rng, 0.025);
-    const az = i * 2.39996 + rng() * 0.7;
-    const spread = (0.17 * (1 - 0.45 * t) + 0.04 * rng()) * (t > 0.9 ? 0.35 : 1);
-    const tp = alongY(path, Math.min(y - 0.05, trunkTop));
-    const c = [tp[0] + Math.cos(az) * spread, y, tp[2] + Math.sin(az) * spread];
-    const r = 0.09 + 0.035 * rng() - 0.015 * t;
-    // branch from the trunk to the tuft
-    if (detail) b.tube([tp, [(tp[0] + c[0]) / 2, (tp[1] + y) / 2 + 0.01, (tp[2] + c[2]) / 2], [c[0], y - 0.02, c[2]]], [0.007, 0.005, 0.0035], 3, wood, 0.5, (yy) => 0.3 + 0.5 * yy, 0.5);
-    b.clump(c, [r * 1.3, r * 0.62, r * 1.3], detail ? 1 : 0, fol, crownC, 100 + i * 7 + Math.floor(rng() * 1000), { amp: 0.34, freq: 2.6, bend: 0.55 });
+  const crownC = [top[0] * 0.85, 0.72, top[2] * 0.85];
+  const crownR = [0.36, 0.25, 0.36];
+  // Aleppo pine (planted KKL forest): a trunk bare to about half its height, then an open,
+  // irregular crown: a few main branches climbing out of the trunk, each ending in several
+  // small tufts of needles, tilted with the branch (their flat side up and out), frayed at the
+  // rim, darker inside and underneath; sky shows between the tufts
+  const limbs = 6 + Math.floor(rng() * 3);
+  let k = 0;
+  for (let i = 0; i < limbs; i++) {
+    const t = i / (limbs - 1);
+    const y0 = 0.46 + 0.36 * t + jitter(rng, 0.03);
+    const az = i * 2.39996 + rng() * 0.9;
+    const reach = (0.2 * (1 - 0.5 * t) + 0.06 * rng()) * (t > 0.92 ? 0.45 : 1);
+    const rise = 0.06 + 0.1 * rng();
+    const tp = alongY(path, Math.min(y0, trunkTop));
+    const out = [Math.cos(az), 0, Math.sin(az)];
+    const e = [tp[0] + out[0] * reach, y0 + rise, tp[2] + out[2] * reach];
+    if (detail) b.tube([tp, [(tp[0] + e[0]) / 2, (tp[1] + e[1]) / 2 + 0.015, (tp[2] + e[2]) / 2], e], [0.009, 0.006, 0.004], 3, wood, 0.5, (yy) => 0.3 + 0.5 * yy, 0.5);
+    // three or four tufts around the branch's outer end
+    const tufts = 3 + Math.floor(rng() * 2);
+    for (let j = 0; j < tufts; j++) {
+      const s = 0.55 + 0.5 * rng();
+      const a2 = az + jitter(rng, 1.1);
+      const c = [tp[0] + (e[0] - tp[0]) * s + Math.cos(a2) * 0.05 * rng(), tp[1] + (e[1] - tp[1]) * s + jitter(rng, 0.025), tp[2] + (e[2] - tp[2]) * s + Math.sin(a2) * 0.05 * rng()];
+      const r = 0.055 + 0.03 * rng() - 0.012 * t;
+      const tilt = 0.25 + 0.4 * rng();         // the tuft's flat side faces up and out
+      const n = [Math.cos(a2) * Math.sin(tilt), Math.cos(tilt), Math.sin(a2) * Math.sin(tilt)];
+      b.clump(c, [r * 1.35, r * 0.5, r * 1.2], detail ? 1 : 0, fol, crownC, 100 + (k++) * 7 + Math.floor(rng() * 1000),
+        { amp: 0.3, freq: 3.1, bend: 0.45, basis: basisY(n), under: 0.3, rim: 0.22 });
+    }
   }
-  b.finishAO(crownC, crownR, 0.3);
+  b.finishAO(crownC, crownR, 0.25);
 }
 
 function olive(b, sp, rng, detail) {
@@ -438,7 +471,7 @@ function olive(b, sp, rng, detail) {
       [Math.cos(az) * lean, 0.34, Math.sin(az) * lean], [Math.cos(az) * lean * 1.6, 0.48, Math.sin(az) * lean * 1.6]];
     b.tube(pts, [0.06 / Math.sqrt(stems), 0.045 / Math.sqrt(stems), 0.03, 0.015], detail ? 6 : 4, wood, 0.2 + s * 0.1);
   }
-  const n = detail ? 8 + Math.floor(rng() * 3) : 6;
+  const n = 8 + Math.floor(rng() * 3);
   for (let i = 0; i < n; i++) {
     const t = i / n;
     const az = t * Math.PI * 2 + rng() * 0.7;
@@ -458,7 +491,7 @@ function citrus(b, sp, rng, detail) {
   const crownR = [0.52, 0.46, 0.52];
   // one dense rounded mass (pruned skirt close to the ground) with a few bulges
   b.clump([0, 0.5, 0], [0.47, 0.42, 0.47], detail ? 2 : 1, fol, crownC, 500 + Math.floor(rng() * 1000), { amp: 0.16, freq: 2.0, bend: 0.3 });
-  const n = detail ? 5 : 3;
+  const n = 5;
   for (let i = 0; i < n; i++) {
     const az = i * 2.39996 + rng();
     const c = [Math.cos(az) * 0.24, 0.45 + 0.35 * rng(), Math.sin(az) * 0.24];
@@ -482,7 +515,7 @@ function broadleaf(b, sp, rng, detail) {
     const e = [top[0] + Math.cos(az) * 0.22, 0.62 + 0.08 * rng(), top[2] + Math.sin(az) * 0.22];
     if (detail) b.tube([top, [(top[0] + e[0]) / 2, (top[1] + e[1]) / 2 + 0.03, (top[2] + e[2]) / 2], e], [0.022, 0.016, 0.01], 4, wood, 0.6, (y) => 0.2 + 0.6 * y);
   }
-  const n = detail ? 9 + Math.floor(rng() * 3) : 7;
+  const n = 9 + Math.floor(rng() * 3);
   for (let i = 0; i < n; i++) {
     const up = rng();
     const az = i * 2.39996 + rng() * 0.5;
@@ -511,7 +544,7 @@ function datepalm(b, sp, rng, detail) {
   // crown core
   b.clump([c[0], c[1] + 0.01, c[2]], [0.045, 0.05, 0.045], 0, fol.map((x) => x * 0.7), c, 900, { amp: 0.2, part: PART_FOLIAGE });
   // fronds in spirals: upper ones steep, lower ones drooping
-  const nf = detail ? 24 : 12;
+  const nf = 24;
   for (let i = 0; i < nf; i++) {
     const t = i / nf;
     const a = i * 2.39996 + rng() * 0.3;
@@ -530,7 +563,7 @@ function cypress(b, sp, rng, detail) {
   b.tube([[0, 0, 0], [0, 0.1, 0]], [0.03, 0.025], 4, wood, 0.1, () => 0, 0.4);
   // a narrow flame-shaped column: stacked clumps along a slightly wavy axis
   const crownC = [0, 0.52, 0];
-  const n = detail ? 9 : 5;
+  const n = 9;
   const wob = jitter(rng, 0.015);
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
@@ -545,45 +578,50 @@ function cypress(b, sp, rng, detail) {
 }
 
 function eucalyptus(b, sp, rng, detail) {
-  const fol = lin(sp.foliage), wood = lin(sp.wood);
-  // river red gum: a pale smooth trunk forking low into a few long limbs; an open, irregular,
-  // tall crown of small drooping masses with sky between them
-  const fork = 0.32 + 0.08 * rng();
-  const path = trunkPath(rng, fork, 0.05, 3);
-  b.tube(path, [0.03, 0.027, 0.024, 0.021], detail ? 6 : 4, wood, 0.25, (y) => y * y * 0.5, 0.6);
+  const fol = lin(sp.foliage), wood = lin(sp.wood), bark = lin([112, 100, 84]);
+  // river red gum (the gum of Israel's windbreaks and stream banks): a smooth pale grey trunk
+  // with a rough darker foot, forking at about a third of its height into a few long limbs
+  // that climb and spread; a tall, open, irregular crown of many small drooping masses of
+  // grey-green leaves from ~0.4 of the height to the top, sky between them
+  const fork = 0.3 + 0.08 * rng();
+  const path = trunkPath(rng, fork, 0.06, 3);
+  b.tube(path.slice(0, 2), [0.034, 0.03], detail ? 6 : 4, bark, 0.2, (y) => y * y * 0.5, 0.55);
+  b.tube(path.slice(1), [0.03, 0.026, 0.023], detail ? 6 : 4, wood, 0.25, (y) => y * y * 0.5, 0.6);
   const top = path[path.length - 1];
   const crownC = [top[0], 0.7, top[2]];
-  const crownR = [0.3, 0.3, 0.3];
-  const limbs = 3 + Math.floor(rng() * 2);
+  const crownR = [0.36, 0.32, 0.36];
+  const limbs = 4 + Math.floor(rng() * 2);
   const ends = [];
   for (let i = 0; i < limbs; i++) {
     const az = (i / limbs) * Math.PI * 2 + rng() * 0.8;
-    const r = 0.13 + 0.12 * rng();
-    const e = [top[0] + Math.cos(az) * r, 0.6 + 0.3 * rng(), top[2] + Math.sin(az) * r];
+    const r = 0.16 + 0.14 * rng();
+    const e = [top[0] + Math.cos(az) * r, 0.68 + 0.28 * rng(), top[2] + Math.sin(az) * r];
     ends.push(e);
-    const mid = [(top[0] + e[0]) / 2 + jitter(rng, 0.03), (top[1] + e[1]) / 2, (top[2] + e[2]) / 2 + jitter(rng, 0.03)];
-    b.tube([top, mid, e], [0.017, 0.012, 0.007], detail ? 4 : 3, wood, 0.5, (y) => 0.3 + 0.5 * y, 0.7);
+    const mid = [(top[0] + e[0]) / 2 + jitter(rng, 0.04), (top[1] + e[1]) / 2 + 0.04, (top[2] + e[2]) / 2 + jitter(rng, 0.04)];
+    b.tube([top, mid, e], [0.018, 0.012, 0.006], detail ? 4 : 3, wood, 0.5, (y) => 0.3 + 0.5 * y, 0.7);
   }
-  // foliage masses along the outer half of every limb and beyond its end, hanging a little
-  const n = detail ? 14 + Math.floor(rng() * 3) : 7;
+  // 26-34 small masses along the outer two thirds of the limbs, around their ends and above
+  // them, hanging (taller than wide); the lowest ones at ~0.4 of the height
+  const n = 26 + Math.floor(rng() * 9);
   for (let i = 0; i < n; i++) {
     const e = ends[i % limbs];
-    const s = 0.5 + 0.65 * rng();
+    const s = 0.35 + 0.8 * rng();
     const az = rng() * Math.PI * 2;
-    const out = 0.04 + 0.07 * rng();
-    const c = [top[0] + (e[0] - top[0]) * s + Math.cos(az) * out, top[1] + (e[1] - top[1]) * s + jitter(rng, 0.05),
+    const out = 0.03 + 0.1 * rng();
+    const c = [top[0] + (e[0] - top[0]) * s + Math.cos(az) * out, Math.max(0.4, top[1] + (e[1] - top[1]) * s + jitter(rng, 0.07)),
       top[2] + (e[2] - top[2]) * s + Math.sin(az) * out];
-    const r = 0.06 + 0.035 * rng();
-    b.clump(c, [r, r * 1.2, r], detail ? 1 : 0, fol, crownC, 1400 + i * 9 + Math.floor(rng() * 1000), { amp: 0.42, freq: 2.4, bend: 0.4 });
+    const r = 0.1 + 0.05 * rng();
+    b.clump(c, [r * 0.85, r * 1.0, r * 0.85], detail ? 1 : 0, fol, crownC, 1400 + i * 9 + Math.floor(rng() * 1000),
+      { amp: 0.4, freq: 2.6, bend: 0.45, under: 0.25, rim: 0.1 });
   }
-  b.finishAO(crownC, crownR, 0.45);
+  b.finishAO(crownC, crownR, 0.35);
 }
 
 function shrub(b, sp, rng, detail) {
   const fol = lin(sp.foliage);
   // a low cushion of a few hemispheres (garrigue: thorny burnet, sage, mastic)
   const crownC = [0, 0.35, 0];
-  const n = detail ? 4 + Math.floor(rng() * 2) : 3;
+  const n = 4 + Math.floor(rng() * 2);
   for (let i = 0; i < n; i++) {
     const az = i * 2.39996 + rng();
     const rad = i ? 0.28 + 0.12 * rng() : 0;
@@ -610,7 +648,7 @@ function fanpalm(b, sp, rng, detail) {
   const c = pts[pts.length - 1];
   // skirt of dead leaves (often trimmed in town: short)
   b.clump([c[0], c[1] - 0.03, c[2]], [0.035, 0.05, 0.035], 0, lin([120, 98, 70]), c, 1700, { amp: 0.15, part: PART_FOLIAGE });
-  const nf = detail ? 14 : 9;
+  const nf = 14;
   for (let i = 0; i < nf; i++) {
     const a = i * 2.39996 + rng() * 0.3;
     const elev = (55 - 70 * (i / nf) + jitter(rng, 10)) * Math.PI / 180;

@@ -19,8 +19,8 @@
 export const SPECIES = [
   {
     id: 0, name: 'pine', label: 'Aleppo pine (Pinus halepensis)',
-    foliage: [72, 84, 54], wood: [92, 74, 58],
-    height: [7, 14], crown: 0.62, crownBase: 0.38,
+    foliage: [68, 80, 52], wood: [92, 74, 58],
+    height: [8, 18], crown: 0.62, crownBase: 0.4,
     tint: 0.65, translucency: 0.25, shadow: 0.78, sway: 0.5, fluff: 0.75, specular: 0.0, far: 1.0,
   },
   {
@@ -55,8 +55,8 @@ export const SPECIES = [
   },
   {
     id: 6, name: 'eucalyptus', label: 'river red gum (Eucalyptus camaldulensis)',
-    foliage: [92, 108, 74], wood: [196, 186, 166],
-    height: [14, 28], crown: 0.6, crownBase: 0.42,
+    foliage: [80, 92, 72], wood: [170, 164, 150],
+    height: [15, 30], crown: 0.7, crownBase: 0.4,
     tint: 0.4, translucency: 0.35, shadow: 0.65, sway: 0.7, fluff: 0.95, specular: 0.1, far: 1.0,
   },
   {

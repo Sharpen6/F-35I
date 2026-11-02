@@ -486,12 +486,13 @@ function treeCover(t, p, px, pz, rng, out) {
   // among houses: garden and street trees
   if (t.built[p] > 85) { urban(t, p, px, pz, rng, out, 1); return; }
   const cover = clamp((exg - 0.03) / 0.17, 0.15, 1) * (0.75 + 0.4 * smooth(0.58, 0.36, luma));
-  // a line of trees through farmland: windbreak (eucalyptus, cypress)
+  // a line of trees through farmland: windbreak (eucalyptus, cypress), planted 3-4 m apart,
+  // the crowns crowded narrow and merging into one tall wall
   if (t.tree3[p] <= 115 && t.crop[p] + t.grass[p] > 100 && elev > -100) {
     const sp = noise2(px, pz, 300, 7) < 0.68 ? SP.eucalyptus : SP.cypress;
-    const n = countOf(sp === SP.cypress ? 2.2 : 1.4, rng);
+    const n = countOf(sp === SP.cypress ? 3.0 : 2.8, rng);
     for (let k = 0; k < n; k++) {
-      emit(t, out, px + rng() * LC_PX, pz + rng() * LC_PX, sp, heightFor(sp, rng, noise2(px, pz, 200, 9)), rng);
+      emit(t, out, px + rng() * LC_PX, pz + rng() * LC_PX, sp, heightFor(sp, rng, noise2(px, pz, 200, 9)), rng, { wf: 0.55 + 0.25 * rng() });
     }
     return;
   }
