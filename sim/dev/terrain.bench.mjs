@@ -161,7 +161,10 @@ async function apply([q, d, s, c]) {
   return changed;
 }
 
-const median = (a) => [...a].sort((x, y) => x - y)[a.length >> 1];
+const median = (a) => {
+  const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
 
 async function main() {
   const server = await startServer();
@@ -189,11 +192,15 @@ async function main() {
       const frame = () => page.evaluate(() => window.__dev.timeFrame(1 / 60));
       for (const g of GROUPS) {
         await page.evaluate(settle, g.hz);
+        // one frame unmeasured: the settling queued uploads (tiles, their mips, map bands) that
+        // the GPU process may still be working through, and the first timed frame would wait for
+        // them (seen as one frame of 3 - 4 times the CPU time)
+        await frame();
         for (let r = 0; r < ROUNDS; r++) {
           const k = r % g.rows.length, rows = g.rows.slice(k).concat(g.rows.slice(0, k));
           for (const row of rows) {
             // one frame unmeasured after a shader change (programs found, SwiftShader's routines
-            // built); the other switches are uniforms, and the settling drew the group's first
+            // built); the other switches are uniforms
             if (await page.evaluate(apply, row.slice(1, 5))) await frame();
             const a = acc.get(row[0]);
             for (let i = 0; i < FRAMES; i++) {
@@ -215,6 +222,7 @@ async function main() {
         res[label] = {
           median: median(a.wall), min: Math.min(...a.wall),
           cpu: pid ? median(a.cpu) : null, cpuMin: pid ? Math.min(...a.cpu) : null,
+          wallFrames: a.wall, cpuFrames: pid ? a.cpu : null,
           ...a.info,
         };
         const x = res[label];
