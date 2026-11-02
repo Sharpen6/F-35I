@@ -47,8 +47,9 @@ export const INTERIOR_PAINT = {
   F35_glare_pad: { color: 0x57534b, roughness: 0.85, metalness: 0, detail: 0.6 },
   // the coaming's hood (pcd/parts.js): a flat black anti-glare finish
   F35_glare_shield: { color: 0x1e1f21, roughness: 0.93, metalness: 0, detail: 0.8 },
-  // the consoles' panels (pcd/consoles.js), a shade darker than the console under them
-  F35_console_panel: { color: 0x2b2d30, roughness: 0.5, metalness: 0, detail: 0.6 },
+  // the consoles' panels (pcd/consoles.js), a shade darker than the console under them, in a
+  // low-sheen cockpit paint (their Dzus heads, domes of the same paint, glint less in the sun)
+  F35_console_panel: { color: 0x2b2d30, roughness: 0.66, metalness: 0, detail: 0.6 },
   F35_seat: { color: 0x3a3c3f, roughness: 0.62, metalness: 0, detail: 0.7 },
   F35_seat_cushion: { color: 0x575b4e, roughness: 0.92, metalness: 0, detail: 0.5 },
 };

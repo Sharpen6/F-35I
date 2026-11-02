@@ -269,12 +269,14 @@ export function cap(B, f, profile, dir) {
 
 /**
  * A fastener head: a low dome of radius r and height h on a surface at `o` with normal `n`
- * (seg sides; its foot in the crease: cavity `foot`). Painted with the surface it holds, it shows
+ * (seg sides; its foot in the crease: cavity `foot`; its crown the surface's own cavity, `crown`:
+ * never more open than the panel round it). Painted with the surface it holds, it shows
  * by its shading only: its normals lean at most 45 deg at the rim and 24 deg on the crown, so that
- * on a wall lit at a grazing angle (the canopy frame's liner at noon) a head is a soft highlight,
- * not a bright dot.
+ * on a wall lit at a grazing angle (the canopy frame's liner at noon) a head is a soft highlight
+ * with a dark foot, not a bright dot. (Flatter normals read no softer: in the sun the glint on a
+ * head is the paint's specular, where the half vector falls inside the dome's normals.)
  */
-export function stud(B, o, n, r, h, seg = 8, foot = 0.55) {
+export function stud(B, o, n, r, h, seg = 8, foot = 0.55, crown = 1) {
   const u = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0).cross(n).normalize() : new THREE.Vector3(1, 0, 0).cross(n).normalize();
   const w = new THREE.Vector3().crossVectors(n, u);
   const ring = (rr, hh, slope, cav) => {
@@ -288,9 +290,9 @@ export function stud(B, o, n, r, h, seg = 8, foot = 0.55) {
     return ids;
   };
   const r0 = ring(r, -0.0004, 1.0, foot);           // (a little into the surface: no gap at its foot)
-  const r1 = ring(r * 0.72, h * 0.8, 0.45, 1);
+  const r1 = ring(r * 0.72, h * 0.8, 0.45, crown);
   _a.copy(o).addScaledVector(n, h);
-  const top = B.vv(_a, n, 1);
+  const top = B.vv(_a, n, crown);
   for (let k = 0; k < seg; k++) {
     const k1 = (k + 1) % seg;
     B.quad(r0[k], r0[k1], r1[k1], r1[k]);

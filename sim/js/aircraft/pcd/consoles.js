@@ -49,7 +49,8 @@ export function buildConsole(c, rows, holes, out) {
     const d = K.dzus.inset, top = yb + K.plate;
     const xs = x1 - x0 > 0.03 ? [x0 + d, x1 - d] : [(x0 + x1) / 2];
     const zs = z1 - z0 > 0.03 ? [z0 + d, z1 - d] : [(z0 + z1) / 2];
-    for (const x of xs) for (const z of zs) { stud(fasteners, _p.set(x, top, z), _Y, K.dzus.r, K.dzus.h, 8, 0.5); out.heads = (out.heads || 0) + 1; }
+    // (their crowns the plate's own cavity, 0.9)
+    for (const x of xs) for (const z of zs) { stud(fasteners, _p.set(x, top, z), _Y, K.dzus.r, K.dzus.h, 8, 0.5, 0.9); out.heads = (out.heads || 0) + 1; }
     n++;
   };
   // the row panels: between the rows' midpoints, the first and last half a pitch out
