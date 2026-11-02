@@ -360,30 +360,46 @@ async function main() {
       if (!onStats.ready || !onStats.instances) problems.push('vegetation on again: no trees');
     }
     if (LONG) {
-      // 10 km at 250 m above the Judean foothills at 250 m/s, the worker given wall time every
-      // 1 km: no upload may fail and the queue must drain (the slab buffer must not stall)
+      // 10 km at 250 m above the Judean foothills at 250 m/s (heading 95, from west of Ben Shemen
+      // into the hills), the worker given wall time every 1 km: no upload may fail and the queue
+      // must drain (the slab buffer must not stall). The hills rise faster than a hands-off jet
+      // climbs (a single start flew into a ridge after 3.4 km), so every 1 km leg starts again
+      // 250 m above the ground where the last one ended, on the same line; a restart keeps the
+      // module's cells and buffer and only forgets its queue, which the next update rebuilds.
       const series = [];
       await page.evaluate(() => {
-        const sim = window.__sim, app = sim.app;
+        const app = window.__sim.app;
         window.__vegFree = null;
         app.hmd.visible = true;
         app.visual.object3d.visible = true;
-        const g = app.terrain.heightAt(-2000, 2500);
-        app.terrain.spawns.veg_long = { label: 'vegetation long flight', x: -2000, y: g + 250, z: 2500, heading_deg: 95,
-          on_ground: false, speed_ms: 250, gear: 0, ground_y: g };
-        sim.start('veg_long', { time: 11, camera: 'chase' });
       });
       for (let k = 0; k < 10; k++) {
-        const s = await page.evaluate(() => {
-          const sim = window.__sim, app = sim.app, st = app.fdm.state;
-          sim.setInput({ pitch: st.vs < -2 ? 0.15 : st.vs > 4 ? -0.1 : 0, roll: 0, throttle: 0.75 });
-          sim.step(480);
-          return { x: Math.round(st.position.x), z: Math.round(st.position.z), agl: Math.round(st.agl) };
-        });
+        const s = await page.evaluate((k) => {
+          const sim = window.__sim, app = sim.app;
+          // heading 0 is north (-z), 90 east (+x)
+          const h = 95 * Math.PI / 180, x = -2000 + Math.sin(h) * 1000 * k, z = 2500 - Math.cos(h) * 1000 * k;
+          const g = app.terrain.heightAt(x, z);
+          app.terrain.spawns.veg_long = { label: 'vegetation long flight', x, y: g + 250, z, heading_deg: 95,
+            on_ground: false, speed_ms: 250, gear: 0, ground_y: g };
+          sim.start('veg_long', { time: 11, camera: 'chase' });
+          // 4 s (1 km) in half-second steps, the stick holding about 250 m above the ground
+          let minAgl = 1e9;
+          for (let i = 0; i < 8; i++) {
+            const st = app.fdm.state;
+            const pitch = Math.max(-0.2, Math.min(0.4, (250 - st.agl) / 400 - st.vs / 60));
+            sim.setInput({ pitch, roll: 0, throttle: 0.75 });
+            sim.step(60);
+            minAgl = Math.min(minAgl, app.fdm.state.agl);
+          }
+          const st = app.fdm.state;
+          return { x: Math.round(st.position.x), z: Math.round(st.position.z), agl: Math.round(st.agl),
+            minAgl: Math.round(minAgl), crashed: !!st.crashed };
+        }, k);
         await page.evaluate(() => window.__sim.settle(1500));
         const v = await page.evaluate(() => window.__sim.app.modules.find((x) => x && x.isScatter).statsJSON());
         series.push({ k, ...s, veg: v });
-        log(`long ${k}: x ${s.x} z ${s.z} agl ${s.agl} | instances ${v.instances} high water ${v.highWater}/${v.capacity} pending ${v.pending} uploads ${v.uploads} failures ${v.uploadFailures} evicted ${v.evicted} compactions ${v.compactions}`);
+        if (s.crashed || s.minAgl < 100) problems.push(`long flight leg ${k}: ${s.crashed ? 'crashed' : `down to ${s.minAgl} m above the ground`}`);
+        log(`long ${k}: x ${s.x} z ${s.z} agl ${s.agl} (min ${s.minAgl}) | instances ${v.instances} high water ${v.highWater}/${v.capacity} pending ${v.pending} uploads ${v.uploads} failures ${v.uploadFailures} evicted ${v.evicted} compactions ${v.compactions}`);
       }
       // let the queue drain, then judge
       for (let i = 0; i < 60; i++) {
