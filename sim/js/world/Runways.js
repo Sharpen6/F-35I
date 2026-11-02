@@ -13,7 +13,7 @@
 // the module draws nothing and the terrain's paint shows as before.
 //
 // Rendering: one mesh per airfield, its runway rectangles cut out of the terrain's 25 m
-// triangles (js/world/runwayMesh.js), built one airfield per frame after load; shaded in the
+// triangles (js/world/runwayMesh.js), built one runway per frame after load; shaded in the
 // runway frame (js/world/runwayShaders.js) and faded into the imagery at 9-11 km (high). By day
 // the things standing on the airfield (edge and threshold light fixtures, distance-remaining
 // and arresting gear signs) are small instanced meshes (js/world/runwayFixtures.js).
@@ -107,12 +107,13 @@ export class Runways {
     this.Q = QUALITY.high;
     this.ready = false;
     this.data = null;
-    this.stats = { runways: 0, airfields: 0, triangles: 0, building: 0, fixtures: 0, bytes: 0, buildMs: 0 };
+    this.stats = { runways: 0, airfields: 0, triangles: 0, building: 0, fixtures: 0, bytes: 0, buildMs: 0, buildMaxMs: 0 };
     this.group = new THREE.Group();
     this.group.name = 'Runways';
     this.group.matrixAutoUpdate = false;
     scene.add(this.group);
     this._queue = [];
+    this._acc = null;          // the airfield being built: its runways draped so far
     this._meshes = [];
     this._layers = 1;
     this._disposed = false;
@@ -319,24 +320,33 @@ export class Runways {
     this.ready = true;
   }
 
-  /** Builds the mesh of one airfield (all its runways) from the queue. */
+  /**
+   * Drapes one runway of the airfield at the head of the queue (one per frame: ~10-60 ms each on
+   * a loaded 4-core VM); once all its runways are in, makes the airfield's mesh.
+   */
   _buildNext() {
-    const [icao, rs] = this._queue.shift();
+    const [icao, rs] = this._queue[0];
     const t0 = performance.now();
-    let cx = 0, cz = 0;
-    for (const { tr } of rs) { cx += tr.cx; cz += tr.cz; }
-    cx /= rs.length; cz /= rs.length;
-    const out = { pos: [], st: [], nrm: [], rw: [], idx: [] };
-    const hf = this.terrain.hf;
-    const sample = (i, j) => hf.coreSample(i, j);
-    let tris = 0;
-    for (const { rec, tr, row } of rs) {
-      const a = tr.ends[0];
-      tris += drapeRunway({
-        x0: a.x, z0: a.z, ux: tr.ux, uz: tr.uz,
-        sMin: -rec.ov[0] - 1.5, sMax: rec.len + rec.ov[1] + 1.5, tMax: rec.hw + rec.sh + 1.5,
-      }, sample, [cx, cz], row, out);
+    if (!this._acc) {
+      let cx = 0, cz = 0;
+      for (const { tr } of rs) { cx += tr.cx; cz += tr.cz; }
+      this._acc = { k: 0, cx: cx / rs.length, cz: cz / rs.length, tris: 0, out: { pos: [], st: [], nrm: [], rw: [], idx: [] } };
     }
+    const A = this._acc;
+    const { rec, tr, row } = rs[A.k++];
+    const hf = this.terrain.hf;
+    const a = tr.ends[0];
+    A.tris += drapeRunway({
+      x0: a.x, z0: a.z, ux: tr.ux, uz: tr.uz,
+      sMin: -rec.ov[0] - 1.5, sMax: rec.len + rec.ov[1] + 1.5, tMax: rec.hw + rec.sh + 1.5,
+    }, (i, j) => hf.coreSample(i, j), [A.cx, A.cz], row, A.out);
+    if (A.k < rs.length) {
+      this._noteBuild(t0);
+      return;
+    }
+    this._queue.shift();
+    this._acc = null;
+    const { out, cx, cz, tris } = A;
     if (tris) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(out.pos, 3));
@@ -359,8 +369,14 @@ export class Runways {
       this.stats.triangles += tris;
       this.stats.airfields++;
     }
+    this._noteBuild(t0);
+  }
+
+  _noteBuild(t0) {
+    const ms = performance.now() - t0;
     this.stats.building = this._queue.length;
-    this.stats.buildMs += performance.now() - t0;
+    this.stats.buildMs += ms;
+    this.stats.buildMaxMs = Math.max(this.stats.buildMaxMs, ms);
   }
 
   // -------------------------------------------------------------------------------------- module API

@@ -139,13 +139,17 @@ vec3 srgbToLinear(vec3 c) {
   return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
 }
 // a glyph of uGlyphs (index g) in the box q in [0, 1]^2 (x right, y away from the threshold)
+// (one return per function: the PC's ANGLE / HLSL compiler warns on early returns, X4000)
 float glyph(float g, vec2 q, vec2 dqx, vec2 dqy) {
-  if (g < 0.0 || q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) return 0.0;
-  float G = 4.0;
-  float cx = mod(g, G), cy = floor(g / G);
-  vec2 uv = vec2((cx + 0.2 + 0.6 * q.x) / G, 1.0 - (cy + 1.0 - q.y) / G);
-  vec2 sc = vec2(0.6 / G, 1.0 / G);
-  return textureGrad(uGlyphs, uv, dqx * sc, dqy * sc).r;
+  float r = 0.0;
+  if (g >= 0.0 && q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
+    float G = 4.0;
+    float cx = mod(g, G), cy = floor(g / G);
+    vec2 uv = vec2((cx + 0.2 + 0.6 * q.x) / G, 1.0 - (cy + 1.0 - q.y) / G);
+    vec2 sc = vec2(0.6 / G, 1.0 / G);
+    r = textureGrad(uGlyphs, uv, dqx * sc, dqy * sc).r;
+  }
+  return r;
 }
 
 // GGX sheen of the sun on the surface (radiance, scene units)
@@ -258,7 +262,10 @@ void main() {
   float tdzZone = band(ed, 120.0, 1100.0, 80.0 + pu) * smoothstep(hw * 0.75, hw * 0.25, at);
   float streak = nS.g * 2.4 + nS.b * 0.8;
   streak = mix(streak * 0.45, streak + nT.b * 1.6, tdzZone);
-  float cov = clamp(m * (1.0 + streak * detail), 0.0, 1.0);
+  // on the blast pads and overruns the imagery's darkening is their own (older, darker) pavement,
+  // not tyre marks: an even shade there, under the paint, not glossy
+  float onRw = band(e, -2.0, 1e5, pu);
+  float cov = clamp(m * (1.0 + streak * detail * onRw), 0.0, 1.0);
 
   bool onPad = at < hw && e < 0.0;
   float shoulder = 1.0 - band(at, -1.0, hw, pv);
@@ -272,7 +279,8 @@ void main() {
   float lane = floor(t / laneW);
   float sec = floor((s + 37.0 * lane) / 280.0);           // paving sessions: ~280 m sections
   float laneTone = 1.0 + 0.07 * (hash21(vec2(lane * 3.1 + vRw * 17.0, sec)) - 0.5) * detail;
-  vec3 asph = P * laneTone * (1.0 + 0.22 * nF.r * detail + 0.09 * nM.g + 0.05 * nL.g);
+  // aggregate grain (2-5 cm), binder-rich and worn mottling (1.5-6 m), larger sections (10-40 m)
+  vec3 asph = P * laneTone * (1.0 + 0.5 * nF.r * detail + 0.2 * nM.g + 0.1 * nL.g);
   float sealant = 0.0;
   // longitudinal joints between the paving lanes: sealed (a ~10 cm overband, wavering) in the
   // sections the crews have done, ~70 m pieces each with its own start (more on a worn field)
@@ -411,7 +419,7 @@ void main() {
     }
   }
   float wearN = smoothstep(-0.3, 0.25, nM.g + 0.6 * nF.g - 0.55 * wear + 0.25);
-  float paintVis = mix(0.55, 1.0, wearN * (1.0 - 0.6 * wear)) * (1.0 - 0.92 * cov) * (1.0 - 0.8 * sealant);
+  float paintVis = mix(0.55, 1.0, wearN * (1.0 - 0.6 * wear)) * (1.0 - 0.92 * cov * onRw) * (1.0 - 0.8 * sealant);
   white = clamp(white, 0.0, 1.0) * paintVis * mix(1.0, 0.45, float(closed));
   yellow = clamp(yellow, 0.0, 1.0) * paintVis;
   albedo = mix(albedo, PAINT_W * (0.92 + 0.15 * nM.g), white);
@@ -478,7 +486,7 @@ void main() {
   if (closed) albedo = mix(albedo, albedo * vec3(1.05, 1.04, 0.98), 0.5);   // bleached, dusty
 
   // ---- light: sun through the atmosphere, sky, shadows (as the terrain) ----
-  float rough = mix(0.82, 0.48, clamp(cov * (1.0 - shoulder) + turnM, 0.0, 1.0));
+  float rough = mix(0.82, 0.48, clamp(cov * onRw * (1.0 - shoulder) + turnM, 0.0, 1.0));
   rough = mix(rough, 0.6, max(white, yellow));
   rough = mix(rough, 0.55, sealant * (1.0 - conc));
   vec3 N = normalize(vec3(vNrm.x, sqrt(max(1.0 - dot(vNrm, vNrm), 0.01)), vNrm.y));
