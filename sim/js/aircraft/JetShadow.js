@@ -569,8 +569,8 @@ export class JetShadow {
       share.set(lc.r * mu / Math.max(1e-6, lc.r * mu + amb.r), lc.g * mu / Math.max(1e-6, lc.g * mu + amb.g), lc.b * mu / Math.max(1e-6, lc.b * mu + amb.b));
     } else share.set(0, 0, 0);
     this.sunShare = (share.x + share.y + share.z) / 3;
-    // the shadow fades out over the top 30 % of GROUND.maxAgl (cut at once, it vanished in one
-    // frame while still about two-thirds dark: in plain sight ahead of the jet on a midday take-off)
+    // the shadow fades out over the top 30 % of GROUND.maxAgl (cut at once, a high sun's shadow,
+    // its penumbra still under 0.3 m at 60 m, vanished in one frame at full strength in the climb)
     const fade = casting && L.y > 0.03 ? 1 - THREE.MathUtils.smoothstep(agl, 0.7 * GROUND.maxAgl, GROUND.maxAgl) : 0;
     const shadowOn = fade > 0;
     const aoAmount = 1 - THREE.MathUtils.smoothstep(agl, 3, 14);
