@@ -62,9 +62,11 @@ const luma = (c) => c[0] * LUMA[0] + c[1] * LUMA[1] + c[2] * LUMA[2];
  * night glow as bright as the sky at -4 deg, turned dusk into a flat grey night by -5 deg.) The
  * eye darkens fast and adapts to the dark slowly (tauUp / tauDown, s). moon: the share of the
  * moon's (boosted) light in K: the dark-adapted eye adapts only a little to it, so a full moon
- * night is clearly brighter than a quarter moon one.
+ * night is clearly brighter than a quarter moon one: over Tel Aviv above a deck lit by a near-full
+ * moon the exposure is ~240-260 and the deck sRGB ~55-75, its moonlit tops ~80-85 (with 0.2 the
+ * exposure fell to ~190-200 and the deck to ~45-65, hardly brighter than under the quarter moon).
  */
-const METER = { sun: 1.6, key: 1.817, p: 0.385, k1: 0.045, p2: 0.78, moon: 0.2, min: 0.3, max: 285, tauUp: 1.2, tauDown: 3.5 };
+const METER = { sun: 1.6, key: 1.817, p: 0.385, k1: 0.045, p2: 0.78, moon: 0.1, min: 0.3, max: 285, tauUp: 1.2, tauDown: 3.5 };
 /** The exposure for an adapted light level K (scene units; see METER). */
 export function meterExposure(K) {
   const e = K >= METER.k1 ? METER.key * Math.pow(K, -METER.p)
@@ -117,8 +119,8 @@ const COVER_ALBEDO = { 0: 0.06, 10: 0.11, 20: 0.18, 30: 0.2, 40: 0.18, 50: 0.17,
  * and the western glow shows until ~-10.
  * Moonlight is real (full moon 2.5e-6 of the sun above the atmosphere, its phase from js/env/moon.js)
  * on the moon's disc, but the light it casts on the scene and the moonlit sky are drawn at the
- * night's gain too (_moonBoost: ~200 over Tel Aviv under a full moon, ~750 in the desert under a
- * quarter moon), so moonlit clouds and land keep their real contrast with the sky: the quarter
+ * night's gain too (_moonBoost: ~270 over Tel Aviv under a full moon, ~1,000 at the Dead Sea under
+ * a quarter moon), so moonlit clouds and land keep their real contrast with the sky: the quarter
  * moon of the default date (day 172) shows the land dimly, a full moon clearly.
  */
 const NIGHT = {
