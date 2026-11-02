@@ -36,7 +36,10 @@ const QUALITY = {
   medium: { far: 32000, foam: true, detail: 1 },
   high: { far: 45000, foam: true, detail: 1 },
 };
-const AREA = 8000;             // m: structures are grouped into one mesh per area of this size
+// the south basin's blocks on every tier as far as on high: a 30-60 m hotel is 5-7 px at low's
+// 20 km (and lit at night), and areas show without a fade; at 45 km it is about a pixel in the haze
+const BLOCKS_FAR = QUALITY.high.far;
+const AREA = 8000;              // m: structures are grouped into one mesh per area of this size
 const BELOW = 3.0;              // m below the sea the mounds and walls reach (the water hides it)
 const FOAM_Y = 0.12;            // m: the white water band floats this much over the sea
 const FOAM_W = 9.0;             // m: its width from the foot of the mound
@@ -312,6 +315,7 @@ export class Shore {
       if (!b.ring || b.ring.length < 3) continue;
       const a = this._area(map, b.ring[0][0], b.ring[0][1]);
       this._block(a, b);
+      a.blocks = true;
       this.stats.blocks++;
     }
     for (const a of map.values()) {
@@ -346,7 +350,7 @@ export class Shore {
         this.group.add(lights);
       }
       const bs = mesh.geometry.boundingSphere;
-      this.areas.push({ key: a.key, mesh, foam, lights, center: bs.center.clone().add(mesh.position), radius: bs.radius });
+      this.areas.push({ key: a.key, mesh, foam, lights, center: bs.center.clone().add(mesh.position), radius: bs.radius, blocks: !!a.blocks });
     }
     this.stats.areas = this.areas.length;
   }
@@ -629,7 +633,7 @@ export class Shore {
     let vis = 0;
     for (let i = 0; i < this.areas.length; i++) {
       const A = this.areas[i];
-      const near = this._cam.distanceTo(A.center) - A.radius < this.Q.far;
+      const near = this._cam.distanceTo(A.center) - A.radius < (A.blocks ? BLOCKS_FAR : this.Q.far);
       A.mesh.visible = near;
       if (A.foam) A.foam.visible = near && this.Q.foam && sunY > -0.2;
       if (A.lights) A.lights.visible = near && kOn > 0.01;
