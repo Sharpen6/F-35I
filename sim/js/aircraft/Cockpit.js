@@ -10,8 +10,10 @@
 //   exposure every frame (an automatic brightness control), so the glass reads the same by day
 //   and at night, a little dimmer at night as a pilot sets it.
 // * The interior (pcd/interior.js): dark grey satin paint with grain and smudges, the skin's inner
-//   faces repainted, a floor plate between the pedals, ambient occlusion of the tub, the display's
-//   glow on the cockpit at night, LEDs and the kneeboard tablet at a fixed picture level.
+//   faces repainted (a smooth edge along the sills), a floor plate between the pedals, ambient
+//   occlusion of the tub with the light it passes round, the cockpit's own sun shadow
+//   (pcd/shadow.js), the display's glow on the cockpit at night, LEDs and the kneeboard tablet at a
+//   fixed picture level.
 // * The canopy (pcd/canopy.js): dust, smudges and scratches catching the sun, the PCD and the
 //   interior reflected in the inner surface.
 // * The pilot's own face (P2_Skin, part of the merged airframe mesh, not of the head node the
@@ -23,9 +25,10 @@
 import * as THREE from 'three';
 import { interp, locate } from './rig.js';
 import { PCD } from './pcd/PCD.js';
-import { makeDetailTexture } from './pcd/detail.js';
-import { Interior } from './pcd/interior.js';
+import { makeDetailTexture, makeGlassTexture } from './pcd/detail.js';
+import { Interior, DISPLAY_ALPHA } from './pcd/interior.js';
 import { CanopyGlass } from './pcd/canopy.js';
+import { CockpitShadow } from './pcd/shadow.js';
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const clamp1 = (x) => (x > 1 ? 1 : x < -1 ? -1 : x || 0);
@@ -99,6 +102,8 @@ export class Cockpit {
     this._cam = new THREE.Vector3();
     // the display in world space: its rectangle, picture level (gain) and physical light (light)
     this._pcdW = { o: new THREE.Vector3(), u: new THREE.Vector3(), v: new THREE.Vector3(), n: new THREE.Vector3(), c: new THREE.Vector3(), texture: null, gain: 0, light: 0 };
+    this._light = { dir: new THREE.Vector3(0, 1, 0), color: new THREE.Color(0, 0, 0), ambient: new THREE.Color(0.3, 0.35, 0.45) };
+    this._src = { st: null, levers: null, hours: 12, dayOfYear: 172, spawn: null, airports: null, wingmen: [] };
     if (!this.enabled) return;
     this._findMeshes();
     this.pcd = new PCD({ maxAnisotropy: renderer ? renderer.capabilities.getMaxAnisotropy() : 8 });
@@ -107,18 +112,26 @@ export class Cockpit {
     this.pcd.setMaps(terrain).catch(() => {});
     this.detail = makeDetailTexture(512);
     this.interior = new Interior({ visual, detail: this.detail });
+    // the cockpit's own sun shadow, on the interior's analysis box (the pilot's head, hidden at the
+    // eye, still casts)
+    this.shadow = new CockpitShadow({ root: visual.root, box: this.interior.box, alsoCast: [visual.head, ...this.faceMeshes] });
+    this.interior.shadowUniforms = this.shadow.uniforms;
+    this._canopyNode = visual.root.getObjectByName('Canopy');
+    this._canopyQ = new THREE.Quaternion();
     // (the patched materials need 5-9 new programs: the next render compiles them, once, normally
     // behind the menu. A compileAsync here would not help: the materials are already patched, and
     // behind a post chain the scene renders into a target with other program variants)
     this.interior.start().then((s) => { this.interiorStats = s; })
       .catch((e) => console.warn('Cockpit: interior:', e.message));
-    this.canopy = new CanopyGlass({ root: visual.root, detail: this.detail });
+    this.glassDetail = makeGlassTexture(512);
+    this.canopy = new CanopyGlass({ root: visual.root, detail: this.glassDetail });
     // the side-stick, the throttle, the hands on them and the pedals from the pilot's inputs (rig
     // nodes, re-posed after the rig); inceptorFix lists the controls whose hinge was rebuilt
     const inc = visual.player && visual.rig ? buildInceptors(visual.rig, visual.player) : { nodes: [], fixed: [] };
     this._inceptors = inc.nodes;
     this.inceptorFix = inc.fixed;
     this._inp = { stick_pitch: 0, stick_roll: 0, pedals: 0, throttle: 0 };
+    this._inpShadow = { stick_pitch: 0, stick_roll: 0, pedals: 0, throttle: 0 };   // as at the last shadow redraw
   }
 
   /** Meshes of the player's model by material name. */
@@ -151,6 +164,13 @@ export class Cockpit {
       emissiveIntensity: 1,
       side: THREE.DoubleSide,
     });
+    // a display: alpha 0 in the frame (interior.js DISPLAY_ALPHA: a post chain can keep it in colour
+    // when its night vision greys the dark scene)
+    this.pcdMaterial.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>', `#include <dithering_fragment>
+gl_FragColor.a = ${DISPLAY_ALPHA.toFixed(1)};`);
+    };
+    this.pcdMaterial.customProgramCacheKey = () => 'ckDisplay';
     for (const m of this.pcdMeshes) m.material = this.pcdMaterial;
     this._pcdRect = pcdRectangle(this.pcdMeshes[0]);
   }
@@ -163,6 +183,7 @@ export class Cockpit {
     this.pcd.setQuality(q);
     if (this.canopy) this.canopy.enabled = Q.canopy;
     if (this.interior) this.interior.detailAmount = Q.detail;
+    if (this.shadow) this.shadow.setQuality(q);
   }
 
   setTime(h, doy) {
@@ -172,6 +193,23 @@ export class Cockpit {
   reset() {
     if (!this.enabled) return;
     this.pcd.reset();
+  }
+
+  /**
+   * The directional light as the scene has it: towards the sun, or the moon where the Environment
+   * lights the night with it (its sunLight then; lightDirection), its irradiance (0 when switched
+   * off) and the sky's (uAmbient).
+   */
+  light(f) {
+    const L = this._light, env = this.env, S = env && env.sunLight;
+    // as three lights the scene: from the light's and its target's world positions
+    if (S) L.dir.subVectors(_t.setFromMatrixPosition(S.matrixWorld), _t2.setFromMatrixPosition(S.target.matrixWorld));
+    if (!S || L.dir.lengthSq() < 1e-12) L.dir.copy((env && (env.lightDirection || env.sunDirection)) || (f && f.sunDirection) || _up);
+    L.dir.normalize();
+    if (S && S.visible) L.color.copy(S.color).multiplyScalar(S.intensity);
+    else L.color.setRGB(0, 0, 0);
+    if (env && env.uniforms && env.uniforms.uAmbient) L.ambient.copy(env.uniforms.uAmbient.value);
+    return L;
   }
 
   /** The exposure the picture is drawn with (the Environment's auto exposure and bias). */
@@ -195,19 +233,29 @@ export class Cockpit {
     const atEye = d < (this.visual.headHideDistance || 0.3);
     for (const m of this.faceMeshes) m.visible = !atEye;
     this._poseInceptors(f.dt || 0);
-    // the display: redraw only while it can be seen (a drawn frame, the camera within ~40 m)
+    // the display: its systems model runs every frame, the canvas is redrawn only while it can be
+    // seen: from the seat, or in view and over ~60 px wide (a drawn frame)
     if (st && this.pcd) {
-      const visible = f.draw !== false && d < 40 && this.visual.object3d.visible;
+      this._updatePcdRect();                  // (where it is now; its gain follows below)
+      const visible = f.draw !== false && this.visual.object3d.visible && (this.inside > 0.5 || this._pcdOnScreen(cam) > 60);
       // headings as the helmet shows them: where it shows magnetic ones (hmd.last.magVar, the grid
       // convergence conv), the same reference; else the flight model's
       const H = app.hmd && app.hmd.last;
       this.pcd.variation = H && Number.isFinite(H.magVar) ? (H.conv || 0) - H.magVar : 0;
-      this.pcd.update(f.dt || 0, {
-        st, levers: app.input ? app.input.levers : {},
-        hours: f.time, dayOfYear: this.dayOfYear || (app.spawn && app.spawn.day_of_year) || 172,
-        spawn: app.spawn, airports: this.terrain ? this.terrain.airports : [],
-        wingmen: app.wingmen && app.wingmen.count ? app.wingmen.items.map((w) => ({ position: w.drawPos, quaternion: w.drawQuat })) : [],
-      }, visible);
+      const S = this._src;                    // (one object, filled every frame: no garbage)
+      S.st = st;
+      S.levers = app.input ? app.input.levers : _none;
+      S.hours = f.time;
+      S.dayOfYear = this.dayOfYear || (app.spawn && app.spawn.day_of_year) || 172;
+      S.spawn = app.spawn;
+      S.airports = this.terrain ? this.terrain.airports : NO_LIST;
+      const W = app.wingmen && app.wingmen.count ? app.wingmen.items : NO_LIST;
+      S.wingmen.length = W.length;
+      for (let i = 0; i < W.length; i++) {
+        const o = S.wingmen[i] || (S.wingmen[i] = { position: null, quaternion: null });
+        o.position = W[i].drawPos; o.quaternion = W[i].drawQuat;
+      }
+      this.pcd.update(f.dt || 0, S, visible);
     }
     if (f.draw === false) return;
     const sunY = f.sunDirection ? f.sunDirection.y : 1;
@@ -221,18 +269,31 @@ export class Cockpit {
       this._updatePcdRect();
     }
     const P = this._pcdW;
+    const L = this.light(f);
+    const lit = L.color.r + L.color.g + L.color.b > 1e-6;     // (no directional light on a dark night)
+    if (this.shadow && this.interior && this.interior.ready && this.interior.enabled && lit && d < 30 && this.visual.object3d.visible) {
+      // the cockpit's sun shadow (redrawn when the light turns in the aircraft's frame, the canopy
+      // moves, or the stick and the throttle move: ~1 mm at their tops)
+      let moved = false;
+      if (this._canopyNode) { moved = this._canopyNode.quaternion.angleTo(this._canopyQ) > 1e-4; this._canopyQ.copy(this._canopyNode.quaternion); }
+      const I = this._inp, J = this._inpShadow;
+      const moving = Math.abs(I.stick_pitch - J.stick_pitch) > 0.01 || Math.abs(I.stick_roll - J.stick_roll) > 0.01 ||
+        Math.abs(I.throttle - J.throttle) > 0.005 || Math.abs(I.pedals - J.pedals) > 0.02;
+      if (this.shadow.update(this.renderer, cam, L.dir, f.dt || 0, moved, moving)) {
+        J.stick_pitch = I.stick_pitch; J.stick_roll = I.stick_roll; J.throttle = I.throttle; J.pedals = I.pedals;
+      }
+    } else if (this.shadow) this.shadow.uniforms.uCkShadowOn.value = 0;
     if (this.interior) {
-      this.interior.update({ exposure, sunY, power, pcdGlow: this.pcd.glow, pcdIntensity: P.light, pcdCentre: P.c, pcdNormal: P.n });
+      _up2.set(0, 1, 0).transformDirection(this.visual.root.matrixWorld);
+      this.interior.update({ exposure, sunY, power, camera: cam, light: L, up: _up2, pcdGlow: this.pcd.glow, pcdIntensity: P.light, pcdCentre: P.c, pcdNormal: P.n });
     }
     if (this.canopy) {
       const show = this.canopy.enabled !== false && d < 80 && this.visual.object3d.visible;
       this.canopy.visible = show;
       if (show && this.env) {
         this.canopy.update({
-          sunDir: f.sunDirection || this.env.sunDirection,
-          sunColor: this.env.sunLight ? this.env.sunLight.color : new THREE.Color(1, 1, 1),
-          ambient: this.env.uniforms && this.env.uniforms.uAmbient ? this.env.uniforms.uAmbient.value : new THREE.Color(0.5, 0.5, 0.5),
-          inside: this.inside,
+          lightDir: L.dir, lightColor: L.color, ambient: L.ambient, inside: this.inside,
+          albedo: this.interior ? this.interior.albedo : 0.06,
           pcd: P.texture ? P : null,
         });
       }
@@ -283,6 +344,31 @@ export class Cockpit {
     }
   }
 
+  /** Tests: the tops of the side-stick and the throttle (17 cm up the lever) in the glTF root frame. */
+  leverTips() {
+    const root = this.visual.root, out = {};
+    for (const [k, name] of [['stick', 'Stick'], ['throttle', 'Throttle']]) {
+      const o = root.getObjectByName(name);
+      if (!o) continue;
+      o.updateWorldMatrix(true, false);
+      out[k] = root.worldToLocal(o.localToWorld(new THREE.Vector3(0, 0.17, 0))).toArray();
+    }
+    return out;
+  }
+
+  /** The display's width on screen (px; 0 when out of view), from this frame's rectangle. */
+  _pcdOnScreen(cam) {
+    const P = this._pcdW;
+    if (!this._pcdRect || !cam || !cam.isPerspectiveCamera) return 0;
+    _t.copy(P.c).applyMatrix4(cam.matrixWorldInverse);
+    const z = -_t.z;
+    if (z < cam.near) return 0;
+    _t.applyMatrix4(cam.projectionMatrix);
+    if (Math.abs(_t.x) > 1.3 || Math.abs(_t.y) > 1.3) return 0;
+    const h = this.renderer ? this.renderer.domElement.height : 1080;
+    return P.u.length() / (2 * z * Math.tan(cam.fov * Math.PI / 360) / cam.zoom) * h;
+  }
+
   /** The display's canvas rectangle in world space (origin, u and v edges, normal to the pilot). */
   _updatePcdRect() {
     const R = this._pcdRect, P = this._pcdW;
@@ -305,14 +391,18 @@ export class Cockpit {
     this.pcdMaterial?.dispose();
     this.interior?.dispose();
     this.canopy?.dispose();
+    this.shadow?.dispose();
     this.detail?.dispose();
+    this.glassDetail?.dispose();
   }
 }
 
-const _t = new THREE.Vector3();
+const _t = new THREE.Vector3(), _t2 = new THREE.Vector3(), _up2 = new THREE.Vector3();
 const _rq = new THREE.Quaternion(), _hq = new THREE.Quaternion();
 const _rt = new THREE.Vector3(), _ht = new THREE.Vector3();
 const _none = {};
+const NO_LIST = [];
+const _up = new THREE.Vector3(0, 1, 0);
 const v3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 
 /**

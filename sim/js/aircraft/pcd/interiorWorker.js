@@ -12,12 +12,16 @@
 //      open: a single-sided panel, interior paint on its back (twoFaced);
 //   4. every vertex of the cockpit parts gets an ambient occlusion value: the fraction of a
 //      cosine-weighted set of rays that leave the cockpit (through the glass) instead of hitting
-//      a wall or the pilot nearer than aoDist (a hit at distance s counts 1 - s / aoDist).
+//      a wall or the pilot nearer than aoDist (a hit at distance s counts 1 - s / aoDist);
+//   5. every vertex of a classified mesh gets the share (by area) of the faces round it that are
+//      interior, over welded positions (seams split the vertices): the paint's edge is then drawn
+//      along the 0.5 line of that share, a smooth line through the triangles instead of the
+//      saw-tooth of their edges along the sills.
 //
 // in:  { eye: [x, y, z], eyes: [[x, y, z], ...], box: { min, max }, voxel, outside: [[x, y, z], ...],
 //        aoRays, aoDist, meshes: [{ id, kind: 'wall' | 'glass' | 'pilot', pos, nrm, index, classify, ao }] }
 // out: { ok, leak, interior: { id: Uint32Array of triangle numbers }, twoFaced: { id: ... },
-//        ao: { id: Uint8Array }, stats, ms }
+//        ao: { id: Uint8Array }, inside: { id: Uint8Array per vertex, 255 all interior }, stats, ms }
 
 const WALL = 1, GLASS = 2, PILOT = 4;
 
@@ -26,7 +30,7 @@ self.onmessage = (e) => {
   try {
     const out = analyse(e.data);
     out.ms = performance.now() - t0;
-    const transfer = [...Object.values(out.interior), ...Object.values(out.twoFaced), ...Object.values(out.ao)].map((a) => a.buffer);
+    const transfer = [...Object.values(out.interior), ...Object.values(out.twoFaced), ...Object.values(out.ao), ...Object.values(out.inside)].map((a) => a.buffer);
     self.postMessage(out, transfer);
   } catch (err) {
     self.postMessage({ ok: false, error: String((err && err.stack) || err) });
@@ -360,5 +364,35 @@ function analyse(msg) {
     }
     ao[m.id] = res;
   }
-  return { ok: true, leak, interior, twoFaced, ao, stats };
+  // ---- 5. the interior share per vertex (welded at 0.1 mm), for the paint's edge
+  const inside = {};
+  for (const m of meshes) {
+    const list = interior[m.id];
+    if (!m.classify || !list) continue;
+    const P = m.pos, I = m.index, nv = P.length / 3;
+    const isIn = new Uint8Array(I.length / 3);
+    for (const t of list) isIn[t] = 1;
+    const rep = new Int32Array(nv).fill(-1), keys = new Map();
+    for (let v = 0; v < nv; v++) {
+      if (vox(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]) < 0) continue;
+      const k = `${Math.round(P[v * 3] * 1e4)},${Math.round(P[v * 3 + 1] * 1e4)},${Math.round(P[v * 3 + 2] * 1e4)}`;
+      let r = keys.get(k);
+      if (r === undefined) { r = v; keys.set(k, v); }
+      rep[v] = r;
+    }
+    const num = new Float32Array(nv), den = new Float32Array(nv);
+    for (let t = 0; t < I.length; t += 3) {
+      const a = I[t], b = I[t + 1], c = I[t + 2];
+      if (rep[a] < 0 && rep[b] < 0 && rep[c] < 0) continue;
+      const ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2];
+      const wx = P[c * 3] - P[a * 3], wy = P[c * 3 + 1] - P[a * 3 + 1], wz = P[c * 3 + 2] - P[a * 3 + 2];
+      const A = Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx) + 1e-12;
+      const f = isIn[t / 3] ? A : 0;
+      for (const v of [a, b, c]) { const r = rep[v]; if (r >= 0) { den[r] += A; num[r] += f; } }
+    }
+    const out = new Uint8Array(nv);
+    for (let v = 0; v < nv; v++) { const r = rep[v]; if (r >= 0 && den[r] > 0) out[v] = Math.round(255 * num[r] / den[r]); }
+    inside[m.id] = out;
+  }
+  return { ok: true, leak, interior, twoFaced, ao, inside, stats };
 }
