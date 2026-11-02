@@ -135,12 +135,15 @@ export class CockpitParts {
       const t0 = performance.now();
       let sum = 0, max = 0;
       for (const name of STEPS) {
+        // (a task of its own each, the first too: not appended to the task that called build(),
+        // the model's load)
+        await nextTask();
         if (this.disposed) break;
         const ms = this._step(name);
         sum += ms;
         max = Math.max(max, ms);
-        await nextTask();
       }
+      await nextTask();     // (and what follows, the interior's analysis, in a task of its own)
       this.stats.ms = +sum.toFixed(1);
       this.stats.maxTaskMs = +max.toFixed(1);
       this.stats.wallMs = +(performance.now() - t0).toFixed(1);
