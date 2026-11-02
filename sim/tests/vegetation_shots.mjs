@@ -5,6 +5,7 @@
 //   node sim/tests/vegetation_shots.mjs [--port 8144] [--out DIR] [--size 960x540]
 //        [--quality medium] [--only telnof_chase,orchards_150] [--params "vegetation=0"]
 //        [--settle 6000] [--tag before] [--ab] [--shadow-radius 190] [--long] [--checks] [--decal-ab]
+//        [--cover-ab] [--root DIR]
 //
 // Every scene is a start point (spawns.json or one defined here, placed at a height above the
 // ground) with a time of day and a camera; the scene is flown for a moment, the streaming is given
@@ -24,6 +25,9 @@
 // bakes the atlas again over frames (the longest module update is logged), and the trees switched
 // off for 11 s free their memory and come back when switched on. --decal-ab saves each scene
 // without the ground shadows too (<scene>_nodecal.png) and logs how much of the frame they darken.
+// --cover-ab (a terrain that paints tree crowns into its ground and has setVegetationCover):
+// each scene again with those crowns left under the 3D trees (<scene>_nocover.png). --root: the
+// sim folder to serve (another checkout).
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -55,6 +59,7 @@ const SHADOW_R = +arg('shadow-radius', 0);
 const LONG = argv.includes('--long');
 const CHECKS = argv.includes('--checks');
 const DECAL_AB = argv.includes('--decal-ab');
+const COVER_AB = argv.includes('--cover-ab');
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -288,7 +293,25 @@ async function main() {
       decals = { share: +(n / px).toFixed(4), meanDarkening: n ? +(sum / n).toFixed(3) : 0 };
       log(`${name}: the ground shadows darken ${(100 * decals.share).toFixed(1)} % of the frame by ${(100 * decals.meanDarkening).toFixed(0)} % on average`);
     }
-    results.push({ name, scene: sc, summary: st, renderInfo: info, lastRenderMs: timing.lastRenderMs, vegetation: mod, ab, decals });
+    let cover = null;
+    if (COVER_AB && mod) {
+      // a terrain that paints tree crowns (setVegetationCover): the same frame with its crowns left
+      // under the 3D trees, as when the module does not tell it where they stand (the forest twice)
+      cover = await page.evaluate(() => {
+        const app = window.__sim.app, m = app.modules.find((x) => x && x.isScatter);
+        if (typeof app.terrain.setVegetationCover !== 'function') return null;
+        const range = m._cover;
+        app.terrain.setVegetationCover({ range: 0 });
+        window.__sim.render();
+        return { range };
+      });
+      if (cover) {
+        await page.screenshot({ path: join(OUT, `${TAG}${name}_nocover.png`) });
+        await page.evaluate(() => { window.__sim.app.modules.find((x) => x && x.isScatter)._cover = -1; window.__sim.render(); });
+        log(`${name}: plain ground under the trees to ${cover.range} m (${TAG}${name}_nocover.png: the terrain's crowns under them)`);
+      } else log(`${name}: the terrain paints no crowns (no setVegetationCover)`);
+    }
+    results.push({ name, scene: sc, summary: st, renderInfo: info, lastRenderMs: timing.lastRenderMs, vegetation: mod, ab, decals, cover });
     log(`${name}: ${info.calls} calls, ${(info.triangles / 1e6).toFixed(2)} M tris, ${timing.lastRenderMs} ms, agl ${st.agl_m} m, ${((Date.now() - t1) / 1000).toFixed(0)} s${mod ? `, veg ${JSON.stringify(mod)}` : ''}`);
     if (ab) log(`${name}: with trees ${ab.on.calls} calls, ${(ab.on.triangles / 1e6).toFixed(2)} M tris, ${ab.on.ms} ms; without ${ab.off.calls} calls, ${(ab.off.triangles / 1e6).toFixed(2)} M tris, ${ab.off.ms} ms`);
   }
