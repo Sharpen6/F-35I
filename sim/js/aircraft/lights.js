@@ -415,8 +415,13 @@ export class AircraftLights {
     // eased in over the first tenth of lightNight (the sun from ~-4.5 to ~-5 deg) so it does not
     // pop; then the cap itself, whatever the exposure (dividing by lightNight let a blue-hour tail
     // light hold 5 times the cap and grow into a ball)
-    const k = smooth(night, 0, 0.1);
+    const k = AircraftLights.capWeight(night);
     return k > 0 ? NIGHT_PEAK / (Math.max(exposure, 1e-4) * Math.max(peak, 1e-4) * k) : Infinity;
+  }
+
+  /** The night cap's weight for fxEnv.lightNight: 0 by day and at dusk .. 1 from lightNight 0.1. */
+  static capWeight(night) {
+    return smooth(night, 0, 0.1);
   }
 
   /**
@@ -424,7 +429,7 @@ export class AircraftLights {
    * LENS_NIGHT on the display, eased in as coreCap is; by day the lens keeps its own value.
    */
   static lensCap(e, exposure, peak, night) {
-    const k = smooth(night, 0, 0.1);
+    const k = AircraftLights.capWeight(night);
     return k > 0 ? Math.min(e, LENS_NIGHT / (Math.max(exposure, 1e-4) * Math.max(peak, 1e-4) * k)) : e;
   }
 
@@ -490,6 +495,8 @@ export class AircraftLights {
     // lights at night: the eye's adaptation to the lights (js/env); the threshold of a point light
     const G = fxEnv.lightGain;
     const threshold = fxEnv.pointThreshold;
+    // the night cap's weight (coreCap): 0 by day .. 1 from the sun ~5 deg down
+    const capK = AircraftLights.capWeight(fxEnv.lightNight);
     const haloGain = this.haloGain * (this._bloom ? HALO_BLOOM : 1);
     // the display brightness the shader's shoulder caps a saturated / a white light at
     const sh = this._shoulder();
@@ -524,10 +531,12 @@ export class AircraftLights {
           core = E * G / (omegaPx * Math.PI * coreR * coreR / 2);
           // at night never fainter than the light's excess over the threshold says (a far light)
           core = Math.max(core, AircraftLights.visibleFloor(Elux / threshold) * dark / (exposure * s.peak)) * coreFade;
-          // a little wider once it is far over the cap (the skirt alone would leave a 1 px pin)
+          // a little wider once it is far over the cap (the skirt alone would leave a 1 px pin); not
+          // at night, where the core's centre is held at NIGHT_PEAK: then it is the size of any
+          // point light at that cap (the airfield's: ~5 px over white), a grown one was ~9 px
           const over = core * exposure * s.peak / (capWhite + (capSat - capWhite) * s.sat);
           if (over > 4) {
-            const grow = Math.min(1.6, Math.sqrt(over / 4));
+            const grow = 1 + (Math.min(1.6, Math.sqrt(over / 4)) - 1) * (1 - capK);
             coreR *= grow;
             core /= grow * grow;
           }
