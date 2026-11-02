@@ -68,12 +68,20 @@ export const SCENES = [
   { name: 'eingedi500_0900_chase', spawn: { x: 36500, z: 46000, alt: 70, hdg: 345, speed: 160 }, time: 9, camera: 'chase' },
   { name: 'eingedi500_1600_cockpit', spawn: { x: 37500, z: 44000, alt: 70, hdg: 330, speed: 160 }, time: 16, camera: 'cockpit', look: { yaw: 30, pitch: -2 } },
   // the sinkholes and the waterline on the flats south of Ein Gedi (-400 .. -425 m), 150 m up
-  { name: 'sinkholes150_1000_cockpit', spawn: { x: 35200, z: 47800, alt: -250, hdg: 15, speed: 130 }, time: 10, camera: 'cockpit', look: { yaw: 20, pitch: -25 } },
+  { name: 'sinkholes150_1000_cockpit', spawn: { x: 35400, z: 47600, alt: -270, hdg: 0, speed: 130 }, time: 10, camera: 'cockpit', look: { yaw: -60, pitch: -28 } },
+  // the same shore from above and west of the jet (the orbit camera 420 m above the flats)
+  { name: 'sinkholes150_1000_orbit', spawn: { x: 35400, z: 47600, alt: -270, hdg: 0, speed: 130 }, time: 10, camera: 'orbit', orbit: { yaw: -90, pitch: 50, dist: 350 } },
   // the evaporation ponds south of the Lisan, from 3,000 m over the Lisan strait looking south
   { name: 'ponds3000_1100_cockpit', spawn: { x: 41000, z: 50000, alt: 3000, hdg: 185, speed: 200 }, time: 11, camera: 'cockpit', look: { yaw: 0, pitch: -12 } },
   // pond 5 and the Ein Bokek hotels from over the western cliffs, 1,200 m, looking east-south-east
   { name: 'einbokek1200_1100_cockpit', spawn: { x: 29000, z: 64000, alt: 1200, hdg: 110, speed: 160 }, time: 11, camera: 'cockpit', look: { yaw: 0, pitch: -20 } },
   { name: 'einbokek1200_1600_chase', spawn: { x: 29000, z: 64000, alt: 1200, hdg: 110, speed: 160 }, time: 16, camera: 'chase' },
+  // the Ein Bokek hotels (Shore.js blocks): the hotel strip from its west side, the sun behind
+  // the camera, looking east over it to the ponds; then from 300 m south-east of them, by day
+  // and at night
+  { name: 'einbokek_hotels_1600_orbit', spawn: { x: 31565, z: 66478, alt: 0, hdg: 90, speed: 130 }, time: 16, camera: 'orbit', orbit: { yaw: -90, pitch: 15, dist: 250 } },
+  { name: 'einbokek300_1600_chase', spawn: { x: 33500, z: 68500, alt: -80, hdg: 327, speed: 130 }, time: 16, camera: 'chase' },
+  { name: 'einbokek300_2030_cockpit', spawn: { x: 33500, z: 68500, alt: -80, hdg: 327, speed: 130 }, time: 20.5, camera: 'cockpit', look: { yaw: 0, pitch: -8 } },
   // the coast
   { name: 'tlv3000_1200_chase', spawn: 'tlv_3000', time: 12, camera: 'chase' },
   { name: 'tlv3000_1845_chase', spawn: 'tlv_3000', time: 18.75, camera: 'chase' },
@@ -253,9 +261,15 @@ async function main() {
     const S = (fn, a) => page.evaluate(fn, a);
     await page.addStyleTag({ content: '#toast { display: none !important; }' });
     const look = (l) => S((v) => { const h = window.__sim.app.cams.head; h.yaw = v.yaw * Math.PI / 180; h.pitch = v.pitch * Math.PI / 180; }, l);
+    // the orbit camera placed: world yaw (0: from the south, -90: from the west), pitch above the jet, distance
+    const orbit = (o) => S((v) => {
+      const O = window.__sim.app.cams.orbit;
+      O.init = true; O.auto = 0; O.yaw = v.yaw * Math.PI / 180; O.pitch = v.pitch * Math.PI / 180; O.dist = v.dist;
+    }, o);
 
     for (const sc of SCENES) {
-      if (ONLY && !ONLY.some((o) => sc.name.includes(o))) continue;
+      // a filter that is a scene's whole name picks that scene alone, else every scene containing it
+      if (ONLY && !ONLY.some((o) => (SCENES.some((x) => x.name === o) ? sc.name === o : sc.name.includes(o)))) continue;
       const ts = Date.now();
       await S((s) => {
         const sim = window.__sim, app = sim.app;
@@ -277,6 +291,7 @@ async function main() {
       }, sc);
       await S((n) => window.__sim.step(n), sc.steps ?? 60);
       if (sc.look) await look(sc.look);
+      if (sc.orbit) await orbit(sc.orbit);
       let sum = await S((ms) => window.__sim.settle(ms), sc.settle || 2500);
       const hz = await S(async () => {
         const t = window.__sim.app.terrain, h = t.horizon;
@@ -291,6 +306,7 @@ async function main() {
       });
       if (hz.waited > 300) sum = await S((ms) => window.__sim.settle(ms), 400);
       if (sc.look) await look(sc.look);
+      if (sc.orbit) await orbit(sc.orbit);
       // one more frame: temporal filters (clouds) and the module's own passes settle
       await S(() => window.__sim.render());
       const info = await S(() => window.__sim.renderInfo());

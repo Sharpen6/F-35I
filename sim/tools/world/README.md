@@ -194,6 +194,13 @@ coast's structures between Ashkelon and Herzliya as small 3D data for `js/world/
   polygon is on, about a third with the boom raised. Their size follows the port's published
   figures (44 m lift height, 60.5 m outreach); the build only places them, `Shore.js` models
   them.
+* **blocks**: the buildings of the Dead Sea's south basin, outside the core whose buildings
+  `buildings.py` builds: the hotels of Ein Bokek and Hamei Zohar, Neve Zohar and the Dead Sea
+  Works at Sdom (Overture `buildings/building` in 35.30-35.45 E, 31.00-31.24 N; footprints
+  under 40 m^2 dropped). Kind 0 hotels and apartment blocks (footprints over 900 m^2 or 4+
+  levels), 1 industry (south of 31.075 N: the works), 2 houses. Heights: OSM's levels where
+  mapped (23 of ~1,700 footprints), else a guess by kind and footprint (hotels 5-10 floors,
+  sheds 6-22 m, houses 1-2 floors); `Shore.js` stands them on the terrain's heights.
 
 Output `shore.json` (format `f35i-shore` v1): world metres (sim/DESIGN.md), rings with signed
 area < 0 (`geom.py`):
@@ -202,13 +209,17 @@ area < 0 (`geom.py`):
 { "breakwaters": [ { "foot": [[x, z], ...], "crest": [[x, z], ...], "h": 1.8, "exp": [0..100 per edge] } ],
   "decks":       [ { "ring": [[x, z], ...], "h": 2.0 } ],
   "cranes":      [ { "x": .., "z": .., "heading": rad from north toward east (the boom), "boom_up": false, "variant": 0 } ],
+  "blocks":      [ { "ring": [[x, z], ...], "h": 24.6, "kind": 0 } ],
   "attribution": "..." }
 ```
 
 Counts of the current build: 48 breakwater polygons and 11 lines, 19 decks, 100 jetties and
-pontoons, 25 cranes. At run time `js/world/Shore.js` builds one mesh per 8 km area from it
-(17,000 triangles in all, 12 meshes, plus the white water bands and the cranes' obstruction
-lights); see that file and `sim/README.md`. Without the file the app runs as before.
+pontoons, 25 cranes, 1,014 blocks (45 hotels, 520 industrial, 449 houses); 219 kB. At run time
+`js/world/Shore.js` builds one mesh per 8 km area from it (plus the white water bands and the
+cranes' obstruction lights); see that file and `sim/README.md`. Without the file the app runs
+as before. The buildings are read with `overture.fetch('buildings', 'building', ...)` for the
+box above (~5 minutes the first time: the footers of all 512 files), cached beside the base
+theme in `--cache`.
 
 ## Licences
 
@@ -221,7 +232,8 @@ terrain's imagery and land cover (ESA WorldCover 2021, contains modified Coperni
 CC BY 4.0, credited with the terrain and in the attribution line). Facades, roofs and all other
 building detail are procedural (no textures or models).
 
-The shore structures (`shore.py`) come from the same Overture release (OpenStreetMap, ODbL 1.0,
-(c) OpenStreetMap contributors), credited by the `attribution` line of `shore.json`; the
+The shore structures and the south basin's blocks (`shore.py`) come from the same Overture
+release (OpenStreetMap, ODbL 1.0, (c) OpenStreetMap contributors; the buildings theme as
+above), credited by the `attribution` line of `shore.json`; the
 crane positions are picked against the terrain's Sentinel-2 imagery (CC BY 4.0), the cranes'
 shape and colours are made up.

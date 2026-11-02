@@ -13,11 +13,16 @@
 // The armour stones are 3D cells (about 1.8 m) in the mesh's own coordinates: a stone's tone,
 // the dark gaps between stones and a facet per stone that catches the sun or not. Once a stone
 // is smaller than about a pixel they give way to their mean (no shimmer far away).
+//
+// The Dead Sea's blocks (facade kind; vExp carries the style: 1 hotel, 0.5 house, 0 shed): floors
+// of 3.3 m, hotels with a balcony slab and a recessed window band per floor, houses with
+// windows, sheds with vertical cladding ribs; all fade to their mean before they alias. At night
+// a share of the windows is lit (uShore.w: the buildings' share for the hour times the darkness).
 
 import { ATMOSPHERE_CORE, ATMOSPHERE_PARS } from '../env/atmosphereGLSL.js';
 
 // surface kinds (aCol.a * 255), Shore.js
-export const KIND = { rubble: 0, crest: 1, deck: 2, wall: 3, steel: 4, panel: 5, dark: 6 };
+export const KIND = { rubble: 0, crest: 1, deck: 2, wall: 3, steel: 4, panel: 5, dark: 6, facade: 7, roof: 8 };
 
 const SRGB = /* glsl */ `
 vec3 srgbToLinear(vec3 c) {
@@ -88,7 +93,7 @@ export const SHORE_FRAG = /* glsl */ `
 ${ATMOSPHERE_PARS}
 ${SAFE_H}
 
-uniform vec4 uShore;          // albedo gain (the terrain's), fine detail on (1) / off (0), sea state (0 calm .. 1), -
+uniform vec4 uShore;          // albedo gain (the terrain's), fine detail on (1) / off (0), sea state (0 calm .. 1), share of windows lit (0 by day)
 
 varying vec3 vRel;
 varying float vH;
@@ -183,17 +188,20 @@ void main() {
   vec3 V = vRel / dist;
   float kind = vCol.a;
   vec3 N = normalize(vN);
-  if (dot(N, V) > 0.0 && kind > 3.5) N = -N;             // thin crane plates seen from behind
+  if (dot(N, V) > 0.0 && kind > 3.5 && kind < 6.5) N = -N;   // thin crane plates seen from behind
   vec3 alb = vCol.rgb;
-  float px = length(fwidth(vLoc));                       // metres per pixel
+  vec3 fwL = fwidth(vLoc);
+  float px = length(fwL);                                // metres per pixel
   float fine = uShore.y * (1.0 - smoothstep(0.5, 1.5, px));
   float rough = 0.6, f0 = 0.0;
   // the waterline: wet stones and concrete below the run-up (higher on the exposed sides)
   float t = uTime;
   float runUp = 0.35 + (0.5 + 1.1 * uShore.z) * vExp * (0.6 + 0.4 * sin(t * 0.7 + vLoc.x * 0.05 + vLoc.z * 0.04));
-  float wet = 1.0 - smoothstep(runUp - 0.25, runUp + 0.15, vH);
-  float algae = (1.0 - smoothstep(0.05, 0.45, vH)) * (1.0 - 0.6 * vExp);
+  float atSea = step(-20.0, vH);                          // the Dead Sea's blocks are not wet
+  float wet = (1.0 - smoothstep(runUp - 0.25, runUp + 0.15, vH)) * atSea;
+  float algae = (1.0 - smoothstep(0.05, 0.45, vH)) * (1.0 - 0.6 * vExp) * atSea;
   float foam = 0.0;
+  vec3 emit = vec3(0.0);
 
   if (kind < 0.5) {
     // ---- rock / concrete armour
@@ -238,10 +246,62 @@ void main() {
     // ---- panels (machinery houses, cabs)
     f0 = 0.04;
     rough = 0.5;
-  } else {
+  } else if (kind < 6.5) {
     // ---- dark (glass, rubber)
     f0 = 0.04;
     rough = 0.25;
+  } else if (kind < 7.5) {
+    // ---- the Dead Sea's blocks: walls (hotels, houses, sheds)
+    float style = vExp;
+    vec2 tw = vec2(-N.z, N.x);                            // along the wall
+    float u = dot(vLoc.xz, tw);
+    // metres per pixel up the wall (the floors) and along it (the windows), from fwidth outside
+    // the branch: a wall seen at a slant is foreshortened along only one of them
+    float pxY = max(fwL.y, 1e-3), pxH = max(length(fwL.xz), 1e-3);
+    float fy = vLoc.y / 3.3;
+    float fl = floor(fy), fv = fract(fy);
+    float wu = u / (style > 0.75 ? 3.6 : 4.2);
+    float wi = floor(wu), fu = fract(wu);
+    float kF = 1.0 - smoothstep(0.45, 1.1, pxY);          // the slabs (0.3 m) and their shadow
+    float kB = 1.0 - smoothstep(0.8, 1.6, pxY);           // the window bands (2.1 m of 3.3 m)
+    float kW = 1.0 - smoothstep(0.3, 0.8, pxH);           // single windows
+    float glass = 0.0;
+    if (style > 0.75) {
+      // a balcony slab (lighter, its shadow under it) and a dark window band per floor
+      // (each pattern gives way to its mean before it is down to two pixels: no speckle far off)
+      float slab = mix(0.1, smoothstep(0.0, 0.03, fv) * (1.0 - smoothstep(0.08, 0.11, fv)), kF);
+      float band = mix(0.6, smoothstep(0.2, 0.25, fv) * (1.0 - smoothstep(0.8, 0.85, fv)), kB);
+      float mull = smoothstep(0.03, 0.07, fu) * (1.0 - smoothstep(0.93, 0.97, fu));
+      glass = band * mix(0.85, mull, kW);
+      alb *= mix(0.9, 1.0 + 0.12 * slab - 0.35 * (1.0 - smoothstep(0.11, 0.2, fv)) * (1.0 - slab), kF);
+      alb = mix(alb, mix(alb * 0.62, vec3(0.05, 0.06, 0.07), kB), glass * mix(0.45, 1.0, kB));
+    } else if (style > 0.25) {
+      // houses: a window in each bay, a little dark
+      float kH = 1.0 - smoothstep(0.4, 1.0, max(pxY, pxH));
+      float win = smoothstep(0.3, 0.36, fv) * (1.0 - smoothstep(0.72, 0.78, fv)) * smoothstep(0.32, 0.38, fu) * (1.0 - smoothstep(0.66, 0.72, fu));
+      glass = mix(0.12, win, kH);
+      alb = mix(alb, alb * 0.25, glass);
+    } else {
+      // sheds: cladding ribs every 0.25 m, dust at the foot
+      float rib = 0.5 + 0.5 * cos(6.2832 * u / 0.25);
+      alb *= 1.0 - 0.1 * rib * (1.0 - smoothstep(0.03, 0.08, pxH));
+    }
+    alb *= 0.92 + 0.16 * hash13(vec3(floor(vLoc.xz / 37.0), 3.3));
+    // lit windows at night: the buildings' window radiance (0.014), uShore.w of them lit (the
+    // buildings' share for the hour times the darkness), warm or cool white; far off their mean
+    if (uShore.w > 0.0 && glass > 0.0) {
+      float hw = hash13(vec3(wi, fl, floor(vLoc.x * 0.01 + vLoc.z * 0.013)));
+      float on = mix(uShore.w, step(hw, uShore.w), kW);
+      vec3 tint = mix(vec3(1.0, 0.72, 0.42), vec3(0.85, 0.9, 1.0), mix(0.25, step(0.75, fract(hw * 13.7)), kW));
+      emit = 0.014 * tint * on * glass;
+    }
+    f0 = 0.02 + 0.03 * glass;
+    rough = mix(0.8, 0.2, glass);
+  } else {
+    // ---- the blocks' flat roofs: concrete, tanks and plant
+    float st = vnoise(vLoc.xz / 5.0) * 0.6 + vnoise(vLoc.xz / 1.3) * 0.4 * fine;
+    alb *= 0.85 + 0.3 * st;
+    rough = 0.85;
   }
   alb *= uShore.x;
 
@@ -266,6 +326,7 @@ void main() {
   }
   vec3 foamR = vec3(0.82) * (sunE * max(uSunDir.y, 0.0) * shadow + uAmbient) / PI;
   radiance = mix(radiance, foamR, clamp(foam, 0.0, 1.0) * 0.9);
+  radiance += emit;
 
   vec3 color = atmoAerial(radiance, V, dist, atmoSafeH(vH));
   gl_FragColor = vec4(color, 1.0);

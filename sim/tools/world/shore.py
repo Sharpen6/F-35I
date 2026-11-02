@@ -70,6 +70,13 @@ MAX_INSET_SHARE = 0.42          # crest inset never more than this share of the 
 WAVES_FROM_DEG = 285.0
 SHELTER_M = 1500.0
 
+# The Dead Sea's south basin outside the core (whose buildings js/world/Buildings.js draws): the
+# hotels of Ein Bokek and Hamei Zohar, Neve Zohar and the Dead Sea Works at Sdom, the only large
+# buildings on the lake's shore. Overture buildings (OpenStreetMap footprints, a few with levels).
+RIFT_BOX = (35.30, 31.00, 35.45, 31.24)
+BUILDING_COLUMNS = ['id', 'geometry', 'bbox', 'names', 'height', 'num_floors', 'class', 'subtype']
+FLOOR_M = 3.3
+
 
 def log(*a):
     print('[shore]', *a, flush=True)
@@ -259,6 +266,53 @@ def cranes(ocean_rings):
     return out
 
 
+def blocks(cache, release):
+    """The south basin's buildings as blocks: footprint ring, height (m above the ground), kind.
+
+    kind 0: hotels and apartment blocks (balconies and window rows), 1: industry (the Dead Sea
+    Works: sheds, halls, the plant), 2: houses. Heights: OSM's levels where mapped (23 of ~1,700),
+    else a guess by place and footprint: hotels 5-10 floors by size, sheds 6-22 m, houses 1-2
+    floors.
+    """
+    t = overture.read_cached(overture.fetch('buildings', 'building', cache, bbox=RIFT_BOX, release=release,
+                                            columns=BUILDING_COLUMNS))
+    out, stats = [], dict(hotels=0, industry=0, houses=0, small=0)
+    if t is None:
+        return out, stats
+    for row in t.to_pylist():
+        polys = geom.wkb_polygons(row['geometry'])
+        if not polys:
+            continue
+        ll = polys[0][0]
+        ring = geom.clean_ring(to_xz(ll), tol=0.6, min_edge=1.0)
+        if ring is None or len(ring) < 3:
+            continue
+        ring = ccw(ring)
+        area = -geom.signed_area(ring)
+        if area < 40:
+            stats['small'] += 1
+            continue
+        lat = float(np.mean(ll[:, 1]))
+        floors = row.get('num_floors')
+        cls = (row.get('class') or '') + ' ' + (row.get('subtype') or '')
+        if lat < 31.075 or 'industrial' in cls:
+            kind = 1
+            h = float(np.clip(5.0 + area / 450.0, 6.0, 22.0))
+        elif area > 900 or (floors and floors >= 4) or 'hotel' in cls or 'apartments' in cls:
+            kind = 0
+            h = FLOOR_M * float(np.clip(round(4 + area / 900.0), 5, 10)) + 1.5
+        else:
+            kind = 2
+            h = FLOOR_M * (2 if area > 160 else 1) + 1.0
+        if floors:
+            h = FLOOR_M * min(float(floors), 20.0) + 1.5
+        if row.get('height'):
+            h = float(row['height'])
+        out.append(dict(ring=r1(ring), h=round(h, 1), kind=kind))
+        stats[('hotels', 'industry', 'houses')[kind]] += 1
+    return out, stats
+
+
 def build(out, cache, release):
     t0 = time.time()
     inf = overture.read_cached(overture.fetch('base', 'infrastructure', cache, bbox=BBOX, release=release, columns=COLUMNS))
@@ -318,17 +372,18 @@ def build(out, cache, release):
         b['foot'], b['crest'] = r1(b['foot']), r1(b['crest'])
     for d in decks:
         d['ring'] = r1(d['ring'])
+    bl, bstats = blocks(cache, release)
     os.makedirs(out, exist_ok=True)
     doc = dict(format='f35i-shore', version=1, generator='sim/tools/world/shore.py',
                generated_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                units='world metres (sim/DESIGN.md: X east, Z = -north), heights above sea level',
-               breakwaters=breakwaters, decks=decks, cranes=cr,
+               breakwaters=breakwaters, decks=decks, cranes=cr, blocks=bl,
                attribution='Shore structures: Overture Maps Foundation (ODbL), (c) OpenStreetMap contributors')
     tmp = os.path.join(out, 'shore.json.tmp')
     with open(tmp, 'w') as f:
         json.dump(doc, f, separators=(',', ':'))
     os.replace(tmp, os.path.join(out, 'shore.json'))
-    log(f'{stats}, {len(cr)} cranes -> {out}/shore.json '
+    log(f'{stats}, {len(cr)} cranes, blocks {bstats} -> {out}/shore.json '
         f'({os.path.getsize(os.path.join(out, "shore.json")) / 1e3:.0f} kB) in {time.time() - t0:.0f} s')
 
 

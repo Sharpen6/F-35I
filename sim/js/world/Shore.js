@@ -13,6 +13,9 @@
 // two draws each: the structures (opaque) and the white water on the sea along the breakwaters'
 // sides that face the swell (blended over the terrain's water; shore.py works out which sides).
 // The cranes carry steady red obstruction lights at night (the buildings' light program).
+// The Dead Sea's south basin lies outside the core whose buildings Buildings.js draws: its
+// hotels (Ein Bokek, Hamei Zohar), Neve Zohar and the Dead Sea Works at Sdom come as plain
+// blocks (shore.json "blocks") with balcony rows and windows in the shader, lit at night.
 // Shaders: shoreShaders.js. Every program is compiled at load (_precompile), before it shows.
 //
 // Module API (main.js addModule): update(f), setTime(h), setQuality(q), reset(), dispose().
@@ -51,6 +54,31 @@ const C = {
   dark: [58, 60, 64],
   glass: [30, 36, 42],
 };
+// the south basin's blocks by kind (shore.py): wall, roof, facade style (aNrm.w: 1 hotel, 0.5
+// house, 0 shed). Hotels white and cream render, sheds pale grey cladding, houses beige.
+const BLOCK = [
+  { walls: [[236, 232, 220], [226, 214, 190], [240, 238, 232]], roof: [196, 192, 182], style: 1.0 },
+  { walls: [[198, 196, 188], [182, 180, 172], [206, 200, 186]], roof: [170, 170, 166], style: 0.0 },
+  { walls: [[222, 210, 186], [214, 204, 184], [230, 222, 204]], roof: [188, 180, 166], style: 0.5 },
+];
+
+/**
+ * Share of the blocks' windows lit at local solar time h: the buildings' curve (Buildings.js
+ * litFraction: an evening peak, quiet small hours), so the hotels go dark with the cities.
+ */
+const LIT = [[0, 0.30], [2, 0.17], [5, 0.12], [6.5, 0.2], [8, 0.08], [17, 0.08], [19, 0.42], [21, 0.52], [23, 0.40], [24, 0.30]];
+function litShare(h) {
+  h = ((h % 24) + 24) % 24;
+  let v = LIT[0][1];
+  for (let i = 1; i < LIT.length; i++) {
+    if (h <= LIT[i][0]) {
+      const [h0, v0] = LIT[i - 1], [h1, v1] = LIT[i];
+      v = v0 + (v1 - v0) * (h - h0) / (h1 - h0);
+      break;
+    }
+  }
+  return v;
+}
 
 const params = new URLSearchParams(globalThis.location?.search ?? '');
 
@@ -152,7 +180,7 @@ export class Shore {
     this.hours = 12;
     this.areas = [];
     this.loaded = false;
-    this.stats = { areas: 0, breakwaters: 0, decks: 0, cranes: 0, triangles: 0, foamTriangles: 0, visible: 0 };
+    this.stats = { areas: 0, breakwaters: 0, decks: 0, cranes: 0, blocks: 0, triangles: 0, foamTriangles: 0, visible: 0 };
     this.group = new THREE.Group();
     this.group.name = 'Shore';
     this._cam = new THREE.Vector3();
@@ -257,6 +285,12 @@ export class Shore {
       const a = this._area(map, c.x, c.z);
       this._crane(a, c);
       this.stats.cranes++;
+    }
+    for (const b of doc.blocks || []) {
+      if (!b.ring || b.ring.length < 3) continue;
+      const a = this._area(map, b.ring[0][0], b.ring[0][1]);
+      this._block(a, b);
+      this.stats.blocks++;
     }
     for (const a of map.values()) {
       if (!a.geo.n) continue;
@@ -388,6 +422,39 @@ export class Shore {
       const v3 = g.v(R[i][0], h, R[i][1], nn, 0, C.wall, KIND.wall);
       g.quad(v0, v1, v2, v3, nn);
     }
+  }
+
+  /**
+   * A building of the Dead Sea's south basin (shore.py blocks): walls from under the lowest ground
+   * of its footprint (the terrain's own heights, the rift strip's there) to b.h above the ground at
+   * its middle, and a flat roof. The facade's floors, windows and balconies are the shader's.
+   */
+  _block(a, b) {
+    const g = a.geo, T = this.terrain;
+    const R = b.ring.map((p) => [p[0] - a.ox, p[1] - a.oz]);
+    const n = R.length;
+    let lo = Infinity, sum = 0;
+    for (const p of b.ring) {
+      const y = T?.heightAt ? T.heightAt(p[0], p[1]) : 0;
+      lo = Math.min(lo, y);
+      sum += y;
+    }
+    const base = lo - 1.5, top = sum / n + b.h;
+    const st = BLOCK[b.kind] || BLOCK[2];
+    const pick = Math.abs(Math.round(b.ring[0][0] * 0.37 + b.ring[0][1] * 0.11)) % st.walls.length;
+    const wall = st.walls[pick];
+    const sa = signedArea(R);
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const o = outward(R, i, sa);
+      const nn = [o[0], 0, o[1]];
+      const v0 = g.v(R[i][0], base, R[i][1], nn, st.style, wall, KIND.facade);
+      const v1 = g.v(R[j][0], base, R[j][1], nn, st.style, wall, KIND.facade);
+      const v2 = g.v(R[j][0], top, R[j][1], nn, st.style, wall, KIND.facade);
+      const v3 = g.v(R[i][0], top, R[i][1], nn, st.style, wall, KIND.facade);
+      g.quad(v0, v1, v2, v3, nn);
+    }
+    cap(g, R, top, true, st.roof, KIND.roof);
   }
 
   /**
@@ -551,6 +618,8 @@ export class Shore {
     const h = this.hours;
     const breeze = Math.min(1, Math.max(0, (h - 9) / 5)) * (1 - Math.min(1, Math.max(0, (h - 18) / 4)));
     S.z = 0.35 + 0.4 * breeze;
+    // the blocks' lit windows: the share lit for the hour times the darkness
+    S.w = kDark * litShare(h);
     this._lightU.uLightOn.value.set(kDark, performance.now() / 1000, (this.renderer.domElement?.height || 1080) / 1080);
   }
 
