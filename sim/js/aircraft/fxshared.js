@@ -61,6 +61,10 @@ export function darknessOf(logLux) {
  *                    and its landing light's pool are physical light x lightGain / LUX_PER_UNIT, its
  *                    position lights seen from afar at least as bright as their excess over the
  *                    threshold of a point light (lux) says; lightNight 0 (day, dusk) .. 1 (night)
+ *   groundLightPhysical
+ *                    the sky's and the moon's light on level ground without the night's boosts
+ *                    (scene units, luminance; Environment.groundLightPhysical, else the clear moonless
+ *                    sky's table): what the landing light's pool is seen against on dark land
  */
 export const fxEnv = {
   sunElevationDeg: 45,
@@ -71,6 +75,7 @@ export const fxEnv = {
   lightGain: 1,
   lightNight: 0,
   pointThreshold: pointLightThreshold(45),
+  groundLightPhysical: skyIlluminance(45) / LUX_PER_UNIT,
   update(env) {
     let el = env && Number.isFinite(env.sunElevationDeg) ? env.sunElevationDeg : null;
     if (el === null && env && env.sunDirection) el = THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, env.sunDirection.y))));
@@ -82,6 +87,8 @@ export const fxEnv = {
     this.lightNight = Number.isFinite(env.lightNight) ? env.lightNight : lightNight(el);
     this.lightGain = Number.isFinite(env.lightGain) ? env.lightGain : artificialLightGain(env.exposure, el);
     this.pointThreshold = Number.isFinite(env.pointThreshold) ? env.pointThreshold : pointLightThreshold(el);
+    this.groundLightPhysical = Number.isFinite(env.groundLightPhysical) && env.groundLightPhysical > 0
+      ? env.groundLightPhysical : skyIlluminance(el) / LUX_PER_UNIT;
   },
   /** Whether the frame being drawn goes through the HDR chain's bloom (see bloom above). */
   bloomOn(renderer) {

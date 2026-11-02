@@ -8,7 +8,8 @@
 // the point lights' visibility floor and the one switch-on schedule (lightsOn), the jet's lights at
 // night (a core cap without a blue-hour ball, the lenses' colour), the condensation model (vapour at high g in humid low air, the
 // cone near Mach 1, contrails high up), the contrail's ring buffer (it fades out before it runs out
-// of points), the landing-light pool's roll-off.
+// of points), the landing-light pool's roll-off, its floor on dark land and the lamp it shares
+// with the buildings (off by day and from 400 m up).
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,7 +19,7 @@ import { nozzleIdleOpen, lagThrottle, NOZZLE_TAU } from '../js/aircraft/Aircraft
 import { flameExposureComp, flameDayLook, Afterburner, FLAME_DAY, FLAME_NIGHT, throatGlow } from '../js/aircraft/Afterburner.js';
 import { air, condensation, skyLogLux, darknessOf, fxEnv, Ribbon } from '../js/aircraft/fxshared.js';
 import { FX_QUALITY } from '../js/aircraft/AircraftFX.js';
-import { poolFactor, POOL_KNEE } from '../js/aircraft/LandingPool.js';
+import { poolFactor, POOL_KNEE, LandingPool, LAMP_UNIFORMS } from '../js/aircraft/LandingPool.js';
 import { artificialLightGain, lightNight, lightsOn, pointLightThreshold, skyIlluminance, NIGHT_ADAPTED_EXPOSURE } from '../js/env/Environment.js';
 
 test('anti-collision beacons: one short flash a second each, top and bottom alternating', () => {
@@ -251,4 +252,50 @@ test('landing-light pool: physical by day and at dusk, the rule for lights at ni
   assert.ok(poolFactor(1, g) < poolFactor(2, g));
   assert.ok(poolFactor(2, g) - poolFactor(1, g) < poolFactor(1, g) - poolFactor(0, g));
   assert.ok(poolFactor(100, g) < 1 + POOL_KNEE * 3, `bounded: ${poolFactor(100, g).toFixed(0)}`);
+});
+
+test('landing-light pool: on dark land a floor from the lamp against the real night (Fechner)', () => {
+  // short final from 65 m: the beam's ~0.5 lux on the runway 370 m ahead against the boosted moonlit
+  // ground (~20 lux as drawn) and the real one (a crescent moon and the night's glow, ~0.01 lux)
+  const g = artificialLightGain(230, -24);
+  const rule = poolFactor(0.5 / 20.7, g);
+  const floor = poolFactor(0.5 / 20.7, g, 0.5 / 0.01);
+  assert.ok(rule < 1.2, `the rule alone: nothing on the runway (${rule.toFixed(2)})`);
+  assert.ok(floor > 3 && floor < 6, `with the floor a pool (${floor.toFixed(2)})`);
+  // the touchdown zone in the flare (~12 lux) brighter again, the asphalt under the nose (~300 lux)
+  // brighter still and the rule's there: the floor only lifts the dim far end of the beam
+  const flare = poolFactor(12 / 20.7, g, 12 / 0.01), nose = poolFactor(300 / 20.7, g, 300 / 0.01);
+  assert.ok(flare > floor && nose > flare, `${floor.toFixed(1)} < ${flare.toFixed(1)} < ${nose.toFixed(1)}`);
+  assert.equal(nose, poolFactor(300 / 20.7, g), 'near the nose the rule wins');
+  // by day and at dusk nothing is boosted (the real light is the drawn one, gain 1): the floor is
+  // under the rule (ln(1 + r) < r), the pool as it was
+  for (const r of [0.01, 0.1, 0.5, 2, 10]) assert.equal(poolFactor(r, 1, r), poolFactor(r, 1));
+});
+
+test('landing lamp for the other shaders (LAMP_UNIFORMS): off by day and high up, on near the ground at night', () => {
+  const pool = new LandingPool(new THREE.Group(), { heightAt: () => 0 });
+  const down = new THREE.Vector3(0, -Math.sin(0.19), -Math.cos(0.19));
+  const landing = { on: true, position: new THREE.Vector3(0, 65, 0), direction: down,
+    beams: [{ direction: down, intensity: 400000, spread: 0.1222, weight: 1 },
+      { direction: down, intensity: 250000, spread: 0.2269, weight: 0 }] };
+  const R = LAMP_UNIFORMS.uLampRule.value;
+  fxEnv.update({ sunElevationDeg: 30, exposure: 1 });
+  pool.update(landing, true);
+  assert.equal(R.w, 0, 'by day the buildings draw as before');
+  fxEnv.update({ sunElevationDeg: -20, exposure: 230, lightGain: 1400 / 230, groundLightPhysical: 0.0113 / 32000 });
+  pool.update(landing, true);
+  assert.equal(R.w, 1, 'short final at night: on');
+  assert.ok(Math.abs(R.x - 1400 / 230) < 1e-9 && R.y > 0, 'the rule for lights at night and the real ground light');
+  landing.position.y = 325;
+  pool.update(landing, true);
+  assert.ok(R.w > 0.3 && R.w < 0.7, `fading out from 250 m up (${R.w.toFixed(2)} at 325 m)`);
+  landing.position.y = 450;
+  pool.update(landing, true);
+  assert.equal(R.w, 0, 'from 400 m up: off');
+  landing.position.y = 65;
+  pool.update(landing, true);
+  pool.update(null, false);
+  assert.equal(R.w, 0, 'the light off (or the effects switched off): off');
+  pool.dispose();
+  fxEnv.update({ sunElevationDeg: 45 });
 });

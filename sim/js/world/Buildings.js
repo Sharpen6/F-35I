@@ -32,6 +32,7 @@ import * as THREE from 'three';
 import { BOX_VERT, CHUNK_VERT, BUILDING_FRAG, DEPTH_FRAG, LIGHT_VERT, LIGHT_FRAG, SHADOW_VERT, SHADOW_FRAG } from './buildingShaders.js';
 import { LUX_PER_UNIT, artificialLightGain, pointLightThreshold, lightsOn as lightsOnAt } from '../env/Environment.js';
 import { emitterBlending } from '../env/emitters.js';
+import { LAMP_UNIFORMS } from '../aircraft/LandingPool.js';
 
 const TILE = 6400;
 const CORE_HALF = 51200;
@@ -260,7 +261,8 @@ export class Buildings {
    */
   _material(box, dither = false, fade = null) {
     const lights = THREE.UniformsUtils.clone(THREE.UniformsLib.lights);
-    const uniforms = { ...lights, ...this.env.uniforms, ...this._shared };
+    // the jet's landing light by reference (LandingPool.js: off by day)
+    const uniforms = { ...lights, ...this.env.uniforms, ...this._shared, ...LAMP_UNIFORMS };
     if (box) uniforms.uFade = fade || { value: Array.from({ length: 16 }, () => new THREE.Vector4()) };
     else if (dither) uniforms.uFadeIn = { value: 0 };
     const defines = box ? { BOX: 1 } : {};

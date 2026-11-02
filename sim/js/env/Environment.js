@@ -239,6 +239,13 @@ export class Environment {
     this.lightsOn = 0;
     this.pointThreshold = pointLightThreshold(30);
     /**
+     * The sky's and the moon's light on level ground without the night's boosts (scene units,
+     * luminance; uAmbient carries it boosted, the sun's direct light is apart): the real night's
+     * ~0.003 lux plus the moon as it is. A lamp's light on dark land is weighed against it
+     * (README "Lights at night"). Null until the ground light is first worked out.
+     */
+    this.groundLightPhysical = null;
+    /**
      * The rule for lights tuned at a night exposure of NIGHT_LIGHTS_EXPOSURE (40) rather than in
      * physical units: lightGain x 40 / NIGHT_ADAPTED_EXPOSURE (40 / exposure at night). uNight is
      * lightsOn x this. New code reads lightGain and lightsOn.
@@ -645,6 +652,12 @@ export class Environment {
     const moonH = this._moonLightBoosted(Math.max(0, md.y));
     const amb = sky0.irradiance.map((v, c) => v * E + floor[c] + moonH * tMoon[c] * NIGHT.moonTint[c]);
     this.uniforms.uAmbient.value.setRGB(amb[0], amb[1], amb[2]);
+    // the same light without the night's boosts (the glow at its real level, the moon as it is):
+    // what the eye adapted to the dark land weighs a lamp's light on it against (README "Lights at
+    // night": the landing light's pool)
+    const moonReal = moonH / (this._moonBoost ?? NIGHT.boost);
+    this.groundLightPhysical = luma(sky0.irradiance) * E + NIGHT.physical
+      + moonReal * luma(tMoon.map((t, c) => t * NIGHT.moonTint[c]));
     this._groundLight = { tGround, sky0, muS, amb };
     this._groundSun.copy(this.sunDirection);
     this._updateGroundRadiance();

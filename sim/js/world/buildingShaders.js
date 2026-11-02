@@ -31,6 +31,7 @@
 import { ATMOSPHERE_PARS, ATMOSPHERE_CORE } from '../env/atmosphereGLSL.js';
 import { POINT_LIGHT_VERT_GLSL, POINT_LIGHT_FRAG_GLSL } from './AirportLights.js';
 import { EMITTER_GLSL } from '../env/emitters.js';
+import { LAMP_GLSL } from '../aircraft/LandingPool.js';
 
 // wall styles, roof styles, roof shapes, surface kinds: sim/tools/world/buildings.py, BuildingsWorker.js
 export const WALL = { plaster: 0, stone: 1, glass: 2, office: 3, industrial: 4, house: 5, greenhouse: 6, concrete: 7, public: 8, tower: 9, oldstone: 10, stack: 11, hangar: 12, frame: 13 };
@@ -211,6 +212,7 @@ ${SAFE_H}
 uniform vec4 uLight;          // lit window fraction (homes), window radiance, street light irradiance, lit share of shops
 uniform float uLitOffice;     // lit window fraction (offices, public buildings)
 ${EMITTER_GLSL}
+${LAMP_GLSL}
 uniform vec3 uAlbedo;         // wall albedo gain, roof albedo gain (the terrain's), detail on (1) / off (0)
 uniform float uDebug;         // 1: colour by level of detail
 #if defined( DITHER ) && !defined( BOX )
@@ -614,6 +616,20 @@ void main() {
       lightR *= 1.0 - bare;
     }
     if (plainWall) lightR = vec3(0.0);
+  }
+
+  // ---- the jet's landing light (js/aircraft/LandingPool.js LAMP_GLSL) ----
+  // walls and roofs in its beams, by the pool's rule (the pool's grid on the ground cannot light
+  // them: on short final over a town it was lit ground between dark blocks); a wall facing the
+  // lamp takes more of it than the ground. None while the pool is off (by day: as before)
+  if (uLampRule.w > 0.0) {
+    float El = lampLight(uCameraPos + vRel - uLampPos, N);
+    if (El > 0.0) {
+      // against this face's light as drawn and its real light (the ground's, less on a wall);
+      // the windows' own light stays as it is
+      vec3 Eamb = sunE * NdL * shadow + skyE + gndE;
+      radiance = lightR + (radiance - lightR) * lampFactor(El, Eamb, uLampRule.y * (0.6 + 0.4 * N.y));
+    }
   }
 
   // ---- aerial perspective (as the terrain) ----
