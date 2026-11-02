@@ -124,10 +124,10 @@ export function section(h) {
     { t: e, n: g, hard: true, cav: 0.8 },         // the edge's foot, in the bead
     { t: e, n: f - 0.0007, cav: 0.92 },
     { t: e - 0.0007, n: f, cav: 1 },              // a 0.7 mm round onto the flange's inner face
-    { t: (e + b) / 2 + 0.002, n: f, cav: 0.86 },
-    { t: b + 0.0022, n: f, cav: 0.66 },
-    { t: b + 0.0006, n: f + 0.0011, cav: 0.55 },  // the root fillet
-    { t: b, n: f + 0.0028, cav: 0.64 },
+    { t: (e + b) / 2 + 0.002, n: f, cav: 0.88 },
+    { t: b + 0.0022, n: f, cav: 0.74 },
+    { t: b + 0.0006, n: f + 0.0011, cav: 0.6 },   // the root fillet
+    { t: b, n: f + 0.0028, cav: 0.72 },
     { t: b - 0.0006, n: d - r, cav: 0.9 },        // the body's side (a little draft), up to the round
   ];
   for (let k = 1; k < 4; k++) {

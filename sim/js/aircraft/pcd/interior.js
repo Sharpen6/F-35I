@@ -39,9 +39,10 @@ import { SHADOW_GLSL } from './shadow.js';
 export const INTERIOR_PAINT = {
   F35_cockpit: { color: 0x45484b, roughness: 0.6, metalness: 0, detail: 1 },
   F35_cockpit_panel: { color: 0x3a3c40, roughness: 0.52, metalness: 0, detail: 0.8 },
-  // the bow and the canopy frame's liner (pcd/frame.js, sills.js): a dark satin frame whose rounded
-  // edges catch the sky; the bow's sealant beads and handholds a light grey
-  F35_canopy_bow: { color: 0x323437, roughness: 0.5, metalness: 0, detail: 0.4 },
+  // the bow and the canopy frame's liner (pcd/frame.js, sills.js): a dark satin frame (between the
+  // panels' grey and the tub's) whose rounded edges catch the sky; the bow's sealant beads and
+  // handholds a light grey
+  F35_canopy_bow: { color: 0x3d4044, roughness: 0.5, metalness: 0, detail: 0.4 },
   F35_canopy_fitting: { color: 0x8b8e90, roughness: 0.62, metalness: 0, detail: 0.3 },
   F35_glare_pad: { color: 0x57534b, roughness: 0.85, metalness: 0, detail: 0.6 },
   // the coaming's hood (pcd/parts.js): a flat black anti-glare finish
@@ -288,7 +289,7 @@ export class Interior {
     const eye = this.eyeLocal;
     const msg = {
       eye: eye.toArray(), eyes: EYE_OFFSETS.map((o) => [eye.x + o[0], eye.y + o[1], eye.z + o[2]]),
-      box: this.box, voxel: this.voxel, aoRays: this.aoRays, aoDist: 1.2, outside: OUTSIDE,
+      box: this.box, voxel: this.voxel, aoRays: this.aoRays, aoDist: 1.2, aoDistFrame: 0.45, outside: OUTSIDE,
       meshes: list.map((m, id) => ({ id, kind: m.kind, classify: m.classify, ao: m.ao, pos: m.pos, nrm: m.nrm, index: m.index })),
     };
     const transfer = [];

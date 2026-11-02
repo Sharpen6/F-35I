@@ -269,7 +269,10 @@ export function cap(B, f, profile, dir) {
 
 /**
  * A fastener head: a low dome of radius r and height h on a surface at `o` with normal `n`
- * (seg sides; its foot in the crease: cavity `foot`).
+ * (seg sides; its foot in the crease: cavity `foot`). Painted with the surface it holds, it shows
+ * by its shading only: its normals lean at most 45 deg at the rim and 24 deg on the crown, so that
+ * on a wall lit at a grazing angle (the canopy frame's liner at noon) a head is a soft highlight,
+ * not a bright dot.
  */
 export function stud(B, o, n, r, h, seg = 8, foot = 0.55) {
   const u = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0).cross(n).normalize() : new THREE.Vector3(1, 0, 0).cross(n).normalize();
@@ -284,8 +287,8 @@ export function stud(B, o, n, r, h, seg = 8, foot = 0.55) {
     }
     return ids;
   };
-  const r0 = ring(r, -0.0004, 1.6, foot);           // (a little into the surface: no gap at its foot)
-  const r1 = ring(r * 0.72, h * 0.8, 0.9, 1);
+  const r0 = ring(r, -0.0004, 1.0, foot);           // (a little into the surface: no gap at its foot)
+  const r1 = ring(r * 0.72, h * 0.8, 0.45, 1);
   _a.copy(o).addScaledVector(n, h);
   const top = B.vv(_a, n, 1);
   for (let k = 0; k < seg; k++) {

@@ -15,14 +15,17 @@
 //      a wall or the pilot nearer than aoDist (a hit at distance s counts 1 - s / aoDist). A
 //      'frame' part (the canopy bow, the frame's liner: slim parts on the glass) is a wall to
 //      everything else but not to its own vertices, whose rays would start inside its voxels (1.5
-//      cm, as thick as the part): its own creases come with it (pcd/shapes.js ckCavity);
+//      cm, as thick as the part): its own creases come with it (pcd/shapes.js ckCavity). Its rays
+//      count hits nearer than aoDistFrame only: it hangs under the glass, open on both sides, and
+//      what it sees farther off is the sunlit cockpit, light that the bounce term (interior.js
+//      fill) stands for, not shade;
 //   5. every vertex of a classified mesh gets the share (by area) of the faces round it that are
 //      interior, over welded positions (seams split the vertices): the paint's edge is then drawn
 //      along the 0.5 line of that share, a smooth line through the triangles instead of the
 //      saw-tooth of their edges along the sills.
 //
 // in:  { eye: [x, y, z], eyes: [[x, y, z], ...], box: { min, max }, voxel, outside: [[x, y, z], ...],
-//        aoRays, aoDist, meshes: [{ id, kind: 'wall' | 'frame' | 'glass' | 'pilot', pos, nrm, index, classify, ao }] }
+//        aoRays, aoDist, aoDistFrame, meshes: [{ id, kind: 'wall' | 'frame' | 'glass' | 'pilot', pos, nrm, index, classify, ao }] }
 // out: { ok, leak, interior: { id: Uint32Array of triangle numbers }, twoFaced: { id: ... },
 //        ao: { id: Uint8Array }, inside: { id: Uint8Array per vertex, 255 all interior }, stats, ms }
 
@@ -43,7 +46,7 @@ self.onmessage = (e) => {
 
 function analyse(msg) {
   const { eye, box, voxel: vs, meshes } = msg;
-  const aoRays = msg.aoRays || 16, aoDist = msg.aoDist || 1.2;
+  const aoRays = msg.aoRays || 16, aoDist = msg.aoDist || 1.2, aoDistFrame = msg.aoDistFrame || aoDist;
   const [x0, y0, z0] = box.min;
   const nx = Math.ceil((box.max[0] - x0) / vs), ny = Math.ceil((box.max[1] - y0) / vs), nz = Math.ceil((box.max[2] - z0) / vs);
   const N = nx * ny * nz;
@@ -340,6 +343,7 @@ function analyse(msg) {
     const nv = P.length / 3;
     const res = new Uint8Array(nv).fill(255);
     const occluders = m.kind === 'frame' ? WALL | PILOT : SOLID | PILOT;
+    const dist = m.kind === 'frame' ? aoDistFrame : aoDist;
     for (let v = 0; v < nv; v++) {
       const px = P[v * 3], py = P[v * 3 + 1], pz = P[v * 3 + 2];
       if (vox(px, py, pz) < 0) continue;
@@ -360,10 +364,10 @@ function analyse(msg) {
       for (const d of dirs) {
         const lx = d[0] * cr - d[1] * sr, ly = d[0] * sr + d[1] * cr;
         const dx = tx * lx + bx * ly + nxv * d[2], dy = ty * lx + by * ly + nyv * d[2], dz = tz * lx + bz * ly + nzv * d[2];
-        for (let s = 0; s < aoDist; s += march) {
+        for (let s = 0; s < dist; s += march) {
           const q = vox(ox + dx * s, oy + dy * s, oz + dz * s);
           if (q < 0) break;
-          if (grid[q] & occluders) { occl += 1 - s / aoDist; break; }
+          if (grid[q] & occluders) { occl += 1 - s / dist; break; }
         }
       }
       res[v] = Math.round(255 * (1 - occl / dirs.length));
