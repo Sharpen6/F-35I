@@ -511,15 +511,15 @@ function datepalm(b, sp, rng, detail) {
   // crown core
   b.clump([c[0], c[1] + 0.01, c[2]], [0.045, 0.05, 0.045], 0, fol.map((x) => x * 0.7), c, 900, { amp: 0.2, part: PART_FOLIAGE });
   // fronds in spirals: upper ones steep, lower ones drooping
-  const nf = detail ? 18 : 10;
+  const nf = detail ? 24 : 12;
   for (let i = 0; i < nf; i++) {
     const t = i / nf;
     const a = i * 2.39996 + rng() * 0.3;
     const elev = (65 - 85 * t + jitter(rng, 8)) * Math.PI / 180;
     const dir = [Math.cos(a) * Math.cos(elev), Math.sin(elev), Math.sin(a) * Math.cos(elev)];
-    const L = 0.3 + 0.08 * rng();
+    const L = 0.38 + 0.1 * rng();      // 4-5 m fronds on a 10 m palm: a crown as wide as it is high
     const col = t > 0.85 ? lin([118, 104, 70]) : fol;     // a few old, yellowing fronds below
-    b.frond([c[0] + dir[0] * 0.02, c[1] + 0.02, c[2] + dir[2] * 0.02], dir, L, 0.05, 0.25 + 0.3 * t, detail ? 5 : 2, col, 1000 + i * 7, 1);
+    b.frond([c[0] + dir[0] * 0.02, c[1] + 0.02, c[2] + dir[2] * 0.02], dir, L, 0.06, 0.25 + 0.3 * t, detail ? 5 : 2, col, 1000 + i * 7, 1);
   }
   b.clumps.push({ x: c[0], y: c[1] + 0.02, z: c[2], r: 0.06, first: 0, last: 0 });
   b.finishAO([c[0], c[1], c[2]], [0.32, 0.18, 0.32], 0.45);

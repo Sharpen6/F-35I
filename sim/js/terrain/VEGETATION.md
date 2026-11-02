@@ -71,8 +71,8 @@ The colour: where the imagery is green the tree takes the imagery's mean over it
 (blended with the species' own colour by the species' `tint`, more so with distance: at 1.5 km
 a forest has the colour of the ground it stands on), else the species' colour (a lone tree in a
 ploughed field must not take the field's colour). The shaders apply it as a ratio to the
-species' colour, so a crown keeps its light and dark sprays. Where the colour came from the imagery, the
-imagery already shows the canopy's shade, so that tree's ground shadow is lighter.
+species' colour, so a crown keeps its light and dark sprays. Where the colour came from the
+imagery, the imagery already shows the canopy's shade, so that tree's ground shadow is lighter.
 
 ## Species (`vegetation/species.js`, `vegetation/meshes.js`)
 
@@ -112,9 +112,12 @@ leafy noise (alpha to coverage).
 * **Thinning**: past the near range the trees thin out by rank towards the far range (2-4.2 km),
   each over a band, the planted rows and shrubs earlier (the imagery shows them).
 * **Lighting** (shared by meshes and impostors): the environment's sun irradiance at the tree
-  (`atmoSunIrradianceAt`), wrapped diffuse, the sun reaching the inside of the crown less,
-  translucency against the sun (the rim of a backlit crown glows), sky and ground light, a faint
-  sheen on waxy leaves (citrus, olive), the terrain's aerial perspective (`atmoAerialParts`).
+  (`atmoSunIrradianceAt`), none where the hillside the tree stands on faces away from a low sun
+  (the terrain is dark there too; flat ground stays lit to sunset; no horizon map, so a valley
+  in a far ridge's shadow keeps its light), wrapped diffuse, the sun reaching the inside of the
+  crown less, translucency against the sun (the rim of a backlit crown glows), sky and ground
+  light, a faint sheen on waxy leaves (citrus, olive), the terrain's aerial perspective
+  (`atmoAerialParts`).
   Wind: slow sway of the crowns and fast leaf shiver, gusts travelling over the land.
 * **Shadows**: near the jet the meshes are drawn into the sun's shadow map (when it covers more
   than the aircraft) and receive it; elsewhere every tree drops a ground shadow: its silhouette

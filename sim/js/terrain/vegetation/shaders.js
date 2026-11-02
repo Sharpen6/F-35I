@@ -124,6 +124,32 @@ float vegCoverage(float part, vec2 uv, vec3 obj, float facing, float fluff, out 
 }
 `;
 
+// Ground heights (the core's 25 m grid, as the terrain draws its triangles) and the sun hidden by
+// the slope a tree stands on.
+const GROUND = /* glsl */ `
+uniform highp usampler2D uHCore;    // terrain heights (the core, 25 m), as the terrain draws them
+float decodeH(uint v) { return float(v) * 0.05 - 500.0; }
+float hCore(ivec2 p) { return decodeH(texelFetch(uHCore, clamp(p, ivec2(0), ivec2(4096)), 0).r); }
+float groundAt(vec2 xz) {
+  vec2 c = clamp((xz + 51200.0) / 25.0, vec2(0.0), vec2(4095.999));
+  vec2 i = floor(c);
+  vec2 f = c - i;
+  ivec2 p = ivec2(i);
+  float h00 = hCore(p), h10 = hCore(p + ivec2(1, 0)), h01 = hCore(p + ivec2(0, 1)), h11 = hCore(p + ivec2(1, 1));
+  // the rendered triangle (split along the north-west / south-east diagonal)
+  return f.x >= f.y ? h00 + f.x * (h10 - h00) + f.y * (h11 - h10) : h00 + f.y * (h01 - h00) + f.x * (h11 - h01);
+}
+// 1 where the sun reaches the tree, 0 where the hillside it stands on faces away from a low sun
+// (the terrain is dark there too: no golden crowns on a slope in shade). Flat ground stays lit
+// down to sunset; no horizon map, so a valley in a far ridge's shadow is not caught.
+float vegSlopeSun(vec2 xz) {
+  ivec2 p = ivec2(clamp(floor((xz + 51200.0) / 25.0 + 0.5), vec2(1.0), vec2(4095.0)));
+  float dx = hCore(p + ivec2(1, 0)) - hCore(p - ivec2(1, 0));
+  float dz = hCore(p + ivec2(0, 1)) - hCore(p - ivec2(0, 1));
+  return smoothstep(-0.08, 0.02, dot(normalize(vec3(-dx, 50.0, -dz)), uSunDir));
+}
+`;
+
 // ------------------------------------------------------------------------------------------
 // near meshes
 
@@ -133,6 +159,7 @@ export const MESH_VERT = /* glsl */ `
 #include <shadowmap_pars_vertex>
 ${ATMOSPHERE_PARS}
 ${COMMON}
+${GROUND}
 attribute vec3 aPos;
 attribute vec4 aD0;
 attribute vec4 aD1;
@@ -200,7 +227,7 @@ void main() {
   #ifndef VEG_DEPTH
     float hW = aPos.y + p.y;
     float L = length(rel);
-    vSunE = atmoSunIrradianceAt(rel, hW);
+    vSunE = atmoSunIrradianceAt(rel, hW) * vegSlopeSun(aPos.xz);
     atmoAerialParts(rel / max(L, 1e-3), L, hW, vT, vIns);
     #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
       vec4 worldPosition = vec4(rel + cameraPosition, 1.0);
@@ -283,6 +310,7 @@ export const IMPOSTOR_VERT = /* glsl */ `
 ${ATMOSPHERE_PARS}
 ${COMMON}
 ${IMPOSTOR_PARS}
+${GROUND}
 attribute vec3 aPos;
 attribute vec4 aD0;
 attribute vec4 aD1;
@@ -362,7 +390,7 @@ void main() {
   vTint = clamp(pow(aD1.rgb, vec3(2.2)) * uVeg.x / max(uSpC[sp], vec3(1e-3)), 0.25, 3.0);
   vS.w = 0.86 + 0.28 * j;
   float hWc = aPos.y + 0.5 * h;
-  vSunE = atmoSunIrradianceAt(cRel, hWc);
+  vSunE = atmoSunIrradianceAt(cRel, hWc) * vegSlopeSun(aPos.xz);
   atmoAerialParts(V, d, hWc, vT, vIns);
   vec4 mvPosition = vec4(mat3(viewMatrix) * P, 1.0);
   gl_Position = projectionMatrix * mvPosition;
@@ -438,7 +466,7 @@ export const DECAL_VERT = /* glsl */ `
 ${ATMOSPHERE_PARS}
 ${COMMON}
 ${IMPOSTOR_PARS}
-uniform highp usampler2D uHCore;    // terrain heights (the core, 25 m), as the terrain draws them
+${GROUND}
 uniform vec4 uShadow;               // x: range, y: strength, z: fade fraction, w: on (0 / 1)
 attribute vec3 aPos;
 attribute vec4 aD0;
@@ -448,18 +476,6 @@ varying vec2 vUv;
 flat varying float vLayer;
 varying float vK;
 varying vec3 vIns;
-
-float decodeH(uint v) { return float(v) * 0.05 - 500.0; }
-float hCore(ivec2 p) { return decodeH(texelFetch(uHCore, clamp(p, ivec2(0), ivec2(4096)), 0).r); }
-float groundAt(vec2 xz) {
-  vec2 c = clamp((xz + 51200.0) / 25.0, vec2(0.0), vec2(4095.999));
-  vec2 i = floor(c);
-  vec2 f = c - i;
-  ivec2 p = ivec2(i);
-  float h00 = hCore(p), h10 = hCore(p + ivec2(1, 0)), h01 = hCore(p + ivec2(0, 1)), h11 = hCore(p + ivec2(1, 1));
-  // the rendered triangle (split along the north-west / south-east diagonal)
-  return f.x >= f.y ? h00 + f.x * (h10 - h00) + f.y * (h11 - h10) : h00 + f.y * (h01 - h00) + f.x * (h11 - h01);
-}
 
 void cull() { gl_Position = vec4(0.0, 0.0, -2.0, 1.0); }
 
@@ -516,7 +532,7 @@ void main() {
   // where the tree took the imagery's colour, the imagery shows it with its shadow already
   // (a forest's ground is canopy and shade): lighter there than under a lone tree in a field
   float wImg = floor(spv / 32.0) / 7.0;
-  vK = kLin * uShadow.y * fade * (0.75 + 0.25 * uSpB[sp].z) * (1.0 - 0.45 * wImg);
+  vK = kLin * uShadow.y * fade * (0.75 + 0.25 * uSpB[sp].z) * (1.0 - 0.45 * wImg) * vegSlopeSun(aPos.xz);
   vec3 tt;
   atmoAerialParts(G / max(gl, 1e-3), gl, hG, tt, vIns);
   vec4 mvPosition = vec4(mat3(viewMatrix) * Gv, 1.0);

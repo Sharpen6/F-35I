@@ -44,7 +44,7 @@ export const SPECIES = [
   {
     id: 4, name: 'datepalm', label: 'date palm (Phoenix dactylifera)',
     foliage: [100, 118, 80], wood: [118, 98, 74],
-    height: [6, 15], crown: 0.55, crownBase: 0.72,
+    height: [6, 15], crown: 0.75, crownBase: 0.72,
     tint: 0.25, translucency: 0.45, shadow: 0.6, sway: 0.6, fluff: 0.5, specular: 0.1, far: 0.9,
   },
   {
