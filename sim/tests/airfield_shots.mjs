@@ -2,7 +2,7 @@
 // Chromium, SwiftShader), driven through the app's automation API window.__sim (?test=1).
 //
 //   node sim/tests/airfield_shots.mjs [--port 8600] [--out DIR] [--size 960x540] [--quality high]
-//        [--scenes base|quick|close|tn36,tn36c,...] [--query runways=0] [--tag before] [--maxwait 90000]
+//        [--scenes base|quick|close|fields|bengurion|far|tn36,tn36c,...] [--query runways=0] [--tag before] [--maxwait 90000]
 //
 // Scenes are placed on the runways of data/terrain/airports.json, so no coordinates are needed:
 //   ground   on a runway end (a named spawn or `end`), the jet standing at `s` m past the end
@@ -10,7 +10,8 @@
 //            above the threshold, on the extended centreline, flying the 3 deg path (gear down)
 //   takeoff  the scripted take-off from a spawn until the pilot's phase `until` (rotation)
 //   cam      a free camera (the jet hidden): position and target in the runway frame of an end
-//            (s along the landing direction from the threshold, t to the right, h above it)
+//            (s along the landing direction from the threshold, t to the right, h above it);
+//            the jet parked 2.5 km up, or on the runway at `jetAt` [s, t] (a sharp sun shadow map)
 // Writes <out>/<scene>_<tag>.png and <out>/info_<tag>.jsonl (renderInfo, timing, GPU memory, the
 // roads' and airfield surfaces' statistics, the exposure).
 
@@ -76,6 +77,24 @@ const SCENES = {
   bgapron: { kind: 'cam', icao: 'LLBG', end: '26', pos: [-300, -1900, 70], look: [-480, -2250, 0], fov: 50, time: NOON },
   // the other fields
   bg26c: { kind: 'ground', spawn: 'bengurion_26', time: NOON, view: 'cockpit' },
+  // Ben Gurion 26: the spawn faces the 600 m displaced section (arrows along the centre, ICAO
+  // Annex 14 fig. 5-4); the section from the side, its end at the threshold bar, and the
+  // turn-off tyre marks beside the spawn
+  bg26: { kind: 'ground', spawn: 'bengurion_26', time: NOON, view: 'chase' },
+  bg26disp: { kind: 'cam', icao: 'LLBG', end: '26', pos: [-470, -18, 5], look: [-380, 0, 0], fov: 55, time: NOON },
+  bg26thr: { kind: 'cam', icao: 'LLBG', end: '26', pos: [-90, -25, 9], look: [30, 0, 0], fov: 55, time: NOON },
+  bg26turn: { kind: 'cam', icao: 'LLBG', end: '26', pos: [-450, 6, 12], look: [-535, -14, 0], fov: 55, time: NOON },
+  n_bg26c: { kind: 'ground', spawn: 'bengurion_26', time: 21.5, view: 'cockpit' },
+  // the approach from 9, 6, 4 and 3 km through long lenses: the runway's tone against the fields
+  // (the surfaces' far fade, 4.4-11 km on high, 2.6-7 km on low)
+  tn36f9z: { kind: 'cam', icao: 'LLEK', end: '36', pos: [-9000, 0, 490], look: [1200, 0, 0], fov: 9, time: NOON },
+  tn36f6z: { kind: 'cam', icao: 'LLEK', end: '36', pos: [-6000, 0, 330], look: [1200, 0, 0], fov: 12, time: NOON },
+  tn36f4z: { kind: 'cam', icao: 'LLEK', end: '36', pos: [-4000, 0, 225], look: [1200, 0, 0], fov: 15, time: NOON },
+  tn36f3z: { kind: 'cam', icao: 'LLEK', end: '36', pos: [-3000, 0, 172], look: [1200, 0, 0], fov: 18, time: NOON },
+  // the low sun of 17:30 on the cable's signs and the edge fixtures (their shadows)
+  tncablelow: { kind: 'cam', icao: 'LLEK', end: '36', pos: [400, -28, 3], look: [470, 0, 0], fov: 50, time: 17.5 },
+  // the same with the (hidden) jet on the runway beside the camera: a sharp shadow map there
+  tncablelowg: { kind: 'cam', icao: 'LLEK', end: '36', pos: [400, -28, 3], look: [470, 0, 0], fov: 50, time: 17.5, jetAt: [380, 0] },
   bg26f2: { kind: 'air', icao: 'LLBG', end: '26', s: -2000, time: NOON, view: 'cockpit' },
   bg12f2: { kind: 'air', icao: 'LLBG', end: '12', s: -2000, time: NOON, view: 'cockpit' },
   bg3000: { kind: 'cam', icao: 'LLBG', end: '26', pos: [800, -2800, 914], look: [1400, 0, 0], fov: 50, time: NOON },
@@ -89,10 +108,12 @@ const SCENES = {
   pm21c: { kind: 'groundEnd', icao: 'LL59', end: '21', s: 30, time: NOON, view: 'cockpit' },
 };
 const SETS = {
-  base: 'tn36c,tn36,tn36rot,tn36f2,tn3000,tntower,tn36low,tn36f2low,bg26c,hz29f2,pm21f2',
+  base: 'tn36c,tn36,tn36rot,tn36f2,tn3000,tntower,tn36low,tn36f2low,bg26c,bg26,bg26disp,hz29f2,pm21f2',
   quick: 'tn36c,tn36f2z,tn3000',
   close: 'tntdz,tnmid,tnconc,tncable,bgapron',
   fields: 'bg26f2z,hz29f2z,pm21f2z,bg3000,hz3000',
+  bengurion: 'bg26,bg26c,bg26disp,bg26thr,bg26turn',
+  far: 'tn36f9z,tn36f6z,tn36f4z,tn36f3z',
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -199,6 +220,11 @@ async function main() {
           sp = { label: 'shot', x, y, z, ground_y: app.terrain.heightAt(x, z), heading_deg: F.hdg, on_ground: false, speed_ms: 74, gear: 1, flight_path_deg: -3, fuel: 0.45 };
         } else if (sc.kind === 'groundEnd') {
           [x, y, z] = F.P(sc.s, 0, 0);
+          sp = { label: 'shot', x, y: app.terrain.heightAt(x, z), z, heading_deg: F.hdg, on_ground: true, speed_ms: 0, gear: 1, throttle: 0 };
+        } else if (sc.jetAt) {
+          // free camera, the (hidden) jet on the runway at jetAt [s, t]: the sun's shadow map is
+          // then fitted to the ground around the camera (~10 cm texels), not stretched to the jet
+          [x, y, z] = F.P(sc.jetAt[0], sc.jetAt[1], 0);
           sp = { label: 'shot', x, y: app.terrain.heightAt(x, z), z, heading_deg: F.hdg, on_ground: true, speed_ms: 0, gear: 1, throttle: 0 };
         } else {
           // free camera: the jet parked high above, out of the way
