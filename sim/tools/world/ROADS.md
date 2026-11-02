@@ -222,8 +222,9 @@ kerb (0.7 m) or shoulder (1 m); on a bridge deck at the deck's height.
   over each pixel (erf), so a light keeps its energy wherever it falls between pixel centres: no
   twinkling as it moves. A display cannot show a point as bright as the eye sees it, so a light the
   eye sees well is at least as bright as its excess over the threshold says (as star magnitudes),
-  up to 0.8 on the display in its brightest channel (the colour normalised by its maximum, not its
-  luminance: a red at the floor is a full red, not a red at 3x white); only physically bright
+  up to 0.8 on the display in its brightest channel once the lights are on (the colour normalised
+  by its maximum, not its luminance: a red at the floor is a full red, not a red at 3x white; by
+  day, without Post.js's lights' path, by its luminance up to 0.85, as before); only physically bright
   (near) lights saturate, up to 64 in HDR (the bloom). Each sprite writes its mark as a light into
   the alpha (js/env/emitters.js, blended with `emitterBlending`): Post.js tone maps it by its
   brightest channel and keeps its hue, and night vision leaves it alone, so a red stays red (CIE x

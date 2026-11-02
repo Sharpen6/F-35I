@@ -77,16 +77,19 @@ float erfA(float x) {
  * airfield lights, the street lamps and the cars (here) and the buildings' obstruction lights
  * (js/world/buildingShaders.js). Uniforms: uThreshold (lux at the eye at which a point light is
  * just seen: env.pointThreshold), uExposure (the renderer's), uPxAngle (radians per pixel of the
- * drawing buffer), uGain (scene irradiance per lux: env.lightGain / LUX_PER_UNIT).
+ * drawing buffer), uGain (scene irradiance per lux: env.lightGain / LUX_PER_UNIT), uLightsOn
+ * (env.lightsOn: 0 by day .. 1 once the lights are on, the switch of Post.js's lights' path).
  *   vertex:   pointLightSprite(I, c, d): intensity I (cd), colour c (through the atmosphere), d (m);
  *             sets vColor, vSigma, vSize and gl_PointSize
  *   fragment: pointLightRadiance(): this pixel's radiance (discards the empty corners);
  *             pointLightAlpha(L): the alpha to write with it, the light's mark (js/env/emitters.js;
  *             the material blends with emitterBlending)
- * Colour is carried by its brightest channel: the visibility floor and the cap on the display are
- * on that channel, so a red or blue light is as bright on the screen as a white one at the floor
- * (normalised by its luminance a red light's red channel stood at 3.8 times it, and AgX bleached
- * it pink), and Post.js tone-maps it by its hue.
+ * Once the lights are on, colour is carried by its brightest channel: the visibility floor and the
+ * cap on the display are on that channel, so a red or blue light is as bright on the screen as a
+ * white one at the floor (normalised by its luminance a red light's red channel stood at 3.8 times
+ * it, and AgX bleached it pink), and Post.js tone-maps it by its hue. By day (the output's own
+ * AgX, no lights' path) it is carried by its luminance, as the day look was tuned: the PAPI's red
+ * at the floor stands out against a sunlit field as it does.
  */
 export const POINT_LIGHT_VERT_GLSL = /* glsl */ `
 ${ERF_GLSL}
@@ -94,12 +97,15 @@ uniform float uThreshold;  // lux: threshold of a point source on the background
 uniform float uExposure;
 uniform float uPxAngle;    // radians per pixel of the drawing buffer
 uniform float uGain;       // scene irradiance per lux, times the night eye's adaptation (env.lightGain)
+uniform float uLightsOn;   // env.lightsOn: 0 by day .. 1 once the lights are on (Post.js keeps their hue)
 varying vec3 vColor;       // irradiance at the eye (scene units), per channel
 varying float vSigma;      // Gaussian radius (px)
 varying float vSize;       // point size (px)
 void pointLightSprite(float I, vec3 c, float d) {
   float cl = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-6);
-  float cm = max(max(c.r, max(c.g, c.b)), 1e-6);
+  // the channel the colour is carried by: the brightest once the lights are on, the luminance by
+  // day (exactly cl at uLightsOn 0)
+  float cm = mix(cl, max(max(c.r, max(c.g, c.b)), 1e-6), uLightsOn);
   float E = I * cl / (d * d);                                  // lux (luminance-weighted)
   // Seen against its background (Allard / Blondel-Rey threshold E_t = 10^(0.64 log B - 5.7)):
   float V = E / uThreshold;
@@ -107,13 +113,13 @@ void pointLightSprite(float I, vec3 c, float d) {
   // Physical: the light's irradiance spread over a Gaussian of sigma px. A display cannot show
   // a point as bright as the eye sees it, so a light the eye sees well (by day: PAPI against a
   // sunlit field; at night: a lamp many km away) is at least as bright as its excess over the
-  // threshold says (as star magnitudes), up to 0.8 on the display: only a light that is
-  // physically brighter than that saturates the display (near ones: depth, not a flat carpet).
-  // In its brightest channel (e): a saturated colour keeps its hue at the floor.
+  // threshold says (as star magnitudes), up to 0.8 on the display (0.85 by day): only a light
+  // that is physically brighter than that saturates the display (near ones: depth, not a flat
+  // carpet). In its brightest channel (e) at night: a saturated colour keeps its hue at the floor.
   float Om = uPxAngle * uPxAngle;
   float ePhys = E * uGain * smoothstep(0.5, 2.0, V) * cm / cl;
   float fc0 = erfA(0.5439) * erfA(0.5439);                     // centre pixel's share at sigma 0.65
-  float peakP = clamp(lv / 3.0, 0.0, 1.0) * min(0.35 + 0.06 * max(lv - 3.0, 0.0), 0.8);
+  float peakP = clamp(lv / 3.0, 0.0, 1.0) * min(0.35 + 0.06 * max(lv - 3.0, 0.0), mix(0.85, 0.8, uLightsOn));
   float e = max(ePhys, peakP / max(uExposure, 1e-4) * Om / fc0);
   // never under 0.65 px (a sub-pixel Gaussian twinkles as it crosses pixel centres); wider when
   // bright, as glare
@@ -289,6 +295,7 @@ export class AirportLights {
       uExposure: { value: 1 },
       uPxAngle: { value: 1e-3 },
       uGain: { value: 1 / 32000 },
+      uLightsOn: { value: 0 },
       uRange: { value: new THREE.Vector3(3400, 1600, LAMP_RANGE.high) },
       uClock: { value: 0 },
     };
@@ -575,6 +582,7 @@ export class AirportLights {
     const U = this.uniforms;
     U.uOn.value.set(on * step, on * step, on, on);
     U.uPapiOn.value = step;
+    U.uLightsOn.value = on;
     // the threshold of a point light on the ground's luminance (albedo 0.15, a little city glow
     // at night): js/env "Lights at night"
     U.uThreshold.value = env.pointThreshold ?? pointLightThreshold(el);

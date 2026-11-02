@@ -178,6 +178,7 @@ export class Buildings {
     this._lightU = {
       uLightOn: { value: new THREE.Vector3(0, 0, 1) },
       uThreshold: { value: 1e-7 }, uExposure: { value: 1 }, uPxAngle: { value: 1e-3 }, uGain: { value: 1 / LUX_PER_UNIT },
+      uLightsOn: { value: 0 },
     };
     this._dbSize = new THREE.Vector2();
     this.lightMaterial = this._lightMaterial();
@@ -818,6 +819,7 @@ export class Buildings {
     LUo.uThreshold.value = env.pointThreshold ?? pointLightThreshold(el);
     LUo.uExposure.value = this.renderer.toneMappingExposure || 1;
     LUo.uGain.value = lightGain / LUX_PER_UNIT;
+    LUo.uLightsOn.value = env.lightsOn ?? lightsOnAt(el);
     if (camera && camera.isPerspectiveCamera) {
       const hPx = this.renderer.getDrawingBufferSize(this._dbSize).y || 1;
       LUo.uPxAngle.value = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / (camera.zoom || 1) / hPx;
